@@ -2,6 +2,32 @@
 
 How to stand up the repo and give the agent push access, safely.
 
+**Note on account creation:** the agent cannot create the account for you —
+GitHub requires a human, a verified email and a captcha, and automated signup
+is against their terms. Everything else below is either already done or a
+two-minute job for you.
+
+---
+
+## 0. Anonymity notes (read first if you want to stay unattributable)
+
+The repo itself is easy to keep anonymous. These are the vectors that actually
+leak identity, in rough order of how often people trip over them:
+
+| Vector | What to do |
+|---|---|
+| **Commit author email** | Use the account's GitHub **noreply** address — `<id>+<username>@users.noreply.github.com`. A real address in `user.email` is published in every commit, forever |
+| **The email on the GitHub account** | Use a privacy-focused provider or an alias, not your everyday address. It is not shown publicly, but it *is* the account's recovery path |
+| **The domain** | `solbeam.me` is already registered in your name. Turn on WHOIS redaction (Cloudflare Registrar includes it free) and be aware the registrar and Cloudflare accounts are identity-linked |
+| **Payments** | Anything that pays for infrastructure with a card de-anonymises the whole stack. Keep it separate or funded indirectly |
+| **Linking back** | Don't reuse your personal GitHub's SSH keys, GPG keys, or commit email on this account |
+| **Hosting accounts** | Cloudflare (already in use for `solbeam.me`) sees your IP and payment details. That is a separate identity surface from GitHub |
+| **Recovery** | 2FA recovery codes are the thing you'll curse yourself for not saving. Store them offline |
+
+The agent's side is already clean: it commits as `solbeam-agent`, uses a
+noreply-shaped address, and holds no account credentials — only a repo-scoped
+deploy key.
+
 ---
 
 ## 1. Account shape
