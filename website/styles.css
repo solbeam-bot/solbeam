@@ -1,0 +1,359 @@
+/* ============================================================
+   SOLBEAM — solbeam.me
+   Single stylesheet, no build step.
+   ============================================================ */
+
+:root {
+  /* Solana brand palette */
+  --sol-purple: #9945FF;
+  --sol-green:  #14F195;
+  --sol-blue:   #00D1FF;
+
+  /* BSV face */
+  --bsv-gold: #E4A11B;
+
+  /* Surfaces */
+  --bg:     #05060A;
+  --panel:  rgba(255, 255, 255, 0.045);
+  --border: rgba(255, 255, 255, 0.10);
+  --text:   #EAF0FF;
+  --muted:  #98A2B3;
+
+  /* Coin tuning: zoom the BSV image so its gold disc fills the round face.
+     The source is a gold disc on a WHITE background, so this must be large
+     enough to keep the white margin outside the circle. Increase if you ever
+     see a pale rim. (Disc is ~50% of the source frame.) */
+  --bsv-zoom: 2.35;
+
+  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+/* ---------- Background ---------- */
+
+.bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+
+.bg__glow {
+  position: absolute;
+  display: block;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.30;
+  will-change: transform;
+}
+.bg__glow--purple {
+  background: radial-gradient(circle, var(--sol-purple), transparent 68%);
+  top: -22vmax; left: -14vmax;
+  animation: drift-a 26s ease-in-out infinite alternate;
+}
+.bg__glow--green {
+  background: radial-gradient(circle, var(--sol-green), transparent 68%);
+  bottom: -26vmax; right: -16vmax;
+  animation: drift-b 32s ease-in-out infinite alternate;
+}
+.bg__glow--blue {
+  background: radial-gradient(circle, var(--sol-blue), transparent 70%);
+  top: 32%; left: 46%;
+  width: 42vmax; height: 42vmax;
+  opacity: 0.18;
+  animation: drift-c 38s ease-in-out infinite alternate;
+}
+.bg__grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.030) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.030) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(circle at 50% 42%, #000 0%, transparent 72%);
+  -webkit-mask-image: radial-gradient(circle at 50% 42%, #000 0%, transparent 72%);
+}
+
+@keyframes drift-a {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(8vmax, 6vmax, 0) scale(1.12); }
+}
+@keyframes drift-b {
+  from { transform: translate3d(0, 0, 0) scale(1.08); }
+  to   { transform: translate3d(-7vmax, -5vmax, 0) scale(1); }
+}
+@keyframes drift-c {
+  from { transform: translate3d(-4vmax, 0, 0) scale(1); }
+  to   { transform: translate3d(5vmax, -4vmax, 0) scale(1.15); }
+}
+
+/* ---------- Layout ---------- */
+
+.wrap {
+  flex: 1;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: clamp(32px, 8vh, 88px) 24px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 22px;
+}
+
+/* ---------- The coin ---------- */
+
+.coin {
+  position: relative;
+  width: clamp(140px, 38vw, 208px);
+  aspect-ratio: 1 / 1;
+  margin-top: 8px;
+}
+
+.coin__halo {
+  position: absolute;
+  inset: -14%;
+  border-radius: 50%;
+  background: conic-gradient(from 140deg,
+              var(--sol-purple), var(--sol-blue), var(--sol-green),
+              var(--bsv-gold), var(--sol-purple));
+  filter: blur(26px);
+  opacity: 0.45;
+  animation: halo 9s linear infinite;
+}
+
+@keyframes halo { to { transform: rotate(360deg); } }
+
+/* Deliberately 2D — no perspective, no preserve-3d, no backface-visibility.
+   The coin squashes to edge-on, the faces swap, and it grows back, which
+   reads as a spin and renders identically in every browser. (The earlier 3D
+   version rendered differently in Firefox.) */
+.coin__inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  animation: coin-spin 9s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.coin__face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.65);
+  background-repeat: no-repeat;
+  background-position: 50% 50%;
+}
+
+/* Logos are painted as face backgrounds so border-radius clips them.
+   The <img> tags stay in the markup as a static fallback and are hidden. */
+.coin__face img { display: none; }
+
+/* The old fallback glyph. It MUST stay hidden: the BSV logo is now painted as
+   the face background, so leaving this visible draws a SECOND ₿ on top of the
+   image (a ghosted/doubled logo). Prefer deleting the <span> from index.html. */
+.coin__glyph { display: none; }
+
+.coin__face--sol {
+  background-color: #000;
+  background-image: url("/assets/solana.webp");
+  background-size: cover;
+  animation: face-sol 9s steps(1, end) infinite;
+}
+
+.coin__face--bsv {
+  background-color: var(--bsv-gold);
+  background-image: url("/assets/bsv.jpg");
+  /* Zoom past the white margin so the gold disc fills the round face.
+     Tune with --bsv-zoom in :root (2.35 = 235%). */
+  background-size: calc(var(--bsv-zoom) * 100%) calc(var(--bsv-zoom) * 100%);
+  animation: face-bsv 9s steps(1, end) infinite;
+}
+
+/* Squash to edge-on, swap, grow back. */
+@keyframes coin-spin {
+  0%,  40%  { transform: scaleX(1); }
+  48%       { transform: scaleX(0); }
+  56%, 78%  { transform: scaleX(1); }
+  86%       { transform: scaleX(0); }
+  94%, 100% { transform: scaleX(1); }
+}
+
+/* The swap happens exactly when the coin is edge-on (zero width). */
+@keyframes face-sol {
+  0%   { opacity: 1; }
+  48%  { opacity: 0; }
+  86%  { opacity: 1; }
+  100% { opacity: 1; }
+}
+@keyframes face-bsv {
+  0%   { opacity: 0; }
+  48%  { opacity: 1; }
+  86%  { opacity: 0; }
+  100% { opacity: 0; }
+}
+
+/* ---------- Type ---------- */
+
+.title {
+  margin: 4px 0 0;
+  font-size: clamp(44px, 13vw, 92px);
+  line-height: 0.95;
+  letter-spacing: 0.02em;
+  font-weight: 800;
+  background: linear-gradient(100deg,
+              var(--sol-purple) 0%, var(--sol-blue) 34%,
+              var(--sol-green) 62%, var(--bsv-gold) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-wrap: balance;
+}
+
+.tagline {
+  margin: 0;
+  font-size: clamp(15px, 4vw, 19px);
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.tick { color: var(--bsv-gold); font-weight: 600; }
+
+/* ---------- Steps ---------- */
+
+.steps {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.step {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 16px 12px;
+  border-radius: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+}
+
+.step__num {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--sol-green);
+  font-weight: 600;
+}
+
+.step__label {
+  font-size: clamp(18px, 5vw, 24px);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.step__sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.step__arrow {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+/* ---------- CTA ---------- */
+
+.cta { margin-top: 8px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 26px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 650;
+  text-decoration: none;
+  color: #05060A;
+  background: linear-gradient(100deg, var(--sol-green), var(--sol-blue) 55%, var(--sol-purple));
+  box-shadow: 0 10px 30px rgba(20, 241, 149, 0.22);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+}
+.btn:hover,
+.btn:focus-visible {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow: 0 16px 38px rgba(20, 241, 149, 0.30);
+}
+.btn:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 3px; }
+
+.fineprint {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Footer ---------- */
+
+.footer {
+  padding: 18px 24px 26px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.footer a { color: var(--muted); text-decoration: none; }
+.footer a:hover { color: var(--text); text-decoration: underline; }
+.dot { opacity: 0.5; }
+
+/* ---------- Motion preferences ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .coin__inner { animation: none; }
+  .coin__halo { animation: none; }
+  .bg__glow { animation: none; }
+  /* Cross-fade the two faces instead of spinning */
+  .coin__face--sol { animation: none; opacity: 1; }
+  .coin__face--bsv { animation: coin-fade 9s ease-in-out infinite; }
+  @keyframes coin-fade {
+    0%, 40%   { opacity: 0; }
+    52%, 76%  { opacity: 1; }
+    88%, 100% { opacity: 0; }
+  }
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 480px) {
+  .steps { flex-direction: column; }
+  .step__arrow { transform: rotate(90deg); }
+}

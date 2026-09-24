@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About — SOLBEAM</title>
+  <meta name="description" content="SOLBEAM is an atomic wrapper on Solana for BSV. Trustless minting, permissionless redemption, no federation." />
+  <meta name="theme-color" content="#05060A" />
+  <meta property="og:title" content="About — SOLBEAM" />
+  <meta property="og:description" content="Atomic wrapper on Solana for BSV." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://solbeam.me/about/" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .lp { max-width: 720px; text-align: left; }
+    .lp h1 { font-size: clamp(34px, 9vw, 54px); margin: 0 0 6px; }
+    .lp .lede { color: var(--muted); font-size: 17px; line-height: 1.6; margin: 0 0 6px; }
+    .lp h2 {
+      font-size: 13px; font-weight: 700; margin: 38px 0 14px;
+      color: var(--sol-green); letter-spacing: .20em; text-transform: uppercase;
+    }
+    .lp .points { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+    .lp .points li {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px 18px;
+      color: #C9D2E3;
+      font-size: 16px;
+      line-height: 1.6;
+      backdrop-filter: blur(8px);
+    }
+    .lp .points strong { color: var(--text); }
+    .lp .links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+    .lp .ghost {
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 12px 20px; border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text); text-decoration: none; font-weight: 600; font-size: 15px;
+      transition: border-color .16s ease, transform .16s ease;
+    }
+    .lp .ghost:hover { border-color: rgba(255,255,255,.28); transform: translateY(-1px); }
+    .lp .soon { color: var(--muted); font-size: 14px; align-self: center; }
+    .lp .back { display: inline-block; margin-top: 40px; color: var(--muted); text-decoration: none; font-size: 14px; }
+    .lp .back:hover { color: var(--text); text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <span class="bg__glow bg__glow--purple"></span>
+    <span class="bg__glow bg__glow--green"></span>
+    <span class="bg__glow bg__glow--blue"></span>
+    <span class="bg__grid"></span>
+  </div>
+
+  <main class="wrap lp">
+    <h1 class="title" style="font-size: clamp(34px, 9vw, 54px)">About</h1>
+    <p class="lede">An atomic wrapper on Solana for BSV — <code>solBSV</code>.</p>
+
+    <h2>What</h2>
+    <ul class="points">
+      <li><strong>Minting is trustless.</strong> A BSV light client on Solana verifies deposits. No attestor, no oracle, no committee.</li>
+      <li><strong>Redemption is permissionless and optimistic.</strong> Bonded relayers pay BSV and prove the payout on-chain. Fail, and the holder is refunded automatically.</li>
+      <li><strong>No federation.</strong> No named signer set, no validator committee, no governance body holding funds.</li>
+      <li><strong>Trading is instant.</strong> Pools, P2P atomic swaps and market makers mean only the peg has latency.</li>
+    </ul>
+
+    <h2>Links</h2>
+    <div class="links">
+      <a class="ghost" href="https://github.com/solbeam-bot/solbeam" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+      <span class="soon">Litepaper — coming soon</span>
+    </div>
+
+    <a class="back" href="/">&larr; Back to SOLBEAM</a>
+  </main>
+</body>
+</html>
