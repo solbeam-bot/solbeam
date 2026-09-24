@@ -271,3 +271,10 @@ That script is the artefact to share for feedback — it makes the trust model c
 | **Total to a demoable PoC** | **~4–5 weeks** |
 
 Mint-only (P0–P2, with the relayer stubbed) lands in **~2 weeks** and is already enough to show the strongest claim: trustless minting.
+
+## Licence
+
+MIT — see `LICENSE`. Everything here is intended to be usable, forkable and
+reviewable by anyone.
+
+The token ticker is **`solBSV`** (display name SOLBEAM).
