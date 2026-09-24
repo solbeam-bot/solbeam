@@ -18,8 +18,8 @@ leak identity, in rough order of how often people trip over them:
 |---|---|
 | **Commit author email** | Use the account's GitHub **noreply** address — `<id>+<username>@users.noreply.github.com`. A real address in `user.email` is published in every commit, forever |
 | **The email on the GitHub account** | Use a privacy-focused provider or an alias, not your everyday address. It is not shown publicly, but it *is* the account's recovery path |
-| **The domain** | `solbeam.me` is already registered in your name. Turn on WHOIS redaction (Cloudflare Registrar includes it free) and be aware the registrar and Cloudflare accounts are identity-linked |
-| **Payments** | Anything that pays for infrastructure with a card de-anonymises the whole stack. Keep it separate or funded indirectly |
+| **The domain** | Checked 2026-09-24: `solbeam.me` is registered at **GoDaddy**, not Cloudflare Registrar, and **privacy is already on** — the public record shows `Domains By Proxy, LLC` (GoDaddy's proxy service) with no name or email. Nameservers are Cloudflare. **Nothing to do.** Note only state/country are always public per ICANN policy |
+| **Payments** | Anything that pays for infrastructure with a card de-anonymises the whole stack. Be proportionate: GoDaddy and Cloudflare already hold your payment identity, so GitHub anonymity is a smaller increment than it looks |
 | **Linking back** | Don't reuse your personal GitHub's SSH keys, GPG keys, or commit email on this account |
 | **Hosting accounts** | Cloudflare (already in use for `solbeam.me`) sees your IP and payment details. That is a separate identity surface from GitHub |
 | **Recovery** | 2FA recovery codes are the thing you'll curse yourself for not saving. Store them offline |
@@ -32,17 +32,17 @@ deploy key.
 
 ## 1. Account shape
 
-**Recommended:** keep your personal account, create a **GitHub Organisation** for the
-project (e.g. `solbeam-org`), and add a separate **machine account** (e.g.
-`solbeam-bot`) as an organisation member.
+**For this project: one account.** No personal account, no organisation. The
+project account owns the repo, works from a project email, and the agent pushes
+with a repo-scoped deploy key.
 
-Why not just a second personal account: GitHub's terms expect one free personal
-account per human. A machine account used purely for automation is the accepted
-pattern, and the organisation keeps ownership, billing and access control in
-your name.
+An earlier draft of this document suggested an organisation plus a separate
+machine account. That is right for a team with billing and multiple
+contributors; for a single anonymous project it is three times the surface area
+for no benefit. Ignore it.
 
-If you would rather keep it simple for now: one new personal account for the
-project is fine to start, and you can migrate to an org later. Just add 2FA.
+If the project later grows contributors, *then* add an organisation and move the
+repo into it.
 
 ---
 
@@ -52,6 +52,31 @@ project is fine to start, and you can migrate to an org later. Just add 2FA.
 2. **Do not** initialise with a README, `.gitignore` or licence — an empty repo
    makes the first push clean.
 3. Note the URL: `https://github.com/<owner>/solbeam-poc.git`
+
+---
+
+## 2a. Two-factor authentication — do both
+
+Two accounts control things that matter here: **GitHub** (the code) and
+**Cloudflare** (DNS, the Worker, and the domain's nameservers). Enable 2FA on
+both. Use a **TOTP app** (Aegis, Ente Auth, 1Password, Google Authenticator) —
+not SMS, which is the weakest factor and the one worth SIM-swapping.
+
+**GitHub** — Settings → Password and authentication → Two-factor authentication
+→ set up with an authenticator app. When it shows the setup code, also open
+**Recovery codes** and save them *before* you finish. Without a saved recovery
+code, a lost phone means a lost account — and for an anonymous account there is
+no ID document to fall back on.
+
+**Cloudflare** — My Profile → Authentication → Two-Factor Authentication →
+enable with an authenticator app → save the recovery codes it issues.
+
+**Storage:** the recovery codes are the actual secret. Keep them offline and
+somewhere different from the password (printed, or in an encrypted vault), and
+not in the same password manager entry as the login.
+
+**The agent never needs any of this.** It has no account access at all — only a
+deploy key scoped to one repository. You hold the 2FA; that is the point.
 
 ---
 
