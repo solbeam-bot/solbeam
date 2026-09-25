@@ -61,26 +61,69 @@ The coin animation is pure CSS (`rotateY`), with a cross-fade fallback for `pref
 
 **Why:** free, global CDN, unlimited static bandwidth on the free tier, automatic HTTPS, custom domain, and a clear upgrade path (Workers/Functions/R2) when it grows. Static hosting scales to practically any traffic without any server to manage.
 
-### 1. Get the code into a repo
+### Where it is deployed today
+
+`solbeam.me` is currently served by a **Cloudflare Worker with static assets** (not a Pages project):
+
+| | |
+|---|---|
+| Account | `actftx` (the `workers.dev` subdomain) |
+| Worker name | `solbeam` → <https://solbeam.actftx.workers.dev/> |
+| Custom domains | `solbeam.me`, presumably `www.solbeam.me` |
+| Source | `adamski-t/solbeam` — **being replaced by `solbeam-bot/solbeam`** |
+| Asset root | the old repo's `website/` folder |
+
+Workers static assets honours `_headers` and `_redirects` (confirmed: the `/assets/*` and `/*.css` cache rules from `_headers` are live on `solbeam.me`), so nothing about the header/redirect files needs to change — but **the asset root must become `website/` in the new repo**, because there is no `index.html` at the repo root.
+
+> **Note on the HTML cache rule.** `_headers` sets `/*.html` to `max-age=300`, but that pattern matches *explicit* `.html` requests only. Requests for `/` and `/about/` are pretty URLs, so the platform default `max-age=0, must-revalidate` applies. That is a good default while iterating and needs no fix.
+
+### Migrating off the old repo
+
+Pick one. **Option A is recommended** — it ends with a plain static site, no Worker code to maintain, and it is the only path that needs no Wrangler config.
+
+#### Option A — new Pages project on the new repo, then move the domain
+
+1. **Workers & Pages → Create → Pages → Connect to Git.** When Cloudflare asks which repositories it may see, make sure the **`solbeam-bot`** account is included. This is the step people miss: the Cloudflare GitHub App was probably granted access to `adamski-t` only, and that grant does **not** extend to the new account.
+2. Select `solbeam-bot/solbeam`, production branch `main`.
+3. Use the build settings from step 3 above (`None` / blank / `website`).
+4. **Save and Deploy**, then open the `*.pages.dev` URL and check the coin animates before touching DNS.
+5. **Custom domains → Set up a domain** → add `solbeam.me` and `www.solbeam.me`. Cloudflare will offer to move them off the Worker; accept. The DNS records already exist and are reused.
+6. Purge cache (`Caching → Configuration → Purge Everything`).
+7. Verify with the checks below, then retire the old Worker and only then make `adamski-t/solbeam` private.
+
+#### Option B — keep the Worker, repoint its source
+
+Only works if the Worker is **Git-connected**: dashboard → the `solbeam` Worker → **Settings → Build**. If there is no Build tab, it was uploaded by hand and there is nothing to repoint — use Option A, or deploy from the new repo with the config below.
+
+Workers Builds needs a Wrangler config to know where the assets live, and the repo has none. Create `wrangler.jsonc` at the repo root (note `name` must stay `solbeam` so this updates the existing Worker rather than creating a second one):
+
+```jsonc
+{
+  "name": "solbeam",
+  "compatibility_date": "2026-09-24",
+  "assets": { "directory": "./website" }
+}
+```
+
+Then either let the Git build run, or deploy it yourself from the repo root:
 
 ```bash
-cd website
-git init
-git add .
-git commit -m "SOLBEAM website"
-git branch -M main
-git remote add origin git@github.com:<you>/solbeam-site.git
-git push -u origin main
+npx wrangler deploy
 ```
+
+### 1. The code is already in a repo
+
+Nothing to do — `website/` lives in <https://github.com/solbeam-bot/solbeam>. (If you were starting from scratch you would `git init` in this folder and push it, but this project does not need a separate site repo.)
 
 ### 2. Create the Pages project
 
 1. Go to <https://dash.cloudflare.com> → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
 2. Pick the repo.
-3. Settings:
+3. Settings — these exact values:
    - **Framework preset:** `None`
    - **Build command:** *(leave blank)*
-   - **Build output directory:** `/` (or `website` if the repo root is the parent folder)
+   - **Build output directory:** `website`
+   - **Root directory (advanced):** *(leave blank — do **not** also set this to `website`, or the build will look for `website/website`)*
 4. **Save and Deploy.** You'll get a `*.pages.dev` URL within a minute.
 
 **Or deploy straight from the CLI, no repo needed:**
@@ -126,22 +169,24 @@ git commit -m "About page, GitHub button, coin flip fix"
 git push
 ```
 
-If the Worker is deployed with Wrangler instead, deploy straight from the folder:
-
-```bash
-cd solbeam
-npx wrangler deploy
-```
+If you are staying on a Worker (Option B), add the `wrangler.jsonc` from that section and deploy from the repo root with `npx wrangler deploy`.
 
 ### Checking a deploy
 
+Run these against **`solbeam.me`** — the apex is the only thing that matters. Swap in the `*.pages.dev` or `*.workers.dev` host if you want to check the origin before moving the domain.
+
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://solbeam.actftx.workers.dev/
-curl -s -o /dev/null -w "%{http_code}\n" https://solbeam.actftx.workers.dev/about/
-curl -s -o /dev/null -w "%{http_code}\n" https://solbeam.actftx.workers.dev/assets/bsv.jpg   # must be 200
+for p in / /about/ /styles.css /assets/solana.webp /assets/bsv.jpg /robots.txt /sitemap.xml /litepaper/; do
+  printf '%-22s %s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code}' https://solbeam.me$p)"
+done
 ```
 
-That last one matters: **if `assets/bsv.jpg` returns 404, the BSV face has nothing to show.** Confirm both images are committed (`git ls-files assets/`).
+Expected: everything `200` **except** `/litepaper/`, which should be `301` — that proves `_redirects` is being honoured. A `404` there means the host is ignoring `_redirects`.
+
+Two more that matter:
+
+- **`assets/bsv.jpg` must be 200.** If it 404s, the BSV face has nothing to show. Confirm both images are committed (`git ls-files assets/`).
+- **Cache headers must still be applied.** `curl -sI https://solbeam.me/assets/bsv.jpg | grep -i cache-control` should show `max-age=31536000, immutable`. If it doesn't, `_headers` is not being consumed — which is the difference between Workers static assets (honours it) and a Worker with a custom `fetch` handler (does not).
 
 ---
 
@@ -167,16 +212,25 @@ Nothing here needs replacing to grow:
 
 ## Handoff checklist
 
-- [ ] Domain registered and access to its DNS controls
-- [ ] Cloudflare account (or another host) created
-- [ ] Repo created and this folder pushed
-- [ ] Pages project connected, first deploy green
-- [ ] `solbeam.me` + `www` added as custom domains, SSL active
-- [ ] Landing page loads on mobile and desktop
-- [ ] Coin animates (and respects reduced-motion)
-- [ ] `robots.txt` / `sitemap.xml` reachable
-- [ ] `/about/` loads and the GitHub link works
-- [ ] `assets/bsv.jpg` returns 200 (the BSV coin face depends on it)
+Already done:
+
+- [x] Domain registered, DNS on Cloudflare
+- [x] Site live at `solbeam.me`
+- [x] `checks/`, `docs/` and `website/` all in `solbeam-bot/solbeam`
+
+Migrating the host off `adamski-t/solbeam`:
+
+- [ ] Cloudflare GitHub App granted access to the **`solbeam-bot`** account (the old grant does not cover it)
+- [ ] New Pages project — or repointed Worker — connected to `solbeam-bot/solbeam`, branch `main`
+- [ ] Build output / asset root set to **`website`**, never the repo root
+- [ ] The `*.pages.dev` (or `*.workers.dev`) preview renders and the coin animates, *before* any DNS change
+- [ ] `solbeam.me` + `www.solbeam.me` moved to the new project, SSL active
+- [ ] Cache purged
+- [ ] `/` and `/about/` return `200`
+- [ ] `/litepaper/` returns **`301`** — this is the proof that `_redirects` is honoured
+- [ ] `assets/bsv.jpg` returns `200` **and** `cache-control: max-age=31536000, immutable` — the proof that `_headers` is honoured
+- [ ] Old Worker retired
+- [ ] `adamski-t/solbeam` set to private — **only after every line above passes**
 - [ ] TODO: add `assets/og.png` (1200×630) and uncomment the `og:image` meta tag in `index.html`
 
 ## Design notes
