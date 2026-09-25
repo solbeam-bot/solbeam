@@ -40,9 +40,11 @@ BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals 
 | **Reserve is tiered and covenant-locked** | A small hot float covered by bonds, and a large cold reserve locked by a BSV covenant that can only pay the hot wallet |
 | **Market layer is external** | Liquidity comes from Raydium / Orca, P2P orderbooks and market makers. SOLBEAM is the wrapper, not an exchange |
 | **Trading is instant** | Only the peg has latency. Traders on a pool, a P2P swap or a market maker never wait for it — see [Markets & liquidity](11-markets-and-liquidity.md) |
+| **Exit is slower than entry** | Minting is trustless and lands in ~2 hours. Redemption waits on a bonded relayer and a 6-hour deadline, and relayer capital unbonds on a notice period. The fast direction is the one that needs no trusted party |
+| **Bonds are in `solBSV`** | A relayer's collateral is the same asset as the exposure, so no BSV price move can shrink it relative to what it protects — and no oracle is needed to keep the two matched |
 | **FOSS** | The light client, programs and relayer software are open source |
 
-**Honest limits.** Minting is trustless. Redemption is *trust-minimised*: a bonded relayer must hold a key to the small hot float, and the bond plus on-chain fraud proofs are what keep them honest. We call that what it is. A signerless design — where the cold reserve releases funds against a zero-knowledge proof of the Solana burn, verified inside BSV Script — is the roadmap target, not the launch product.
+**Honest limits.** Minting is trustless. Redemption is *trust-minimised*: a bonded relayer must hold a key to the small hot float, and the bond plus on-chain fraud proofs are what keep them honest. Bonding can make cheating unprofitable; it cannot make it impossible, and it does nothing against someone who steals the hot key and never posted a bond — which is why the float is capped and never left idle. We call that what it is, in [Trust model](04-trust-model.md#the-naked-option-attack). A signerless design — where the cold reserve releases funds against a zero-knowledge proof of the Solana burn, verified inside BSV Script — is the roadmap target, not the launch product.
 
 ---
 

@@ -13,7 +13,7 @@ Because releasing real BSV requires a BSV signature, and BSV Script cannot verif
 The redemption deadline expires and the program **re-mints your `solBSV` automatically**. In the commitment model, the relayer's bond is also slashed. You are made whole either way.
 
 **What if BSV's price rises sharply?**
-The bond is held in a stable unit while exposure is in BSV, so a large move makes the bond relatively smaller. The **price governor** responds by shrinking the hot float and slowing cold tranches, and the bond must be topped up. The result is **slower redemptions, never unbacked tokens**. Backing is 1:1 regardless of price.
+Nothing breaks. The bond is held in **`solBSV`** — the same asset as the exposure — so a price move scales both sides together and the invariant `bond ≥ k × (hot + tranche)` holds at any price. There is no oracle to feed and no governor to react, which also means there is no window in which an attacker could strike. A sharp move only changes relayer fee revenue in dollar terms. (An earlier draft used a stablecoin bond with a price governor; that was a written call option on the reserve. See [Parameters](06-parameters.md#a-caution-on-the-stablecoin-bond).)
 
 **Who controls SOLBEAM?**
 No one controls the funds. Governance — initially a timelocked team multisig — can change **parameters** (fees, caps, deadlines, tranche schedules, pause). It **cannot move the reserve**: the cold reserve is covenant-locked to the hot wallet, and the hot float is bonded and fraud-checkable. Control migrates toward on-chain governance as the system matures.

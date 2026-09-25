@@ -119,7 +119,7 @@ What widens the basis: a throttled peg during a price shock, thin liquidity, or 
 |---|---|
 | Thin pools at launch | Seed liquidity; incentivise market makers; start with one deep pair rather than many shallow ones |
 | Market makers withdraw | Multiple makers; atomic-swap P2P as a fallback that needs no inventory; publish depth |
-| Basis blows out during a shock | Price governor trades throughput for safety; expect a wider basis during throttling and say so publicly |
+| Basis blows out during a shock | Redemption throughput is capped by the hot float and tranche schedule, not by a price governor — a price shock no longer triggers throttling, because bond and exposure are both `solBSV`. Expect a wider basis only if the float is exhausted; say so publicly |
 | Exchange listings stall | Do not depend on them for launch; AMM + P2P + market makers work permissionlessly |
 | Atomic-swap leg complexity (no P2SH on BSV) | Reuse the bare-script covenant toolchain; audit before enabling P2P swaps |
 
