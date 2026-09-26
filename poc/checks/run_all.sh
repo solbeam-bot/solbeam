@@ -33,6 +33,10 @@ done
 # node's real response — only the live run below settles that.
 run "check_bsv_node.py --selftest" python3 check_bsv_node.py --selftest
 
+# The adversarial plays, as a regression: every play must be rejected with the
+# code the design claims. A play that behaves differently is a finding.
+run "adversary/attack.py --all" python3 ../adversary/attack.py --all
+
 if [ -n "${SOLBEAM_RPC:-}" ]; then
   run "check_bsv_node.py LIVE ($SOLBEAM_RPC)" python3 check_bsv_node.py
 else

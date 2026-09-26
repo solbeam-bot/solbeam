@@ -17,22 +17,27 @@ The Python checker suite passes **136/136** and runs anywhere Python runs. These
 | `checks/check_bsv_core.py` | Header serialisation + double-SHA256, PoW against the compact `bits` target, parent linkage, Merkle root rebuilt from real blocks, branch build/fold, odd-level duplication, tamper rejection | **20/20** — mainnet block 800000; testnet blocks with 5, 8 and 13 txs; synthetic 4- and 5-leaf trees |
 | `checks/check_bsv_tx.py` | Legacy tx codec (byte-exact round-trip, txid), P2PKH parsing, `SIGHASH_FORKID` preimage + digest, **real network signatures verified against digests computed from scratch** | **51/51** — 3 real testnet txs, 12 inputs |
 | `checks/check_bsv_deposit.py` | P2PKH address encoding vs real addresses, `OP_RETURN` carrying a Solana recipient, deposit tx shape, RFC-6979 signing, redemption tx shape | **17/17** |
-| `checks/check_bsv_pegin.py` | **Phase 1A, in progress — see §1.5.** A synthetic regtest chain (mining, coinbase maturity, reorg), deposit construction, the proof builder and the verifier: confirmation depth, tampering, malformed deposits, replay, odd Merkle counts, orphaned branches. Emits `fixtures/deposit_1.json` | **48/48** — the fixture is byte-deterministic across runs |
+| `checks/check_bsv_pegin.py` | **Phase 1A, in progress — see §1.6.** A synthetic regtest chain (mining, coinbase maturity, reorg), deposit construction, the proof builder and the verifier: confirmation depth, tampering, malformed deposits, replay, odd Merkle counts, orphaned branches. Emits `fixtures/deposit_1.json` | **48/48** — the fixture is byte-deterministic across runs |
 
 `checks/bsvchain.py` builds the synthetic chain; `checks/bsvlib.py` now holds the single implementation of headers, PoW and Merkle folding that both the core checker and the chain builder use.
 
 `bash checks/run_all.sh` runs all three.
 
-### 1.2 Not started
+### 1.2 Built, but not yet run against a live chain
+
+- **Phase 0** — `bootstrap.sh`, `doctor.sh`, `regtest-up.sh`, `VERSIONS.md`. Written and testable-in-part: their syntax, argument handling, exit codes and refusal logic were all exercised, and the pinned SV Node download was confirmed to serve. **The installs themselves have not run**, because no x86_64 host exists yet.
+- **Phase 1B** — `check_bsv_node.py`. Three modes verified: it skips cleanly with no node, fails under `SOLBEAM_REQUIRE_NODE=1`, and passes `--selftest` 18/18 against an in-process stub. **The live pin has not run** — and that is exactly the point of it.
+
+### 1.3 Not started
 
 - Any live chain — no BSV node and no Solana toolchain has ever run.
-- **Phase 1B** — the real SV Node format pin.
 - The Anchor program: light client, mint, burn, `fulfil`, `challenge`, `slash`.
 - The off-chain services (advancer / watcher / relayer) — Phase 1A has the verifier they will wrap, but no service process exists yet.
 - Bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
+- **Phase 5** — monitoring. Plan only; see §11.
 
-### 1.3 The open technical unknown
+### 1.4 The open technical unknown
 
 Web APIs cannot answer the questions that matter. We need a **real SV Node in regtest** to pin:
 
@@ -40,9 +45,9 @@ Web APIs cannot answer the questions that matter. We need a **real SV Node in re
 - `decoderawtransaction` / `getblock` field names and types,
 - that our serialisation matches the node's byte-for-byte.
 
-Until that is done, the Python suite verifies our *understanding* of the format, not the format itself. §3.2 turns that circularity risk into an explicit test.
+`check_bsv_node.py` is the instrument for this, and the first live run records the raw `getmerkleproof2` response to `fixtures/node_merkleproof_raw.json` so the shape becomes part of the repo rather than a thing someone remembers. Until that runs, the Python suite verifies our *understanding* of the format, not the format itself. §3.2 turns that circularity risk into an explicit test.
 
-### 1.4 Environment finding — this is the Phase 0 blocker
+### 1.5 Environment finding — why the PoC runs on an x86_64 VM
 
 This machine is **aarch64 Linux, 4 cores, 3.8 GiB RAM**, with no compilers installed.
 
@@ -57,7 +62,7 @@ So neither of the two heavyweight dependencies can be installed natively here. S
 
 ---
 
-### 1.5 Phase 1A — what is proven so far
+### 1.6 Phase 1A — what is proven so far
 
 **Passing now (48 checks, offline, no node, ~0.8 s):**
 
@@ -260,7 +265,7 @@ Regtest has a fixed target, so DAA can be skipped for the PoC. **But it must be 
 
 **Goal: the enforcement path works — burn, pay, prove, settle — and cheating is bounded, punished, or both.**
 
-This is where the trust-minimised machinery lives, and where the recent trust-model corrections ([`docs/04-trust-model.md`](docs/04-trust-model.md#the-naked-option-attack)) turn into tests. The bond is **denominated in `solBSV`**, and the two invariants that matter are `bond ≥ k × (hot float + releasable tranche)` and `custodied BSV ≥ outstanding solBSV` at every step.
+This is where the trust-minimised machinery lives, and where the recent trust-model corrections ([`docs/04-trust-model.md`](../docs/04-trust-model.md#the-naked-option-attack)) turn into tests. The bond is **denominated in `solBSV`**, and the two invariants that matter are `bond ≥ k × (hot float + releasable tranche)` and `custodied BSV ≥ outstanding solBSV` at every step.
 
 ### 5.1 What gets built
 
@@ -445,4 +450,22 @@ The cost is honest: Python is not the production language, so some code will be 
 
 ---
 
-Next: [Repo README](README.md) · [Trust model](docs/04-trust-model.md) · [Parameters](docs/06-parameters.md)
+## 11. Companion documents, and Phase 5
+
+| Document | What it covers |
+|---|---|
+| [`PHASE5_MONITORING.md`](PHASE5_MONITORING.md) | **Phase 5 — public monitoring on solbeam.me.** Hash rate → the cost to rewrite the chain; value at risk; the safety multiple that tells a user how much to keep in flight; TVL and the reserve invariant; activity and latency. Plan only |
+| [`ADVERSARY_PLAYBOOK.md`](ADVERSARY_PLAYBOOK.md) | How a person participates as the man in the middle, and the results record to commit. Includes the two plays the protocol **cannot** win |
+| [`adversary/attack.py`](adversary/attack.py) | Runs the plays. `python3 poc/adversary/attack.py --all` — 13 runnable now; the rest are listed so the whole threat model is visible in one place |
+| [`VERSIONS.md`](VERSIONS.md) | Pin policy, the verified pins, and the architecture facts that cost real time to establish |
+| [`scripts/`](scripts/) | `bootstrap.sh`, `doctor.sh`, `regtest-up.sh` — Phase 0's deliverables |
+
+### Where Phase 5 sits
+
+Phase 5 depends on nothing except data that Phases 1–3 produce, and **5a is worth doing early**: publishing the reserve address and the `solBSV` supply, and letting anyone check `reserve ≥ supply` for themselves, is a stronger statement about this project than any amount of copy. It needs no attack-cost model and no history.
+
+The attack-cost work (5b) is the genuinely novel part, and it is also where the honesty rules matter most — an attack cost is a **lower bound** derived from a rental price, and on BSV specifically the relevant market is **global SHA-256 rental**, not BSV's own hash rate. That caveat belongs on the page, not in a footnote.
+
+---
+
+Next: [PoC plan](README.md) · [Phase 5 monitoring](PHASE5_MONITORING.md) · [Adversary playbook](ADVERSARY_PLAYBOOK.md) · [Trust model](../docs/04-trust-model.md)
