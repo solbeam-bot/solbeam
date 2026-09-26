@@ -103,6 +103,8 @@ Pin every version in the repo once chosen. Suggested order.
 
 ### 3.1 Solana side
 
+> **Architecture warning.** Anza/Agave publishes **`x86_64-unknown-linux-gnu` only** for Linux — there is no aarch64 Linux build, and there never has been. On an arm64 machine (like the current dev box) the Solana CLI must come from an x86_64 host or from emulation. See [`TEST_PLAN.md` §2.1](TEST_PLAN.md).
+
 - [ ] **Rust** — `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - [ ] **Solana CLI** — `sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"` (check the current URL in Anza's docs; pin the version)
 - [ ] **Local validator** — ships with the Solana CLI: `solana-test-validator`
@@ -159,6 +161,8 @@ solbeam-poc/
 ---
 
 ## 5. Task list (ordered, with acceptance criteria)
+
+> **Superseded.** [`TEST_PLAN.md`](TEST_PLAN.md) restructures the work into Phase 0–3 and replaces the `P0`–`P5` list below, which is kept only for history. Its test matrices are a superset of §6 here.
 
 ### P0 — Environment (~2–3 days)
 
