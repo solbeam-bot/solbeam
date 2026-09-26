@@ -198,10 +198,16 @@ describe("solbeam — verify a deposit against the window", () => {
     }
     if (!(await provider.connection.getAccountInfo(usedDeposits))) {
       await program.methods
-        // Vec<u8> must be a Buffer, not an Array: borsh encodes it as `bytes`
-      // and calls .copy() on it.
-      .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
+        // Vec<u8> must be a Buffer, not an Array: borsh encodes it as
+        // `bytes` and calls .copy() on it.
+        .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
         .accounts({ usedDeposits, depositScript, payer: provider.wallet.publicKey })
+        .rpc();
+    }
+    if (!(await provider.connection.getAccountInfo(mint))) {
+      await program.methods
+        .initializeToken()
+        .accounts({ mint, lightClient, payer: provider.wallet.publicKey })
         .rpc();
     }
   });
