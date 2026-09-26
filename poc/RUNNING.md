@@ -80,6 +80,27 @@ bash poc/checks/run_all.sh        # now the live pin runs too, not SKIPPED
 
 The first live run records the raw `getmerkleproof2` response to `poc/fixtures/node_merkleproof_raw.json`. **Commit that file** — it turns the node's response shape into part of the repo instead of something someone remembers.
 
+### Is the node running?
+
+```bash
+poc/scripts/regtest-up.sh status
+```
+
+That prints the chain, the block height and the hash rate, or tells you plainly that the node is not running. It needs no environment variables — it uses the datadir and RPC credentials it wrote when it started the node.
+
+If you would rather ask directly:
+
+```bash
+pgrep -x bitcoind >/dev/null && echo running || echo "not running"
+
+bitcoin-cli -regtest -datadir="$HOME/.solbeam/regtest" \
+  -rpcuser=solbeam -rpcpassword=solbeam getblockcount
+```
+
+**It does not restart itself.** `regtest-up.sh` starts `bitcoind` with `-daemon`, not as a systemd service, so a reboot or a stop leaves it down. `regtest-up.sh` is idempotent — running it again starts the node and leaves the existing chain alone.
+
+**Phase 2 does not need it.** The light client consumes `fixtures/deposit_1.json`, a static file. The node is only needed to re-run the Phase 1B pin or to generate fresh proofs from real blocks.
+
 To make a skipped pin a hard failure (what CI on the VM should do):
 
 ```bash
