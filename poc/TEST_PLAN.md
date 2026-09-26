@@ -10,42 +10,42 @@ The intent is unchanged: **get the design in front of reviewers as running code.
 
 ### 1.1 Done — the BSV primitives, validated against live chain data
 
-The Python checker suite passes **136/136** and runs anywhere Python runs. These are the regression vectors every later implementation must match.
+The Python checker suite passes **157/157** and runs anywhere Python runs. These are the regression vectors every later implementation must match.
 
 | Checker | Proves | Result |
 |---|---|---|
 | `checks/check_bsv_core.py` | Header serialisation + double-SHA256, PoW against the compact `bits` target, parent linkage, Merkle root rebuilt from real blocks, branch build/fold, odd-level duplication, tamper rejection | **20/20** — mainnet block 800000; testnet blocks with 5, 8 and 13 txs; synthetic 4- and 5-leaf trees |
 | `checks/check_bsv_tx.py` | Legacy tx codec (byte-exact round-trip, txid), P2PKH parsing, `SIGHASH_FORKID` preimage + digest, **real network signatures verified against digests computed from scratch** | **51/51** — 3 real testnet txs, 12 inputs |
 | `checks/check_bsv_deposit.py` | P2PKH address encoding vs real addresses, `OP_RETURN` carrying a Solana recipient, deposit tx shape, RFC-6979 signing, redemption tx shape | **17/17** |
-| `checks/check_bsv_pegin.py` | **Phase 1A, in progress — see §1.6.** A synthetic regtest chain (mining, coinbase maturity, reorg), deposit construction, the proof builder and the verifier: confirmation depth, tampering, malformed deposits, replay, odd Merkle counts, orphaned branches. Emits `fixtures/deposit_1.json` | **48/48** — the fixture is byte-deterministic across runs |
+| `checks/check_bsv_pegin.py` | **Phase 1A — complete.** A synthetic regtest chain (mining, coinbase maturity, reorg), deposit construction, the proof builder and the verifier: confirmation depth, tampering, malformed deposits, replay, odd Merkle counts, orphaned branches. Emits `fixtures/deposit_1.json` | **48/48** — the fixture is byte-deterministic across runs |
+| `checks/check_bsv_node.py` | **Phase 1B — complete.** Pins our byte formats against a real SV Node: txid, the codec vs `decoderawtransaction`, the 80-byte header vs the node's raw header, the Merkle root, and the branch vs `getmerkleproof2` | **21/21 live** — passed against SV Node v1.1.1, 2026-09-26. Raw response committed as `fixtures/node_merkleproof_raw.json` |
+| `adversary/attack.py` | 13 attacks against a fresh synthetic chain each, plus an honest control | **13/13 as documented** |
 
-`checks/bsvchain.py` builds the synthetic chain; `checks/bsvlib.py` now holds the single implementation of headers, PoW and Merkle folding that both the core checker and the chain builder use.
+`checks/bsvchain.py` builds the synthetic chain; `checks/bsvlib.py` holds the single implementation of headers, PoW and Merkle folding used by the core checker, the chain builder and the node pin.
 
-`bash checks/run_all.sh` runs all three.
+`bash checks/run_all.sh` runs everything. Without `SOLBEAM_RPC` the live pin prints `SKIPPED`; with it, and `SOLBEAM_REQUIRE_NODE=1`, a skip becomes a failure.
 
-### 1.2 Built, but not yet run against a live chain
+### 1.2 Phase 0 and Phase 1B: done
 
-- **Phase 0** — `bootstrap.sh`, `doctor.sh`, `regtest-up.sh`, `VERSIONS.md`. Written and testable-in-part: their syntax, argument handling, exit codes and refusal logic were all exercised, and the pinned SV Node download was confirmed to serve. **The installs themselves have not run**, because no x86_64 host exists yet.
-- **Phase 1B** — `check_bsv_node.py`. Three modes verified: it skips cleanly with no node, fails under `SOLBEAM_REQUIRE_NODE=1`, and passes `--selftest` 18/18 against an in-process stub. **The live pin has not run** — and that is exactly the point of it.
+- **Phase 0 — executed.** `bootstrap.sh` ran end to end on a clean x86_64 Ubuntu droplet and installed SV Node v1.1.1, Rust 1.98.1, Solana CLI 4.1.2, Anchor 1.2.0, node and `solana-test-validator`. `doctor.sh` reports **19 ok, 1 warning, 0 failures** and exits 0.
+- **Phase 1B — passed.** `check_bsv_node.py` pinned every byte format against a live SV Node in regtest. It took four corrections to get there, all of them about one RPC's wire format rather than about our own logic — see [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts).
 
 ### 1.3 Not started
 
-- Any live chain — no BSV node and no Solana toolchain has ever run.
-- The Anchor program: light client, mint, burn, `fulfil`, `challenge`, `slash`.
-- The off-chain services (advancer / watcher / relayer) — Phase 1A has the verifier they will wrap, but no service process exists yet.
-- Bond accounting, deadlines, refunds, the unbonding period.
+- **Phase 2** — the Anchor program and the BSV light client on `solana-test-validator`.
+- **Phase 3** — the off-chain services (advancer / watcher / relayer); bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
 - **Phase 5** — monitoring. Plan only; see §11.
 
-### 1.4 The open technical unknown
+### 1.4 The open technical unknown — **resolved**
 
-Web APIs cannot answer the questions that matter. We need a **real SV Node in regtest** to pin:
+Web APIs could not answer the questions that mattered, so a **real SV Node in regtest** did. All three are now pinned, and the raw response is committed:
 
-- the exact output shape of `getmerkleproof2` (branch encoding, endianness, index convention),
+- the exact output shape of `getmerkleproof2` — keys `{index, nodes, target, txOrId}`, branch under **`nodes`**, hashes in **display order**, `target` a **block-hash string**, and **no `flags`**,
 - `decoderawtransaction` / `getblock` field names and types,
 - that our serialisation matches the node's byte-for-byte.
 
-`check_bsv_node.py` is the instrument for this, and the first live run records the raw `getmerkleproof2` response to `fixtures/node_merkleproof_raw.json` so the shape becomes part of the repo rather than a thing someone remembers. Until that runs, the Python suite verifies our *understanding* of the format, not the format itself. §3.2 turns that circularity risk into an explicit test.
+`fixtures/node_merkleproof_raw.json` is the recorded response. It corrects four wrong assumptions, all of them about this one RPC's wire format and none about our own logic — the full account is in [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts). §3.2's circularity risk is now closed by measurement rather than by argument.
 
 ### 1.5 Environment finding — why the PoC runs on an x86_64 VM
 
@@ -398,7 +398,7 @@ Phase 0 ──┬─► 1A  (synthetic chain, no node)  ──┐
 
 - **The critical path is Phase 2** — specifically the light client. Everything else can run in parallel with it or ahead of it.
 - **Phase 1A needs no environment at all** and can start today, on this machine.
-- **Phase 1B needs a BSV node**, and is a *validation* task, not a blocker: Phase 2 can be developed against 1A fixtures. 1B must land before the verifier is considered frozen.
+- **Phase 1B is done** — every byte format is pinned against a live SV Node, so Phase 2's on-chain verifier now has a measured target rather than an assumed one. It cost four corrections, all to one RPC's wire format; see [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts).
 - **Phase 3 depends on Phase 2** and on the relayer, but its negative tests can be specified now.
 
 The one ordering rule worth enforcing: **the fixture layout is owned by Phase 1.** If Phase 2 needs it changed, the fix goes in Phase 1 so that both halves keep consuming the same bytes.
@@ -411,9 +411,9 @@ Indicative, one focused developer. Note that Phase 1 is new work that the earlie
 
 | Phase | Duration | Notes |
 |---|---|---|
-| **Phase 0** — environment, bootstrap, doctor | 2–3 days | Includes the §2.1 decision and standing up whichever host is chosen |
-| **Phase 1A** — synthetic chain + deposit proof | 3–4 days | No dependencies; can start immediately |
-| **Phase 1B** — real SV Node format pin | 1–2 days | Needs the node |
+| **Phase 0** — environment, bootstrap, doctor | 2–3 days | ✅ **Done.** `doctor.sh`: 19 ok, 0 failures on the x86_64 droplet |
+| **Phase 1A** — synthetic chain + deposit proof | 3–4 days | ✅ **Done.** |
+| **Phase 1B** — real SV Node format pin | 1–2 days | ✅ **Done.** Took four live iterations, all on `getmerkleproof2`'s wire format |
 | **Phase 2** — token, light client, mint, hostile advancer | 1.5–2 weeks | **The long pole** |
 | **Phase 3** — burn, relayer, bond, deadline, challenge | 1–1.5 weeks | Includes the misbehaving-relayer mode |
 | **Testnet repeat** (BSV testnet + Solana devnet, DAA on) | 2–3 days | Proves the DAA flag and real difficulty |

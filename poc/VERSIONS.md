@@ -40,17 +40,28 @@ These cost real time to establish, so they are written down.
 
 ## SV Node RPC facts
 
-Read from the pinned tag's own source (`src/rpc/rawtransaction.cpp`). Neither is guessable, and both cost a round trip to discover.
+**Confirmed against a live SV Node v1.1.1 in regtest on 2026-09-26**, and read from the pinned tag's own source (`src/rpc/rawtransaction.cpp`). Phase 1B passed on these; the raw response is committed at [`fixtures/node_merkleproof_raw.json`](fixtures/node_merkleproof_raw.json).
 
 | Fact | Value |
 |---|---|
 | **`getmerkleproof2` signature** | `getmerkleproof2 "blockhash" "txid" ( includeFullTx targetType format )` — **block hash first**. Passing only the txid makes the node read it as a block hash and answer HTTP 500 |
-| **`getmerkleproof2` result** | The TSC Merkle-proof form: `{ "flags": 2, "index": n, "txOrId": "<txid>", "target": {block header}, "nodes": [...] }` |
-| The branch key is **`nodes`**, not `proof` | A parser looking for `proof` finds nothing |
-| A node may be the string **`"*"`** | "A copy of the node being calculated" — the odd-level duplication case. Our `merkle_branch()` emits the real duplicated *hash* instead, so the two encodings differ while proving the same thing. The harness resolves `*` into concrete hashes before handing the branch to `verify_deposit()`, which takes real values because those are what fold on-chain |
+| **Result keys** | `{ index, nodes, target, txOrId }` — and **no `flags`**, contrary to what `getmerkleproof`'s help text implies |
+| The branch key is **`nodes`** | Not `proof`. A parser looking for `proof` finds nothing |
+| **`nodes` are display-order hex** | Byte-reversed relative to the internal order we compute with. Taking them at face value folds to the wrong root — this was the second live failure. The harness now *determines* the encoding rather than assuming it (`interpret_nodes`) |
+| **`target` is a string**, not a header object | A 64-char block hash here. The help text describes a header object; the real response is not one. Handled as dict / 64-char hash / 160-char raw header, and anything else is logged with its type |
+| **`nodes` may contain the string `"*"`** | "A copy of the node being calculated" — the odd-level duplication case. Not seen in the 2-transaction block above, but handled and exercised offline, because our `merkle_branch()` emits the real duplicated *hash* where the TSC format uses `*` |
 | `getmerkleproof` is **deprecated** | Its help text says "use getmerkleproof2 instead". Same result shape |
 
-**The lesson worth keeping.** The first live run passed everything except this: txid, transaction codec, header serialisation and Merkle root all matched the node byte for byte — then failed on an argument *order*. `getmerkleproof2` was the only piece no amount of offline work could have pinned, which is the entire reason Phase 1B exists as a separate step rather than being folded into Phase 1A.
+### What this cost, and why the step exists
+
+Four wrong assumptions about this one RPC, each found by a live run and none by offline work:
+
+1. the argument order,
+2. that the branch was under `proof` rather than `nodes`,
+3. that the hashes were in internal order,
+4. that `target` was a header object and `flags` was present.
+
+Every other part of the pin passed on its first attempt — txid, the transaction codec against `decoderawtransaction`, the 80-byte header against the node's raw header, and the Merkle root against the block's. That asymmetry is the whole argument for Phase 1B being a separate step: **the primitives could be validated offline; the node's wire format could not.**
 
 ## Regtest genesis
 
