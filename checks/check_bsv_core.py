@@ -15,7 +15,9 @@ import sys
 import urllib.error
 import urllib.request
 
-from bsvlib import le, sha256d
+from bsvlib import (sha256d, header_bytes, block_hash, hash_as_int,
+                    target_from_bits, merkle_hash as h, merkle_root,
+                    merkle_branch, fold_branch)
 
 API = {
     "main": "https://api.whatsonchain.com/v1/bsv/main",
@@ -37,69 +39,6 @@ MAIN_FIXTURE = {
 # downloadable while still exercising odd-level duplication.
 MERKLE_FIXTURES = [("test", 1759725), ("test", 1759683), ("test", 1759717)]
 MERKLE_FALLBACK = ("main", 1000)
-
-
-def h(a: bytes, b: bytes) -> bytes:
-    return sha256d(a + b)
-
-
-def header_bytes(hdr: dict) -> bytes:
-    """version(4) prev(32) merkle(32) time(4) bits(4) nonce(4), little-endian."""
-    raw = b"".join([
-        (int(hdr["version"]) & 0xFFFFFFFF).to_bytes(4, "little"),
-        le(hdr["previousblockhash"]),
-        le(hdr["merkleroot"]),
-        int(hdr["time"]).to_bytes(4, "little"),
-        int(hdr["bits"], 16).to_bytes(4, "little"),
-        int(hdr["nonce"]).to_bytes(4, "little"),
-    ])
-    assert len(raw) == 80, f"header must be 80 bytes, got {len(raw)}"
-    return raw
-
-
-def block_hash(hdr: dict) -> str:
-    return sha256d(header_bytes(hdr))[::-1].hex()
-
-
-def target_from_bits(bits_hex: str) -> int:
-    bits = int(bits_hex, 16)
-    exponent, mantissa = bits >> 24, bits & 0x007FFFFF
-    return mantissa >> (8 * (3 - exponent)) if exponent <= 3 \
-        else mantissa << (8 * (exponent - 3))
-
-
-def hash_as_int(hdr: dict) -> int:
-    return int.from_bytes(sha256d(header_bytes(hdr)), "little")
-
-
-def merkle_root(txids_display: list) -> bytes:
-    level = [le(t) for t in txids_display]
-    if not level:
-        raise ValueError("empty block")
-    while len(level) > 1:
-        if len(level) % 2:
-            level.append(level[-1])
-        level = [h(level[i], level[i + 1]) for i in range(0, len(level), 2)]
-    return level[0]
-
-
-def merkle_branch(txids_display: list, index: int) -> list:
-    level, proof, i = [le(t) for t in txids_display], [], index
-    while len(level) > 1:
-        if len(level) % 2:
-            level.append(level[-1])
-        proof.append(level[i ^ 1])
-        level = [h(level[j], level[j + 1]) for j in range(0, len(level), 2)]
-        i //= 2
-    return proof
-
-
-def fold_branch(txid_display: str, index: int, branch: list) -> bytes:
-    current, i = le(txid_display), index
-    for sibling in branch:
-        current = h(current, sibling) if i % 2 == 0 else h(sibling, current)
-        i //= 2
-    return current
 
 
 def get(net: str, path: str):

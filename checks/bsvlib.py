@@ -437,3 +437,97 @@ def sign_input(tx: dict, index: int, priv: int, prevout_value: int,
     digest = sighash_forkid(tx, index, prevout_value, prevout_script, sighash_type)
     sig = ecdsa_sign(priv, digest) + bytes([sighash_type])
     return push_data(sig) + push_data(pubkey_from_priv(priv))
+
+
+# ---------------------------------------------------------------------------
+# block headers, proof of work, Merkle trees
+# ---------------------------------------------------------------------------
+#
+# ONE implementation, shared by the core checker (which validates it against
+# live mainnet/testnet blocks) and the synthetic chain builder in bsvchain.py.
+# Duplicating this logic would defeat the point of the exercise.
+
+REGTEST_BITS = 0x207FFFFF
+
+
+def header_bytes(hdr: dict) -> bytes:
+    """version(4) prev(32) merkle(32) time(4) bits(4) nonce(4), little-endian.
+
+    `previousblockhash` and `merkleroot` are display hex; `bits` may be an int
+    or a hex string.
+    """
+    bits = hdr["bits"]
+    bits = int(bits, 16) if isinstance(bits, str) else int(bits)
+    raw = b"".join([
+        (int(hdr["version"]) & 0xFFFFFFFF).to_bytes(4, "little"),
+        le(hdr["previousblockhash"]),
+        le(hdr["merkleroot"]),
+        int(hdr["time"]).to_bytes(4, "little"),
+        bits.to_bytes(4, "little"),
+        int(hdr["nonce"]).to_bytes(4, "little"),
+    ])
+    if len(raw) != 80:
+        raise ValueError(f"header must be 80 bytes, got {len(raw)}")
+    return raw
+
+
+def block_hash(hdr: dict) -> str:
+    return sha256d(header_bytes(hdr))[::-1].hex()
+
+
+def hash_as_int(hdr: dict) -> int:
+    """The block hash as a 256-bit number, for comparison against the target."""
+    return int.from_bytes(sha256d(header_bytes(hdr)), "little")
+
+
+def target_from_bits(bits) -> int:
+    bits = int(bits, 16) if isinstance(bits, str) else int(bits)
+    exponent, mantissa = bits >> 24, bits & 0x007FFFFF
+    return mantissa >> (8 * (3 - exponent)) if exponent <= 3 \
+        else mantissa << (8 * (exponent - 3))
+
+
+def bits_from_target(target: int) -> int:
+    """Compact (nBits) encoding of a target."""
+    if target <= 0:
+        raise ValueError("target must be positive")
+    size = (target.bit_length() + 7) // 8
+    compact = target << (8 * (3 - size)) if size <= 3 else target >> (8 * (size - 3))
+    if compact & 0x00800000:
+        compact >>= 8
+        size += 1
+    return (size << 24) | (compact & 0x007FFFFF)
+
+
+def merkle_hash(a: bytes, b: bytes) -> bytes:
+    return sha256d(a + b)
+
+
+def merkle_root(txids_display: list) -> bytes:
+    level = [le(t) for t in txids_display]
+    if not level:
+        raise ValueError("empty block")
+    while len(level) > 1:
+        if len(level) % 2:
+            level.append(level[-1])
+        level = [merkle_hash(level[i], level[i + 1]) for i in range(0, len(level), 2)]
+    return level[0]
+
+
+def merkle_branch(txids_display: list, index: int) -> list:
+    level, proof, i = [le(t) for t in txids_display], [], index
+    while len(level) > 1:
+        if len(level) % 2:
+            level.append(level[-1])
+        proof.append(level[i ^ 1])
+        level = [merkle_hash(level[j], level[j + 1]) for j in range(0, len(level), 2)]
+        i //= 2
+    return proof
+
+
+def fold_branch(txid_display: str, index: int, branch: list) -> bytes:
+    current, i = le(txid_display), index
+    for sibling in branch:
+        current = merkle_hash(current, sibling) if i % 2 == 0 else merkle_hash(sibling, current)
+        i //= 2
+    return current

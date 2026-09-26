@@ -10,21 +10,25 @@ The intent is unchanged: **get the design in front of reviewers as running code.
 
 ### 1.1 Done — the BSV primitives, validated against live chain data
 
-The Python checker suite passes **88/88** and runs anywhere Python runs. These are the regression vectors every later implementation must match.
+The Python checker suite passes **136/136** and runs anywhere Python runs. These are the regression vectors every later implementation must match.
 
 | Checker | Proves | Result |
 |---|---|---|
 | `checks/check_bsv_core.py` | Header serialisation + double-SHA256, PoW against the compact `bits` target, parent linkage, Merkle root rebuilt from real blocks, branch build/fold, odd-level duplication, tamper rejection | **20/20** — mainnet block 800000; testnet blocks with 5, 8 and 13 txs; synthetic 4- and 5-leaf trees |
 | `checks/check_bsv_tx.py` | Legacy tx codec (byte-exact round-trip, txid), P2PKH parsing, `SIGHASH_FORKID` preimage + digest, **real network signatures verified against digests computed from scratch** | **51/51** — 3 real testnet txs, 12 inputs |
 | `checks/check_bsv_deposit.py` | P2PKH address encoding vs real addresses, `OP_RETURN` carrying a Solana recipient, deposit tx shape, RFC-6979 signing, redemption tx shape | **17/17** |
+| `checks/check_bsv_pegin.py` | **Phase 1A, in progress — see §1.5.** A synthetic regtest chain (mining, coinbase maturity, reorg), deposit construction, the proof builder and the verifier: confirmation depth, tampering, malformed deposits, replay, odd Merkle counts, orphaned branches. Emits `fixtures/deposit_1.json` | **48/48** — the fixture is byte-deterministic across runs |
+
+`checks/bsvchain.py` builds the synthetic chain; `checks/bsvlib.py` now holds the single implementation of headers, PoW and Merkle folding that both the core checker and the chain builder use.
 
 `bash checks/run_all.sh` runs all three.
 
 ### 1.2 Not started
 
 - Any live chain — no BSV node and no Solana toolchain has ever run.
+- **Phase 1B** — the real SV Node format pin.
 - The Anchor program: light client, mint, burn, `fulfil`, `challenge`, `slash`.
-- The off-chain services (advancer / watcher / relayer).
+- The off-chain services (advancer / watcher / relayer) — Phase 1A has the verifier they will wrap, but no service process exists yet.
 - Bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
 
@@ -53,27 +57,49 @@ So neither of the two heavyweight dependencies can be installed natively here. S
 
 ---
 
+### 1.5 Phase 1A — what is proven so far
+
+**Passing now (48 checks, offline, no node, ~0.8 s):**
+
+- A synthetic regtest chain: mining to the regtest target, coinbase maturity at 100 blocks, and a reorg that discards a branch.
+- The deposit transaction — a user's payment to the bridge deposit address with the Solana recipient in an `OP_RETURN`, signed and independently verified.
+- The **verifier**, which is the code the Solana program must reproduce, with a distinct rejection code for each failure: `BAD_POW`, `BROKEN_LINKAGE`, `BAD_CHECKPOINT`, `BAD_MERKLE_PROOF`, `TXID_MISMATCH`, `COINBASE_DEPOSIT`, `NO_SUCH_OUTPUT`, `AMOUNT_MISMATCH`, `ZERO_VALUE`, `WRONG_OUTPUT_SCRIPT`, `MISSING_PAYLOAD`, `INSUFFICIENT_CONFIRMATIONS`, `ALREADY_MINTED`.
+- Confirmation depth as a **parameter**, not a constant: rejected at 11, accepted at 12.
+- **Replay protection** through a used-`(txid, vout)` registry.
+- Two deposits in one block, which exercises **odd-level Merkle duplication** — the rule most likely to be got wrong independently on-chain.
+- Reorg: the deposit is mintable on the branch that holds it, and **not** mintable once that branch is discarded.
+
+**The artefact:** `fixtures/deposit_1.json` — 16 headers, the deposit transaction, and a **202-byte mint instruction** with a committed `sha256d` hash. It is byte-deterministic across runs, and the checker re-verifies it **from the file alone**, so the fixture stands on its own rather than depending on the process that produced it. That is what Phase 1B compares against, and what Phase 2 consumes.
+
+**The trust shape the code enforces:** the *verifier* owns the headers (they arrive from the advancer and are checked for PoW and linkage); the *producer* supplies the raw transaction, the Merkle branch and the claimed output, and none of it is believed. A malicious producer has nothing to gain, because every field it supplies is re-derived.
+
+**What Phase 1B must still establish:** that our header and Merkle parsing agrees with the reference implementation — in particular the exact output shape of `getmerkleproof2`. No amount of synthetic testing can settle that, which is the entire reason 1B exists as a separate, byte-equality assertion.
+
+---
+
 ## 2. Phase 0 — dependencies and precursors
 
 Phase 0 is not "setup". It is a gate: nothing in Phases 1–3 should start until the environment decision is made and the bootstrap script can assert the environment on demand.
 
-### 2.1 Decision 1 — where the PoC runs
+### 2.1 Where the PoC runs — **decided: x86_64 VM**
 
 | Option | What it means | Verdict |
 |---|---|---|
-| **A. x86_64 Linux host** (4–8 vCPU, 16 GB, 100 GB) | Both dependencies have prebuilt binaries. Nothing to compile | **Recommended.** One cheap VM removes every remaining environment risk |
-| **B. Docker + `--platform linux/amd64` on this box** | `docker.io` installs via apt; QEMU emulation runs the x86_64 images | Workable and unblocks today, but slow, and **3.8 GiB RAM is tight for a Solana validator** — likely to thrash or OOM |
-| **C. Build both from source on arm64** | Solana from source is a multi-hour, memory-hungry Rust build (very likely to OOM at 3.8 GiB); SV Node needs a C++20 toolchain that is not installed | **Not recommended** |
+| **A. x86_64 Linux host** (4–8 vCPU, 16 GB, 100 GB) | Both dependencies have prebuilt binaries. Nothing to compile | ✅ **CHOSEN.** One cheap VM removes every remaining environment risk |
+| **B. Docker + `--platform linux/amd64` on this box** | `docker.io` installs via apt; QEMU emulation runs the x86_64 images | Rejected — slow, and **3.8 GiB RAM is tight for a Solana validator** |
+| **C. Build both from source on arm64** | Solana from source is a multi-hour, memory-hungry Rust build (very likely to OOM at 3.8 GiB); SV Node needs a C++20 toolchain that is not installed | Rejected |
+
+**Still use the arm64 box for Phase 1A.** It needs no toolchain at all — see below — so the VM is only required from Phase 1B onward. Bring the VM up in parallel with 1A rather than before it.
 
 **The mitigation that makes this non-blocking:** §3.2 shows that **Phase 1 needs no node at all.** We already own header serialisation, PoW, Merkle folding and tx signing in Python, so we can generate a valid regtest-shaped chain offline and test the whole deposit path against it. The real SV Node is then needed for *format pinning*, not for development.
 
-That means work can start immediately on Phase 1 while Option A is arranged, and the Phase 2 toolchain only has to exist by the time the on-chain verifier is ready to deploy.
+That means work can start immediately on Phase 1 while the VM is arranged, and the Phase 2 toolchain only has to exist by the time the on-chain verifier is ready to deploy.
 
 ### 2.2 Dependency table
 
 | Dependency | Needed by | Install route | On this box |
 |---|---|---|---|
-| Python 3.11+ | All checkers, all phases | present | ✅ 3.12.3 |
+| **Python 3.11+** | All checkers, **and every off-chain service** (advancer, watcher, relayer, user-facing API) | present | ✅ 3.12.3 |
 | `git`, `curl`, `jq` | Everything | present | ✅ |
 | **SV Node** (`bitcoind`/`bitcoin-cli`) | 1B, 2, 3 | x86_64 release binary **or** Docker image **or** source build | ❌ needs 2.1 |
 | **Solana CLI / Agave** | 2, 3 | `release.anza.xyz` install script (x86_64) | ❌ needs 2.1 |
@@ -81,8 +107,8 @@ That means work can start immediately on Phase 1 while Option A is arranged, and
 | **Rust + cargo** | 2, 3 | `rustup` (arm64 fine) | ❌ not installed |
 | **Anchor + `avm`** | 2, 3 | `cargo install --git … avm` | ❌ not installed |
 | **`spl-token` CLI** | 2, 3 | ships with the CLI | ❌ needs 2.1 |
-| **Go 1.22+** | 1, 3 (services) | tarball (arm64 fine) | ❌ not installed |
-| **Node 20+ / npm** | user-facing page, TS tests | present | ✅ 22.23.2 |
+| **Go / Rust** | **Not used in the PoC** — the service language is decided after the PoC, with the team, using the evidence the PoC produces | — | — |
+| **Node 20+ / npm** | The minimal web page and a browser wallet adapter | present | ✅ 22.23.2 |
 | C++20 toolchain, boost, libevent, openssl | only if building SV Node | `apt` | ❌ not installed (`sudo` available) |
 | Docker | option B | `apt install docker.io` (29.1.3 available) | ❌ not installed |
 
@@ -112,6 +138,20 @@ These are the things that are wrong-by-default and cost a day if discovered late
 - A regtest BSV keypair for the deposit address and one for the relayer hot wallet.
 - A Solana keypair for the payer, one per relayer, and the bridge PDA.
 - `.env.example` committed, real keys never committed. The existing `.gitignore` already covers `*.key`, `*.pem`, `.env`.
+
+### 2.3.1 Regtest time scale — **1 hour → 1 second**
+
+Waiting is the enemy of a test matrix that has to run unattended. Every wall-clock deadline is compressed by one fixed factor, applied in a single place so it cannot drift between components.
+
+| Production | Regtest | Mechanism |
+|---|---|---|
+| 12 BSV confirmations (~2 hours) | **12 blocks + 2 s** | The 12 blocks are mined on demand; the 2-second delay reproduces the *wait*, so the watcher's polling and the user's experience are exercised for real rather than skipped |
+| Redemption deadline — 6 hours | **6 s** | The refund path fires on a 6-second timer |
+| Payout settlement window — 6 hours | **6 s** | Drives the reorg-after-payout case |
+| Challenge window — 24 hours | **24 s** | How long an unmatched-spend proof stays admissible |
+| Unbonding period — 7 days | **30 s** | `≥ deadline + challenge window` = 6 + 24, which is the *production relationship*, merely scaled |
+
+The factor is a single config value (`TIMESCALE = 3600`), not five independent numbers, so restoring production behaviour is `TIMESCALE = 1` and nothing else. A direct consequence for the tests: they must assert **relationships** (`unbonding > deadline + challenge`) rather than absolute seconds, or the whole matrix silently breaks the day the scale changes.
 
 ### 2.4 Deliverables
 
@@ -269,28 +309,36 @@ Nothing else. No terminal, no account, no KYC.
 
 | Need | Detail |
 |---|---|
-| **Peg-in: a BSV wallet** | It must pay to the deposit address. **Two possible payload models, and this is an open decision** — see §6.1.1 |
+| **Peg-in: a BSV wallet** | It must pay to the deposit address **and attach the `OP_RETURN` payload** — decided, see §6.1.1 |
 | **A Solana wallet** | To receive `solBSV`. The token account may not exist yet |
 | **SOL for fees** | The burn costs a Solana fee. **If the user also needs SOL to create the token account, that is a bad first-run experience** — the bridge should create the ATA and pay its rent (`init_if_needed`), so a first-time user needs zero SOL to *receive* |
 | **Browser wallet config** | Custom RPC = localnet (`http://localhost:8899`), cluster `localnet`, and the mint added manually to see the balance |
 | **Peg-out** | The burn transaction plus a BSV destination address they control |
+| **What we build for them** | A minimal web page (decision 4): generate the deposit address **and the exact `OP_RETURN` payload** for their wallet, show live status, and drive the burn. It is in PoC scope precisely so the acceptance test below is *runnable* rather than asserted |
 
 **Acceptance test for this role:** a person who has never seen the system completes a peg-in and a peg-out using only a browser and their own wallets, with no terminal and no help.
 
-#### 6.1.1 Open decision — how the deposit carries the recipient
+#### 6.1.1 How the deposit carries the recipient — **decided: `OP_RETURN`**
 
 | Model | How it works | Cost |
 |---|---|---|
-| **A. `OP_RETURN` payload** | The user attaches their Solana address in an `OP_RETURN` when sending. Single step | Needs a wallet that can attach `OP_RETURN` data, and a convincing UI — many wallets cannot, and some discourage it |
+| **A. `OP_RETURN` payload** ✅ **chosen** | The user attaches their Solana address in an `OP_RETURN` when sending. **Single step** | Needs a wallet that can attach `OP_RETURN` data, and a UI that makes it unremarkable — many wallets cannot, and some discourage it |
 | **B. Derived deposit address + registry** | Each deposit address is derived from a bridge xpub at an index; the user registers `(index → Solana address)` first. Any wallet works | Two steps, and unregistered deposits need a recovery path |
 
-The checkers already implement model **A**, so it is the PoC default. Model **B** is the better *product* and should be prototyped in Phase 2 — the PoC's job is to price the difference.
+**Why A.** It collapses peg-in to one transaction, and the checkers already implement it (`check_bsv_deposit.py` builds and verifies exactly this shape), so Phase 1A builds on tested code rather than starting from zero.
+
+**The risk this accepts, and what Phase 1A must therefore test.** The whole flow depends on the user's wallet being willing and able to attach an `OP_RETURN`. That is a *wallet* dependency, not a protocol one, and it is the single most likely cause of a failed first deposit. Phase 1A must:
+
+- reject a deposit that arrives **without** the payload, with a distinct, user-legible error — not a generic "invalid deposit";
+- and the minimal web page (§6.1, decision 4) must generate the exact payload and show the user what to attach.
+
+Model **B** stays on the roadmap as the better *product* answer. The PoC's job is to price the difference in real deposits, not to assume it.
 
 ### 6.2 The relayer — software with capital at risk
 
 | Need | Detail |
 |---|---|
-| **Software** | One binary with a config file: watch burns, pay BSV, build the proof, submit `fulfil`, and handle unbonding |
+| **Software** | **A Python program** with a config file — one process, loops for watch / pay / prove / submit, plus unbonding (decision 3: the service language is chosen later, on the evidence) |
 | **A BSV hot key** | Plus a way to broadcast — its own node or an untrusted broadcast API |
 | **A Solana keypair + RPC** | To read burns and submit `fulfil` |
 | **A bond in `solBSV`** | **Locked** on Solana, sized `≥ k × (hot float + releasable tranche)`. Not a balance it can move |
@@ -370,14 +418,30 @@ Indicative, one focused developer. Note that Phase 1 is new work that the earlie
 
 ---
 
-## 10. Open decisions — all gate Phase 0
+## 10. Decisions taken
 
-1. **Host** — x86_64 VM (recommended), or Docker with amd64 emulation on this box?
-2. **Deposit payload** — `OP_RETURN` (PoC default, already implemented) or the derived-address registry (better product, two-step)?
-3. **Off-chain language** — **Go** is recommended: it matches the production plan and its libraries are ISC. Rust keeps one language but starts slower. TypeScript is fastest but leans on an Open BSV–licensed SDK
-4. **User-facing surface for the PoC** — CLI only, or a minimal web page so the "browser and a wallet" acceptance test in §6.1 can actually be run?
-5. **Deadline and unbonding length in regtest** — seconds, so the test matrix runs quickly? (Recommended; they become hours and days in production.)
-6. **Advancer for the demo** — run a third-party/hostile advancer publicly, so the permissionless claim is visible rather than asserted?
+All six were open questions; these are the answers, and the rest of this document already reflects them.
+
+| # | Decision | Chosen | Consequence |
+|---|---|---|---|
+| 1 | **Host** | **x86_64 VM** | §2.1. The arm64 box stays the development machine for Phase 1A, which needs no toolchain |
+| 2 | **Deposit payload** | **`OP_RETURN`** | §6.1.1. Single-step peg-in. The checkers already implement it, so Phase 1A can build on tested code |
+| 3 | **Off-chain language** | **Python** | Not Go, and deliberately not locked in. The PoC is a *research artefact*: its job is to answer questions, not to commit the production stack. The service language gets decided with the team, on the evidence the PoC produces |
+| 4 | **User surface** | **Minimal web page** | So the §6.1 acceptance test — "a browser and a wallet, no terminal" — can actually be run rather than asserted |
+| 5 | **Regtest time scale** | **1 hour → 1 second** | §2.3.1. Peg-in waits **2 seconds**, peg-out **6 seconds**, unbonding **30 seconds** |
+| 6 | **Advancer for the demo** | Open | Run a hostile or third-party advancer publicly, or keep it in-process for the PoC? Low stakes; can be decided at demo time |
+
+### 10.1 On decision 3 — why Python is the right call
+
+The plan previously recommended Go to match an assumed production stack. That was premature. Choosing the service language now would bake a team decision into a research artefact, and the PoC's output — measured compute budgets, the fixture format, the shape of the relayer's loops — is exactly the evidence needed to make that choice well.
+
+Keeping the PoC in Python has three concrete advantages:
+
+1. **One language across the whole PoC.** The BSV primitives are already Python and already validated. The verifier, the chain builder, the relayer and the test harness all sit on top of code that is proven against real chain data.
+2. **It is the reference implementation.** Python stays the oracle that any future Go or Rust port must match — the checkers already serve this role, and the fixture in §3 makes it explicit.
+3. **Zero toolchain.** Every phase up to and including 1B runs with dependencies that either already exist or install in one line.
+
+The cost is honest: Python is not the production language, so some code will be rewritten. That is acceptable for a PoC whose deliverable is *knowledge*, and the rewrite is bounded because the fixture format and the test vectors carry over unchanged.
 
 ---
 
