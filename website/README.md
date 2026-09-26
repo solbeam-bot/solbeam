@@ -57,59 +57,69 @@ The coin animation is pure CSS (`rotateY`), with a cross-fade fallback for `pref
 
 ---
 
-## Deploy — Cloudflare Pages (recommended)
+## Deploy — Cloudflare Workers
 
-**Why:** free, global CDN, unlimited static bandwidth on the free tier, automatic HTTPS, custom domain, and a clear upgrade path (Workers/Functions/R2) when it grows. Static hosting scales to practically any traffic without any server to manage.
+**Why:** free, global CDN, unlimited static bandwidth on the free tier, automatic HTTPS, custom domain, and a clear upgrade path (Functions/R2) when it grows. Static hosting scales to practically any traffic without any server to manage.
 
-### Where it is deployed today
+### Live configuration
 
-`solbeam.me` is currently served by a **Cloudflare Worker with static assets** (not a Pages project):
+`solbeam.me` is served by a **Cloudflare Worker with static assets**. The migration off the old repo is complete.
 
 | | |
 |---|---|
 | Account | `actftx` (the `workers.dev` subdomain) |
-| Worker name | `solbeam` → <https://solbeam.actftx.workers.dev/> |
-| Custom domains | `solbeam.me`, presumably `www.solbeam.me` |
-| Source | `adamski-t/solbeam` — **being replaced by `solbeam-bot/solbeam`** |
-| Asset root | the old repo's `website/` folder |
+| Worker | **`solbeam-main`** → <https://solbeam-main.actftx.workers.dev/> |
+| Source | <https://github.com/solbeam-bot/solbeam>, branch `main` |
+| Asset root | **`website/`** — declared in `wrangler.jsonc` at the repo root |
+| Custom domains | `solbeam.me` ✅ · `www.solbeam.me` ⚠️ **not attached yet** |
+| Retired | the old `solbeam` Worker, and `adamski-t/solbeam` as the source |
 
-Workers static assets honours `_headers` and `_redirects` (confirmed: the `/assets/*` and `/*.css` cache rules from `_headers` are live on `solbeam.me`), so nothing about the header/redirect files needs to change — but **the asset root must become `website/` in the new repo**, because there is no `index.html` at the repo root.
-
-> **Note on the HTML cache rule.** `_headers` sets `/*.html` to `max-age=300`, but that pattern matches *explicit* `.html` requests only. Requests for `/` and `/about/` are pretty URLs, so the platform default `max-age=0, must-revalidate` applies. That is a good default while iterating and needs no fix.
-
-### Migrating off the old repo
-
-Pick one. **Option A is recommended** — it ends with a plain static site, no Worker code to maintain, and it is the only path that needs no Wrangler config.
-
-#### Option A — new Pages project on the new repo, then move the domain
-
-1. **Workers & Pages → Create → Pages → Connect to Git.** When Cloudflare asks which repositories it may see, make sure the **`solbeam-bot`** account is included. This is the step people miss: the Cloudflare GitHub App was probably granted access to `adamski-t` only, and that grant does **not** extend to the new account.
-2. Select `solbeam-bot/solbeam`, production branch `main`.
-3. Use the build settings from step 3 above (`None` / blank / `website`).
-4. **Save and Deploy**, then open the `*.pages.dev` URL and check the coin animates before touching DNS.
-5. **Custom domains → Set up a domain** → add `solbeam.me` and `www.solbeam.me`. Cloudflare will offer to move them off the Worker; accept. The DNS records already exist and are reused.
-6. Purge cache (`Caching → Configuration → Purge Everything`).
-7. Verify with the checks below, then retire the old Worker and only then make `adamski-t/solbeam` private.
-
-#### Option B — keep the Worker, repoint its source
-
-Only works if the Worker is **Git-connected**: dashboard → the `solbeam` Worker → **Settings → Build**. If there is no Build tab, it was uploaded by hand and there is nothing to repoint — use Option A, or deploy from the new repo with the config below.
-
-Workers Builds needs a Wrangler config to know where the assets live, and the repo has none. Create `wrangler.jsonc` at the repo root (note `name` must stay `solbeam` so this updates the existing Worker rather than creating a second one):
+`wrangler.jsonc` is what tells Workers Builds where the site lives:
 
 ```jsonc
 {
-  "name": "solbeam",
+  "name": "solbeam-main",
   "compatibility_date": "2026-09-24",
   "assets": { "directory": "./website" }
 }
 ```
 
-Then either let the Git build run, or deploy it yourself from the repo root:
+`name` must stay `solbeam-main`. If it changed, the next deploy would create a *second* Worker and the custom domain would keep pointing at the old one — the site would silently stop updating.
+
+### Redeploying
+
+Push to `main`. Workers Builds runs the deploy; there is no build step, so nothing to install and nothing to compile.
+
+To deploy by hand from the repo root:
 
 ```bash
 npx wrangler deploy
 ```
+
+Do not also pass `--assets` on the command line now that `wrangler.jsonc` declares it. The config is the single source of truth, and specifying both is the one way to get a confusing deploy.
+
+**Verify after any deploy:**
+
+```bash
+for p in / /about/ /styles.css /assets/solana.webp /assets/bsv.jpg /robots.txt /sitemap.xml /litepaper/; do
+  printf '%-22s %s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code}' https://solbeam.me$p)"
+done
+curl -sI https://solbeam.me/assets/bsv.jpg | grep -i cache-control   # expect max-age=31536000, immutable
+```
+
+Everything `200` **except** `/litepaper/`, which must be `301`. That `301` proves `_redirects` is honoured; the `cache-control` header proves `_headers` is honoured. Both files are read from the asset root — which is exactly why `assets.directory` must point at `website/` and not the repo root.
+
+### Two behaviours worth knowing
+
+- **`_headers` caching.** The `/*.html` rule matches *explicit* `.html` requests only. `/` and `/about/` are pretty URLs, so the platform default `max-age=0, must-revalidate` applies — a good default while iterating, and no fix needed.
+- **The custom `404.html` is currently dead.** The live config uses the platform default, so an unknown path returns a bare `404` with an empty body rather than `website/404.html`. To serve it, add one line:
+  ```jsonc
+  "assets": { "directory": "./website", "not_found_handling": "404-page" }
+  ```
+  That is a visible behaviour change, so it is deliberately left off until wanted.
+
+## Alternative: Cloudflare Pages (from scratch)
+
 
 ### 1. The code is already in a repo
 
@@ -169,7 +179,7 @@ git commit -m "About page, GitHub button, coin flip fix"
 git push
 ```
 
-If you are staying on a Worker (Option B), add the `wrangler.jsonc` from that section and deploy from the repo root with `npx wrangler deploy`.
+The live setup is the Worker path: push to `main`, or run `npx wrangler deploy` from the repo root — `wrangler.jsonc` already declares the asset directory.
 
 ### Checking a deploy
 
@@ -203,7 +213,7 @@ Nothing here needs replacing to grow:
 
 | Item | Cost |
 |---|---|
-| Hosting (Cloudflare Pages free tier) | $0 |
+| Hosting (Cloudflare Workers free tier) | $0 |
 | SSL | $0 |
 | CDN bandwidth | $0 (fair use) |
 | The `solbeam.me` domain | already purchased |
@@ -217,20 +227,22 @@ Already done:
 - [x] Domain registered, DNS on Cloudflare
 - [x] Site live at `solbeam.me`
 - [x] `checks/`, `docs/` and `website/` all in `solbeam-bot/solbeam`
+- [x] Cloudflare GitHub App granted access to the `solbeam-bot` account
+- [x] Worker `solbeam-main` on `solbeam-bot/solbeam`, branch `main`
+- [x] Asset root declared as `website/` in `wrangler.jsonc`
+- [x] `solbeam.me` moved to the new Worker — serving our committed `index.html` byte-for-byte
+- [x] Old `solbeam` Worker retired (now returns 404)
+- [x] Cache purged
+- [x] `/` and `/about/` return `200`
+- [x] `/litepaper/` returns `301` — proves `_redirects` is honoured
+- [x] `assets/bsv.jpg` returns `200` with `max-age=31536000, immutable` — proves `_headers` is honoured
 
-Migrating the host off `adamski-t/solbeam`:
+Still to do:
 
-- [ ] Cloudflare GitHub App granted access to the **`solbeam-bot`** account (the old grant does not cover it)
-- [ ] New Pages project — or repointed Worker — connected to `solbeam-bot/solbeam`, branch `main`
-- [ ] Build output / asset root set to **`website`**, never the repo root
-- [ ] The `*.pages.dev` (or `*.workers.dev`) preview renders and the coin animates, *before* any DNS change
-- [ ] `solbeam.me` + `www.solbeam.me` moved to the new project, SSL active
-- [ ] Cache purged
-- [ ] `/` and `/about/` return `200`
-- [ ] `/litepaper/` returns **`301`** — this is the proof that `_redirects` is honoured
-- [ ] `assets/bsv.jpg` returns `200` **and** `cache-control: max-age=31536000, immutable` — the proof that `_headers` is honoured
-- [ ] Old Worker retired
-- [ ] `adamski-t/solbeam` set to private — **only after every line above passes**
+- [ ] Attach `www.solbeam.me` as a custom domain on `solbeam-main` — **it currently has no DNS records at all**
+- [ ] Add a zone Redirect Rule `www.solbeam.me/*` → `https://solbeam.me/$1` (301), keeping the apex canonical
+- [ ] Set `adamski-t/solbeam` to private — the old source is confirmed replaced
+- [ ] Optional: `"not_found_handling": "404-page"` in `wrangler.jsonc`, to serve the custom `404.html`
 - [ ] TODO: add `assets/og.png` (1200×630) and uncomment the `og:image` meta tag in `index.html`
 
 ## Design notes
