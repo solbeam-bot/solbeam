@@ -222,20 +222,23 @@ class StubRPC:
             raise RuntimeError(f"tx {txid} is not in block {blockhash}")
 
         # Build the branch in the TSC encoding: walk the tree, and where our
-        # sibling is the node itself, emit "*".
+        # sibling is the node itself, emit "*". Hashes go out in display order,
+        # which is what the live node returned — the harness determines this
+        # rather than trusting it (see interpret_nodes).
         level = [B.le(t) for t in blk["txids"]]
         nodes, i = [], index
         while len(level) > 1:
             if len(level) % 2:
                 level.append(level[-1])
             sibling = level[i ^ 1]
-            nodes.append("*" if sibling == level[i] else sibling.hex())
+            nodes.append("*" if sibling == level[i] else sibling[::-1].hex())
             level = [B.merkle_hash(level[j], level[j + 1]) for j in range(0, len(level), 2)]
             i //= 2
 
-        return {"flags": 2, "index": index, "txOrId": txid,
-                "target": self.getblockheader(blk["hash"], True),
-                "nodes": nodes}
+        # The live node returned a string here, not the header object the help
+        # text describes, and omitted `flags` entirely.
+        return {"index": index, "txOrId": txid,
+                "target": blk["hash"], "nodes": nodes}
 
     # not needed by the pin, present so the surface matches
     def generatetoaddress(self, n, addr): raise NotImplementedError
@@ -250,15 +253,29 @@ class StubRPC:
 DUPLICATE = None
 
 
-def materialise_branch(txid_display: str, index: int, branch: list) -> list:
-    """Turn a TSC branch (which may contain "*") into concrete 32-byte hashes.
+def fold_nodes(txid_display: str, index: int, nodes: list) -> bytes:
+    """Fold a branch of internal-order hashes (or DUPLICATE), leaf to root."""
+    current, i = B.le(txid_display), index
+    for node in nodes:
+        if node is DUPLICATE:
+            current = B.merkle_hash(current, current)
+        elif i % 2 == 0:
+            current = B.merkle_hash(current, node)
+        else:
+            current = B.merkle_hash(node, current)
+        i //= 2
+    return current
 
-    verify_deposit() takes concrete hashes, because on-chain we fold real
-    values. "*" is a wire-format shorthand for "the node being calculated", so
-    it resolves to whatever the fold has produced at that step.
+
+def materialise_branch(txid_display: str, index: int, nodes: list) -> list:
+    """Resolve "*" into concrete 32-byte hashes.
+
+    verify_deposit() takes concrete hashes, because those are what fold
+    on-chain; "*" is only a wire-format shorthand for "the node being
+    calculated".
     """
     current, i, out = B.le(txid_display), index, []
-    for node in branch:
+    for node in nodes:
         if node is DUPLICATE:
             out.append(current)
             current = B.merkle_hash(current, current)
@@ -270,16 +287,25 @@ def materialise_branch(txid_display: str, index: int, branch: list) -> list:
     return out
 
 
-def extract_branch(proof: dict):
-    """Pull (branch, index, keys) out of a getmerkleproof2 response.
+# Every plausible way SV Node might encode the branch. Rather than assume one,
+# try them all and report which actually folds to the block root.
+NODE_ENCODINGS = (
+    ("display-order hashes, leaf-to-root", True, False),
+    ("internal-order hashes, leaf-to-root", False, False),
+    ("display-order hashes, root-to-leaf", True, True),
+    ("internal-order hashes, root-to-leaf", False, True),
+)
+
+
+def extract_nodes(proof: dict):
+    """Pull (raw nodes, index, keys) out of a getmerkleproof2 response.
 
     Confirmed shape (SV Node v1.1.1, src/rpc/rawtransaction.cpp):
-        { "flags": 2, "index": n, "txOrId": "<txid>",
-          "target": {block header}, "nodes": ["hash", "*", ...] }
+        { "index": n, "txOrId": "<txid>", "target": ..., "nodes": [...] }
 
-    The key is `nodes`, not `proof` — and a node may be the string "*" rather
-    than a hash. Both of those would have broken the first version of this
-    parser even once the call succeeded.
+    The branch key is `nodes`, not `proof`; a node may be the string "*"; and
+    `flags` is absent from the real response even though `getmerkleproof`'s
+    help text implies otherwise.
     """
     raw_keys = sorted(proof.keys())
     nodes = None
@@ -289,59 +315,39 @@ def extract_branch(proof: dict):
             break
     if nodes is None:
         raise AssertionError(f"no branch found in {raw_keys}")
-
-    branch = []
-    for n in nodes:
-        if n == "*":
-            branch.append(DUPLICATE)
-        else:
-            branch.append(bytes.fromhex(n) if isinstance(n, str) else bytes(n))
-
     for key in ("index", "pos", "txpos", "position"):
         if key in proof:
-            return branch, int(proof[key]), raw_keys
+            return list(nodes), int(proof[key]), raw_keys
     raise AssertionError(f"no index found in {raw_keys}")
 
 
-def fold_tsc_branch(txid_display: str, index: int, branch: list) -> bytes:
-    """Fold a TSC branch, honouring the "*" duplicate sentinel."""
-    current, i = B.le(txid_display), index
-    for node in branch:
-        if node is DUPLICATE:
-            current = B.merkle_hash(current, current)
-        elif i % 2 == 0:
-            current = B.merkle_hash(current, node)
-        else:
-            current = B.merkle_hash(node, current)
-        i //= 2
-    return current
+def interpret_nodes(raw_nodes: list, txid: str, index: int, root_internal: bytes):
+    """Determine how the node encodes its branch, instead of assuming.
 
-
-def branches_equivalent(txid: str, index: int, ours: list, theirs: list):
-    """Are our branch and the node's the same proof, allowing for encoding?
-
-    Ours puts the real duplicated hash where the node puts "*". Compare
-    element by element, accepting "*" wherever our element equals the node
-    being calculated at that step.
+    The first live run settled that it is not the naive reading: the node's
+    branch did not fold to the block root when taken at face value. So try the
+    plausible encodings, use the one that folds, and say which it was — that
+    turns a guess into a measurement, and the fixture records it.
     """
-    if len(ours) != len(theirs):
-        return False, f"length {len(ours)} vs {len(theirs)}"
-    current, i = B.le(txid), index
-    for k, (o, t) in enumerate(zip(ours, theirs)):
-        if t is DUPLICATE:
-            if o != current:
-                return False, (f"element {k}: node says duplicate, ours is "
-                               f"{o.hex()[:16]} not {current.hex()[:16]}")
-        elif o != t:
-            return False, f"element {k}: ours {o.hex()[:16]} vs node {t.hex()[:16]}"
-        if t is DUPLICATE:
-            current = B.merkle_hash(current, current)
-        elif i % 2 == 0:
-            current = B.merkle_hash(current, o)
-        else:
-            current = B.merkle_hash(o, current)
-        i //= 2
-    return True, ""
+    attempts = []
+    for label, reverse_bytes, reverse_order in NODE_ENCODINGS:
+        nodes = []
+        for n in raw_nodes:
+            if n == "*":
+                nodes.append(DUPLICATE)
+                continue
+            b = bytes.fromhex(n) if isinstance(n, str) else bytes(n)
+            nodes.append(b[::-1] if reverse_bytes else b)
+        if reverse_order:
+            nodes = nodes[::-1]
+        folded = fold_nodes(txid, index, nodes)
+        attempts.append((label, folded))
+        if folded == root_internal:
+            return nodes, label
+    detail = "; ".join(f"{lbl} -> {f.hex()[:16]}" for lbl, f in attempts)
+    raise AssertionError(
+        f"the node's branch does not fold to the block root under any known "
+        f"encoding. root={root_internal.hex()[:16]}; {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -477,40 +483,61 @@ def run_pin(rpc, log, check) -> None:
             f.write("\n")
         log(f"     raw getmerkleproof2 response recorded to {path}")
 
-    node_branch, node_index, raw_keys = extract_branch(proof)
+    raw_nodes, node_index, raw_keys = extract_nodes(proof)
     log(f"     node returned keys: {raw_keys}")
+    log(f"     node nodes, raw:  {raw_nodes}")
     ours_branch = B.merkle_branch(txids, index)
-    # Resolve any "*" into concrete hashes: that is the form verify_deposit()
-    # takes, and the form the on-chain verifier will fold.
-    node_branch_concrete = materialise_branch(deposit_txid, node_index, node_branch)
-    if any(n is DUPLICATE for n in node_branch):
+    root_internal = B.le(block["merkleroot"])
+
+    # Determine the encoding rather than assume it. The first live run proved
+    # the naive reading is wrong: taken at face value the node's branch did not
+    # fold to the block root.
+    node_nodes, encoding = interpret_nodes(raw_nodes, deposit_txid, node_index,
+                                           root_internal)
+    log(f"     encoding determined: {encoding}")
+    if any(n is DUPLICATE for n in node_nodes):
         log(f"     node used the '*' sentinel "
-            f"{sum(1 for n in node_branch if n is DUPLICATE)} time(s) — "
+            f"{sum(1 for n in node_nodes if n is DUPLICATE)} time(s) — "
             f"odd-level duplication, now materialised")
+
+    # Resolve any "*" into concrete hashes: that is the form verify_deposit()
+    # takes, and the form the on-chain verifier folds.
+    node_branch_concrete = materialise_branch(deposit_txid, node_index, node_nodes)
 
     check("index convention agrees", node_index == index,
           f"node {node_index} vs ours {index}")
-    check("branch length agrees", len(node_branch) == len(ours_branch),
-          f"node {len(node_branch)} vs ours {len(ours_branch)}")
-    equivalent, why = branches_equivalent(deposit_txid, index, ours_branch, node_branch)
-    check("every branch element agrees (allowing the '*' duplicate sentinel)",
-          equivalent, why)
+    check("branch length agrees", len(node_nodes) == len(ours_branch),
+          f"node {len(node_nodes)} vs ours {len(ours_branch)}")
     check("the materialised node branch equals ours byte for byte",
           node_branch_concrete == ours_branch,
           f"{[x.hex()[:8] for x in node_branch_concrete]} vs "
           f"{[x.hex()[:8] for x in ours_branch]}")
     check("the node's branch folds to the block root",
-          fold_tsc_branch(deposit_txid, node_index, node_branch) == B.le(block["merkleroot"]),
-          f"folded {fold_tsc_branch(deposit_txid, node_index, node_branch).hex()[:16]}")
+          fold_nodes(deposit_txid, node_index, node_nodes) == root_internal)
     check("our branch folds to the block root",
-          B.fold_branch(deposit_txid, index, ours_branch) == B.le(block["merkleroot"]))
+          B.fold_branch(deposit_txid, index, ours_branch) == root_internal)
 
-    # The TSC proof carries the block header as `target` — cross-check it.
+    # `target` identifies the block the proof is against. Its type is NOT what
+    # the help text implies: the live node returned a string (and no `flags`
+    # field at all), so handle what it can actually be and say what we saw.
     target = proof.get("target")
     if isinstance(target, dict):
         check("the proof's target header hashes to the block we asked about",
               B.block_hash(target) == block_hash,
               f"{B.block_hash(target)[:16]} vs {block_hash[:16]}")
+    elif isinstance(target, str) and len(target) == 64:
+        check("the proof's target block hash is the block we asked about",
+              target.lower() == block_hash.lower()
+              or target.lower()[::-1] == block_hash.lower(),
+              f"{target[:16]} vs {block_hash[:16]}")
+    elif isinstance(target, str) and len(target) == 160:
+        raw = header_raw.lower() if isinstance(header_raw, str) else None
+        check("the proof's target is the raw header of that block",
+              raw is not None and target.lower() in (raw, raw[::-1]),
+              f"{target[:16]}... vs {str(raw)[:16]}...")
+    else:
+        log(f"     target not interpreted: {type(target).__name__} = "
+            f"{str(target)[:60]}")
     check("the proof's txOrId is our transaction",
           proof.get("txOrId", deposit_txid) == deposit_txid)
 
