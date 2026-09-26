@@ -459,7 +459,7 @@ The cost is honest: Python is not the production language, so some code will be 
 | [`ADVERSARY_PLAYBOOK.md`](ADVERSARY_PLAYBOOK.md) | How a person participates as the man in the middle, and the results record to commit. Includes the two plays the protocol **cannot** win |
 | [`adversary/attack.py`](adversary/attack.py) | Runs the plays. `python3 poc/adversary/attack.py --all` — 13 runnable now; the rest are listed so the whole threat model is visible in one place |
 | [`VERSIONS.md`](VERSIONS.md) | Pin policy, the verified pins, and the architecture facts that cost real time to establish |
-| [`scripts/`](scripts/) | `bootstrap.sh`, `doctor.sh`, `regtest-up.sh` — Phase 0's deliverables |
+| [`scripts/`](scripts/) | `bootstrap.sh`, `doctor.sh`, `regtest-up.sh`, `cloud-init.sh` — Phase 0's deliverables, including a startup script for a cloud VM |
 
 ### Where Phase 5 sits
 

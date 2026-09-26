@@ -59,6 +59,44 @@ shell_run() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# -- PATH --------------------------------------------------------------------
+#
+# Installers put their binaries where only a NEW login shell will find them:
+# rustup in ~/.cargo/bin, the Solana CLI in ~/.local/share/solana/.../bin, avm
+# in ~/.avm/bin, SV Node wherever we unpack it. This shell never re-reads
+# ~/.profile, so without the below the install "succeeds" and then every later
+# step — including the final doctor.sh — cannot find the tools it just
+# installed. That was a real bug in the first version of this script.
+
+add_path() {
+  case ":$PATH:" in *":$1:"*) return 0 ;; esac
+  PATH="$1:$PATH"; export PATH
+}
+
+persist_path() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  local rc
+  for rc in "$HOME/.profile" "$HOME/.bashrc"; do
+    [ -f "$rc" ] || : > "$rc"
+    grep -qF "$1" "$rc" 2>/dev/null && continue
+    printf '\n# added by solbeam bootstrap\nexport PATH="%s:$PATH"\n' "$1" >> "$rc"
+  done
+}
+
+# Make every install location visible to this shell, and to future ones.
+solbeam_paths() {
+  local p
+  for p in "$HOME/.cargo/bin" \
+           "$HOME/.avm/bin" \
+           "$HOME/.local/share/solana/install/active_release/bin" \
+           "$HOME"/solbeam-svnode-src/src \
+           "$HOME"/solbeam-svnode/bitcoin-sv-*/bin; do
+    [ -d "$p" ] || continue
+    add_path "$p"
+    persist_path "$p"
+  done
+}
+
 # -- preflight ---------------------------------------------------------------
 
 say "preflight"
@@ -67,11 +105,23 @@ ARCH="$(uname -m)"
 [ "$ARCH" = "x86_64" ] || die "this host is $ARCH; Phases 1B-3 need x86_64.
   Agave/Solana ships no aarch64 Linux build and SV Node's only binary is x86_64.
   Use an x86_64 VM (TEST_PLAN.md §2.1), or run only Phase 1A, which needs no toolchain:
-      bash poc/checks/run_all.sh"
+      bash poc/checks/run_all.sh
+
+  If you are on a VM under multipass: multipass can only launch guests matching
+  the host architecture, so an arm64 host gives you an arm64 guest. Use an
+  x86_64 cloud VM, or QEMU/UTM with full emulation."
 
 info "host: $(uname -s) / $ARCH"
 info "poc:  $POC"
 [ "$DRY_RUN" = "1" ] && warn "dry run — nothing will be changed"
+
+if [ "$(id -u)" -eq 0 ]; then
+  warn "running as root — the toolchain will install into $HOME"
+  warn "if you meant to install for a user, run instead:"
+  warn "  sudo -u <user> -H $(readlink -f "$0")"
+fi
+
+solbeam_paths   # pick up anything already installed
 
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -88,8 +138,11 @@ say "system packages (apt)"
 if [ "$DRY_RUN" = "1" ]; then
   info "[dry-run] apt-get install ${APT_PACKAGES[*]}"
 else
-  run $SUDO apt-get update -qq
-  run $SUDO apt-get install -y -qq "${APT_PACKAGES[@]}"
+  # DPkg::Lock::Timeout makes apt wait for the lock rather than fail. On a
+  # freshly booted cloud VM, unattended-upgrades usually holds it, and this is
+  # the single most common reason a first-run install script dies.
+  run $SUDO apt-get -o DPkg::Lock::Timeout=600 update -qq
+  run $SUDO apt-get -o DPkg::Lock::Timeout=600 install -y -qq "${APT_PACKAGES[@]}"
 fi
 
 # -- rust -------------------------------------------------------------------
@@ -101,10 +154,11 @@ else
   shell_run "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path"
   if [ "$DRY_RUN" = "0" ]; then
     # shellcheck disable=SC1091
-    . "$HOME/.cargo/env"
+    [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
     [ -n "$RUST_TOOLCHAIN" ] && run rustup toolchain install "$RUST_TOOLCHAIN"
   fi
 fi
+solbeam_paths
 
 # -- solana CLI -------------------------------------------------------------
 
@@ -130,6 +184,7 @@ else
     run avm install latest
     run avm use latest
   fi
+  solbeam_paths
 fi
 
 # -- SV node ----------------------------------------------------------------
@@ -146,23 +201,34 @@ else
     info "downloading $TARBALL"
     info "note: v1.2.x publishes no binaries, which is why this pins $SVNODE_VERSION"
     if [ "$DRY_RUN" = "1" ]; then
-      info "[dry-run] curl -L $URL | tar -xz -C /opt"
+      info "[dry-run] curl -L $URL | tar -xzf - -C $HOME/solbeam-svnode"
     else
       mkdir -p "$HOME/solbeam-svnode"
       curl -fsSL "$URL" -o "$HOME/solbeam-svnode/$TARBALL" \
         || die "download failed — try SVNODE_MODE=build"
       tar -xzf "$HOME/solbeam-svnode/$TARBALL" -C "$HOME/solbeam-svnode"
-      info "extracted; add its bin/ to PATH:"
-      info "  export PATH=\"\$HOME/solbeam-svnode/bitcoin-sv-${SVNODE_VERSION}/bin:\$PATH\""
+    fi
+    solbeam_paths
+    if [ "$DRY_RUN" = "0" ]; then
+      if have bitcoind; then
+        info "installed: $(bitcoind --version 2>/dev/null | head -1)"
+      else
+        warn "unpacked, but bitcoind is not on PATH — the tarball layout may differ"
+        warn "find it with:  find $HOME/solbeam-svnode -name bitcoind -type f"
+      fi
     fi
   else
     info "building from source — this needs a C++20 toolchain and takes a while"
+    info "the repo ships BOTH autotools and CMake; CMake is usually more portable"
     shell_run "git clone --depth 1 --branch v${SVNODE_VERSION} https://github.com/bitcoin-sv/bitcoin-sv.git \$HOME/solbeam-svnode-src"
     shell_run "cd \$HOME/solbeam-svnode-src && ./autogen.sh && ./configure --without-gui --disable-tests --disable-bench && make -j\"\$(nproc)\""
+    solbeam_paths
   fi
 fi
 
 # -- record what actually resolved ------------------------------------------
+
+solbeam_paths   # the versions below are recorded from a PATH that can see them
 
 if [ "$DRY_RUN" = "0" ]; then
   say "recording resolved versions to $LOCK"

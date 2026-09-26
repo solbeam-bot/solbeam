@@ -86,6 +86,32 @@ To make a skipped pin a hard failure (what CI on the VM should do):
 export SOLBEAM_REQUIRE_NODE=1
 ```
 
+### Automating it: cloud-init
+
+For a cloud VM you can paste [`scripts/cloud-init.sh`](scripts/cloud-init.sh) into the provider's **User Data** / **Startup scripts** field and let the box configure itself on first boot:
+
+```bash
+cat poc/scripts/cloud-init.sh        # read it before you paste it
+```
+
+It is safe in that environment in the ways the bare four commands are not:
+
+- it **re-execs as the login user**, because every installer writes into `$HOME` and root's `$HOME` is not yours
+- it waits for **apt/dpkg to be free** — unattended-upgrades holding the lock is the single most common cause of a first-run failure
+- it waits for the network, rather than assuming it
+- it clones over **HTTPS**, so no key is needed on a fresh box
+
+Then watch it:
+
+```bash
+tail -f /var/log/solbeam-startup.log
+ls -l /home/ubuntu/SOLBEAM_*
+```
+
+Success leaves `SOLBEAM_READY`; failure leaves `SOLBEAM_FAILED`. When it works you get `poc/fixtures/node_merkleproof_raw.json` — the Phase 1B artefact — and the log tells you so explicitly.
+
+> **A bug this exercise found.** The first version of `bootstrap.sh` would have failed its own final `doctor.sh` check on any fresh machine: the Solana installer puts its binaries on `PATH` by editing `~/.profile`, which the *running* shell never re-reads. So the install succeeded and then every subsequent step could not find the tools it had just installed. It now exports the install locations for the current run **and** persists them for future shells. This is worth knowing because a startup script would have hit the same wall, with far less visible output.
+
 ---
 
 ## 5. If something looks wrong
