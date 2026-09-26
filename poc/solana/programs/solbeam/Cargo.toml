@@ -18,7 +18,14 @@ idl-build = ["anchor-lang/idl-build"]
 anchor-debug = []
 
 [dependencies]
-# Only anchor-lang. `solana_program` is used via `anchor_lang::solana_program`
-# so there is exactly one version of it in the build — a direct dependency here
-# is the usual cause of a version-mismatch build failure.
+# Only anchor-lang plus the hasher. `solana_program` itself is used via
+# `anchor_lang::solana_program`, so there is exactly one version of it in the
+# build — a direct dependency on it here is the usual cause of a
+# version-mismatch failure.
 anchor-lang = "1.2.0"
+
+# Solana 3.x moved SHA-256 out of `solana_program`, and anchor_lang re-exports
+# no replacement, so this is needed directly. It calls the on-chain `sol_sha256`
+# syscall on the SBF target; the `sha2` feature (not default) is what makes it
+# work in a host build, which is why it is switched on explicitly.
+solana-sha256-hasher = { version = "3", features = ["sha2"] }

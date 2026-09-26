@@ -26,9 +26,11 @@
 //!   clear of the Anchor 1.x `CpiContext` change.
 
 use anchor_lang::prelude::*;
-// Via anchor_lang, not a direct `solana-program` dependency: one version in
-// play, no chance of a mismatch with anchor's own.
-use anchor_lang::solana_program::hash::hash as sha256;
+// Solana 3.x moved hashing out of `solana_program` entirely — there is no
+// `solana_program::hash` — and anchor_lang re-exports no replacement. This
+// crate is already in the tree transitively; on the SBF target it calls the
+// on-chain `sol_sha256` syscall rather than doing the work in the program.
+use solana_sha256_hasher::hash as sha256;
 
 declare_id!("EYsckW3596zBL1pxfxGev44z6LH4hEpoHff7tSisvjCW");
 
