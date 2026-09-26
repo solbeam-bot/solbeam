@@ -2,9 +2,21 @@
 #
 # SOLBEAM — cloud-init user-data for the PoC box (DigitalOcean, or any provider).
 #
-# Paste this whole file into the droplet's "User Data" / "Startup scripts"
-# field. It runs once, on first boot, as root. It is written to be safe in that
-# environment, which the four bare commands are not:
+# WHERE THIS GOES ON DIGITALOCEAN
+#
+#   Droplet creation page -> Additional Options -> "Startup scripts" -> paste.
+#   That field IS the user-data field. DigitalOcean's docs say: "Enable Startup
+#   scripts and add your user data in the box that appears" — the UI label and
+#   the API's `user_data` are the same mechanism, so this file is exactly what
+#   cloud-init consumes.
+#
+#   You can save it and reuse it on later droplets, which is what the feature is
+#   for. You cannot edit it after the droplet exists.
+#
+# HOW IT BEHAVES
+#
+# It runs once, on first boot, as root — cloud-init's rules, and the reason the
+# four bare commands are unsafe here:
 #
 #   * re-execs the work as the login user, because every installer writes into
 #     $HOME and root's $HOME is not yours
@@ -15,13 +27,19 @@
 #     needs a key; see RUNNING.md
 #   * leaves a marker file, so success and failure are both obvious
 #
-# Watch it with:
-#     tail -f /var/log/solbeam-startup.log
-#     ls -l /home/ubuntu/SOLBEAM_*
+# WATCHING IT
 #
-# When it finishes you want:
-#     /home/ubuntu/SOLBEAM_READY                       (marker)
-#     /home/ubuntu/solbeam/poc/fixtures/node_merkleproof_raw.json
+#   tail -f /var/log/solbeam-startup.log     <- everything below goes here
+#   ls -l /home/ubuntu/SOLBEAM_*
+#
+#   The script redirects its own output to solbeam-startup.log, so cloud-init's
+#   own /var/log/cloud-init-output.log looks quiet after the first line. That is
+#   expected, not a silent failure.
+#
+# WHEN IT FINISHES YOU WANT
+#
+#   /home/ubuntu/SOLBEAM_READY                       (marker)
+#   /home/ubuntu/solbeam/poc/fixtures/node_merkleproof_raw.json
 #
 # That last file is the Phase 1B artefact: the real shape of getmerkleproof2.
 

@@ -88,7 +88,7 @@ export SOLBEAM_REQUIRE_NODE=1
 
 ### Automating it: cloud-init
 
-For a cloud VM you can paste [`scripts/cloud-init.sh`](scripts/cloud-init.sh) into the provider's **User Data** / **Startup scripts** field and let the box configure itself on first boot:
+On DigitalOcean, paste [`scripts/cloud-init.sh`](scripts/cloud-init.sh) into **Additional Options → Startup scripts** on the droplet creation page. That field *is* the user-data field — the docs say "Enable **Startup scripts** and add your user data in the box that appears", so the UI label and the API's `user_data` are the same mechanism. You can save it and reuse it on later droplets; you cannot edit it after the droplet exists.
 
 ```bash
 cat poc/scripts/cloud-init.sh        # read it before you paste it
@@ -107,6 +107,8 @@ Then watch it:
 tail -f /var/log/solbeam-startup.log
 ls -l /home/ubuntu/SOLBEAM_*
 ```
+
+> The script redirects its own output, so cloud-init's `/var/log/cloud-init-output.log` looks quiet after the first line. That's expected — `solbeam-startup.log` is the one you want.
 
 Success leaves `SOLBEAM_READY`; failure leaves `SOLBEAM_FAILED`. When it works you get `poc/fixtures/node_merkleproof_raw.json` — the Phase 1B artefact — and the log tells you so explicitly.
 
