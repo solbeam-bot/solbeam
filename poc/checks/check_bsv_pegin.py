@@ -465,6 +465,10 @@ def main() -> int:
             "branch": [x.hex() for x in instruction["branch"]],
         },
         "deposit_tx_raw": deposit_raw.hex(),
+        # Phase 2 needs both of these and can infer neither: the script the
+        # deposit must pay, and the depth at which it becomes mintable.
+        "deposit_script": DEPOSIT_SCRIPT.hex(),
+        "min_confirmations": MIN_CONFIRMATIONS,
         "instruction_hex": instruction_hex,
         "instruction_commitment_sha256d": B.sha256d(bytes.fromhex(instruction_hex))[::-1].hex(),
     }

@@ -131,3 +131,119 @@ describe("solbeam — BSV light client", () => {
     }
   });
 });
+
+describe("solbeam — verify a deposit against the window", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as Program<Solbeam>;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const raws: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const [usedDeposits] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("used_deposits")], program.programId);
+  const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("deposit_script")], program.programId);
+
+  /** The fixture stores the txid in display order; the program compares internal. */
+  const proof = () => ({
+    height: new anchor.BN(fixture.proof.height),
+    // display -> internal, because the program hashes the raw bytes itself
+    txid: Array.from(displayToInternal(fixture.proof.txid)),
+    vout: fixture.proof.vout,
+    amount: new anchor.BN(fixture.proof.amount),
+    recipient: Array.from(Buffer.from(fixture.proof.recipient, "hex")),
+    index: fixture.proof.index,
+    // branch elements are already internal order in the fixture
+    branch: fixture.proof.branch.map((h: string) => Array.from(Buffer.from(h, "hex"))),
+    tx: Array.from(Buffer.from(fixture.deposit_tx_raw, "hex")),
+  });
+
+  before(async () => {
+    // Light client first: the verifier reads the header window.
+    const cp = raws[0];
+    await program.methods
+      .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
+      .accounts({ lightClient, payer: provider.wallet.publicKey })
+      .rpc();
+    for (const raw of raws.slice(1)) {
+      await program.methods.pushHeader(Array.from(raw))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    }
+    await program.methods
+      .initializeBridge(Array.from(Buffer.from(fixture.deposit_script, "hex")))
+      .accounts({ usedDeposits, depositScript, payer: provider.wallet.publicKey })
+      .rpc();
+  });
+
+  it("accepts the fixture's deposit and emits the amount and recipient", async () => {
+    const sig = await program.methods
+      .verifyDeposit(proof())
+      .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+      .rpc();
+
+    const tx = await provider.connection.getTransaction(sig, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    const logs = (tx?.meta?.logMessages || []).join("\n");
+    // The event carries the mint parameters, which is what the token step needs.
+    expect(logs).to.contain("DepositVerified");
+  });
+
+  it("refuses the same deposit twice", async () => {
+    try {
+      await program.methods
+        .verifyDeposit(proof())
+        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .rpc();
+      expect.fail("should have refused a replay");
+    } catch (e: any) {
+      expect(String(e)).to.contain("AlreadyMinted");
+    }
+  });
+
+  it("refuses a tampered Merkle branch", async () => {
+    const bad = proof();
+    bad.branch[0] = Array.from(Buffer.alloc(32, 0x11));
+    try {
+      await program.methods
+        .verifyDeposit(bad)
+        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .rpc();
+      expect.fail("should have refused a bad branch");
+    } catch (e: any) {
+      expect(String(e)).to.contain("BadMerkleProof");
+    }
+  });
+
+  it("refuses an inflated amount", async () => {
+    const bad = proof();
+    bad.amount = new anchor.BN(fixture.proof.amount * 100);
+    try {
+      await program.methods
+        .verifyDeposit(bad)
+        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .rpc();
+      expect.fail("should have refused an inflated amount");
+    } catch (e: any) {
+      expect(String(e)).to.contain("AmountMismatch");
+    }
+  });
+
+  it("refuses a recipient that is not in the transaction", async () => {
+    const bad = proof();
+    bad.recipient = Array.from(Buffer.alloc(32, 0x22));
+    try {
+      await program.methods
+        .verifyDeposit(bad)
+        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .rpc();
+      expect.fail("should have refused a missing payload");
+    } catch (e: any) {
+      expect(String(e)).to.contain("MissingPayload");
+    }
+  });
+});

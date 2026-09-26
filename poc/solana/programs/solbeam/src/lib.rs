@@ -42,6 +42,15 @@ pub const HEADER_LEN: usize = 80;
 /// inside the window. 64 leaves a wide margin and bounds the rent.
 pub const WINDOW: usize = 64;
 
+/// How deep a deposit must be buried before it can be minted. Twelve blocks is
+/// roughly two hours on BSV. The test matrix compresses time, not depth, so this
+/// stays a real number.
+pub const MIN_CONFIRMATIONS: u64 = 12;
+
+/// How many deposits one account remembers, to refuse replays. Fixed rather than
+/// growable so the account can be sized up front and never needs reallocating.
+pub const MAX_USED: usize = 256;
+
 /// Worst-case size of one `HeaderRecord` in the account.
 pub const HEADER_RECORD_SIZE: usize = 8   // height
     + 32                                   // hash
@@ -139,6 +148,114 @@ pub mod solbeam {
         lc.tip_hash = record.hash;
 
         msg!("SOLBEAM header {} {}", height, display_hex(&record.hash));
+        Ok(())
+    }
+
+    /// Create the bridge's own state: the script a deposit must pay, and the
+    /// list of deposits already minted.
+    pub fn initialize_bridge(ctx: Context<InitializeBridge>, deposit_script: Vec<u8>) -> Result<()> {
+        require!(
+            is_p2pkh(&deposit_script),
+            SolbeamError::DepositScriptNotP2pkh
+        );
+        let ds = &mut ctx.accounts.deposit_script;
+        ds.script = deposit_script;
+        ds.bump = ctx.bumps.deposit_script;
+
+        let used = &mut ctx.accounts.used_deposits;
+        used.keys = Vec::new();
+        used.bump = ctx.bumps.used_deposits;
+
+        msg!("SOLBEAM bridge initialised");
+        Ok(())
+    }
+
+    /// Verify a BSV deposit against the header window, and refuse to accept the
+    /// same one twice.
+    ///
+    /// This is the trustless half of the peg, and it is deliberately explicit
+    /// about what it does NOT take on trust. Everything the caller supplies -
+    /// the branch, the transaction, the claimed output - is re-derived here.
+    ///
+    /// The token mint is not wired up yet: this records the claim and emits the
+    /// amount and recipient. Adding the SPL CPI is the next increment, and
+    /// keeping it separate means a failure here is never ambiguous about which
+    /// half broke.
+    pub fn verify_deposit(ctx: Context<VerifyDeposit>, claim: DepositClaim) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        require!(!lc.paused, SolbeamError::Paused);
+
+        // 1. The header must still be inside the window. A proof against a
+        //    header we no longer hold cannot be checked at all.
+        let record = lc
+            .headers
+            .iter()
+            .find(|h| h.height == claim.height)
+            .ok_or(SolbeamError::HeaderNotInWindow)?;
+
+        // 2. The transaction must be the one the proof names. Without this the
+        //    branch could be valid for a *different* transaction.
+        let txid = header_hash_of_bytes(&claim.tx);
+        require!(txid == claim.txid, SolbeamError::TxidMismatch);
+
+        // 3. And it must be *in* the block, which is what the branch proves.
+        require!(
+            fold_branch(claim.txid, claim.index, &claim.branch) == record.merkle_root,
+            SolbeamError::BadMerkleProof
+        );
+
+        // 4. The claimed output must exist, carry the claimed value, and pay the
+        //    bridge's deposit script.
+        let outputs = parse_outputs(&claim.tx)?;
+        require!((claim.vout as usize) < outputs.len(), SolbeamError::NoSuchOutput);
+        let (value, script) = &outputs[claim.vout as usize];
+        require!(*value == claim.amount, SolbeamError::AmountMismatch);
+        require!(*value > 0, SolbeamError::ZeroValue);
+        require!(
+            script == &ctx.accounts.deposit_script.script,
+            SolbeamError::WrongOutputScript
+        );
+
+        // 5. The recipient must be committed somewhere in the same transaction.
+        //    This is the payload the wallet has to attach, and its absence is
+        //    the most likely real-world user error.
+        let mut payload_found = false;
+        for (_, out_script) in outputs.iter() {
+            if let Some(payload) = op_return_payload(out_script) {
+                if payload == claim.recipient {
+                    payload_found = true;
+                    break;
+                }
+            }
+        }
+        require!(payload_found, SolbeamError::MissingPayload);
+
+        // 6. Buried deep enough.
+        let confirmations = lc
+            .tip_height
+            .saturating_sub(claim.height)
+            .saturating_add(1);
+        require!(
+            confirmations >= MIN_CONFIRMATIONS,
+            SolbeamError::InsufficientConfirmations
+        );
+
+        // 7. Replay. The (txid, vout) pair is the identity of a deposit, so it is
+        //    what gets remembered.
+        let used = &mut ctx.accounts.used_deposits;
+        let key = DepositKey { txid: claim.txid, vout: claim.vout };
+        require!(!used.keys.contains(&key), SolbeamError::AlreadyMinted);
+        require!(used.keys.len() < MAX_USED, SolbeamError::NoRoomForMoreDeposits);
+        used.keys.push(key);
+
+        emit!(DepositVerified {
+            txid: claim.txid,
+            vout: claim.vout,
+            amount: claim.amount,
+            recipient: claim.recipient,
+            height: claim.height,
+            confirmations,
+        });
         Ok(())
     }
 
@@ -320,6 +437,204 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+/// Everything the producer supplies for a mint, and none of it is believed.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct DepositClaim {
+    /// Height of the block the deposit is in. Must be inside the window.
+    pub height: u64,
+    /// Internal byte order, matching the Python reference and the stored records.
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub amount: u64,
+    /// The depositor's Solana address, taken from the OP_RETURN payload.
+    pub recipient: [u8; 32],
+    pub index: u32,
+    pub branch: Vec<[u8; 32]>,
+    /// The raw deposit transaction, so the claimed output can be re-derived
+    /// rather than trusted.
+    pub tx: Vec<u8>,
+}
+
+/// The identity of a deposit. A transaction can have several outputs, so the
+/// pair is the key, not the txid alone.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub struct DepositKey {
+    pub txid: [u8; 32],
+    pub vout: u32,
+}
+
+#[account]
+pub struct UsedDeposits {
+    pub keys: Vec<DepositKey>,
+    pub bump: u8,
+}
+
+impl UsedDeposits {
+    pub const SPACE: usize = 8 + 4 + (MAX_USED * 36) + 1;
+}
+
+/// The bridge's deposit script, passed in so the check is against the account
+/// the bridge actually controls rather than a constant baked into the program.
+#[account]
+pub struct DepositScript {
+    pub script: Vec<u8>,
+    pub bump: u8,
+}
+
+impl DepositScript {
+    pub const SPACE: usize = 8 + 4 + 25 + 1;
+}
+
+#[derive(Accounts)]
+pub struct InitializeBridge<'info> {
+    #[account(init, payer = payer, space = UsedDeposits::SPACE,
+              seeds = [b"used_deposits"], bump)]
+    pub used_deposits: Account<'info, UsedDeposits>,
+    #[account(init, payer = payer, space = DepositScript::SPACE,
+              seeds = [b"deposit_script"], bump)]
+    pub deposit_script: Account<'info, DepositScript>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct VerifyDeposit<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(mut)]
+    pub used_deposits: Account<'info, UsedDeposits>,
+    #[account(seeds = [b"deposit_script"], bump = deposit_script.bump)]
+    pub deposit_script: Account<'info, DepositScript>,
+    pub submitter: Signer<'info>,
+}
+
+#[event]
+pub struct DepositVerified {
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub amount: u64,
+    pub recipient: [u8; 32],
+    pub height: u64,
+    pub confirmations: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Merkle folding and minimal transaction parsing
+// ---------------------------------------------------------------------------
+//
+// These must agree with `poc/checks/bsvlib.py`. Where they disagree, the
+// disagreement is the bug.
+
+/// Fold a Merkle branch from leaf to root. Mirrors `bsvlib.fold_branch`.
+pub fn fold_branch(txid: [u8; 32], mut index: u32, branch: &[[u8; 32]]) -> [u8; 32] {
+    let mut current = txid;
+    for sibling in branch {
+        current = if index % 2 == 0 {
+            merkle_hash(&current, sibling)
+        } else {
+            merkle_hash(sibling, &current)
+        };
+        index /= 2;
+    }
+    current
+}
+
+/// Double SHA-256 of arbitrary bytes, in internal order.
+pub fn header_hash_of_bytes(bytes: &[u8]) -> [u8; 32] {
+    sha256(sha256(bytes).as_ref()).to_bytes()
+}
+
+/// `H(a || b)` — the Merkle interior node, matching `bsvlib.merkle_hash`.
+pub fn merkle_hash(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut buf = [0u8; 64];
+    buf[..32].copy_from_slice(a);
+    buf[32..].copy_from_slice(b);
+    sha256(sha256(&buf).as_ref()).to_bytes()
+}
+
+fn read_varint(raw: &[u8], i: &mut usize) -> Result<u64> {
+    let first = *raw.get(*i).ok_or(SolbeamError::MalformedTx)?;
+    *i += 1;
+    Ok(match first {
+        0xfd => {
+            let v = u16::from_le_bytes(read_n(raw, *i, 2)?.try_into().unwrap()) as u64;
+            *i += 2;
+            v
+        }
+        0xfe => {
+            let v = u32::from_le_bytes(read_n(raw, *i, 4)?.try_into().unwrap()) as u64;
+            *i += 4;
+            v
+        }
+        0xff => {
+            let v = u64::from_le_bytes(read_n(raw, *i, 8)?.try_into().unwrap());
+            *i += 8;
+            v
+        }
+        n => n as u64,
+    })
+}
+
+fn read_n<'a>(raw: &'a [u8], at: usize, n: usize) -> Result<&'a [u8]> {
+    raw.get(at..at + n).ok_or(SolbeamError::MalformedTx)
+}
+
+/// The outputs of a legacy transaction, as `(value, script)`.
+///
+/// BSV has no SegWit, so there is no marker, no flag and no witness to skip —
+/// the format is the original one, which is why this is short.
+pub fn parse_outputs(raw: &[u8]) -> Result<Vec<(u64, Vec<u8>)>> {
+    let mut i = 4usize; // version
+
+    let vin = read_varint(raw, &mut i)?;
+    for _ in 0..vin {
+        i = i.checked_add(36).ok_or(SolbeamError::MalformedTx)?; // outpoint
+        let script_len = read_varint(raw, &mut i)? as usize;
+        i = i.checked_add(script_len).ok_or(SolbeamError::MalformedTx)?;
+        i = i.checked_add(4).ok_or(SolbeamError::MalformedTx)?; // sequence
+        if i > raw.len() {
+            return Err(SolbeamError::MalformedTx.into());
+        }
+    }
+
+    let vout = read_varint(raw, &mut i)?;
+    let mut outputs = Vec::new();
+    for _ in 0..vout {
+        let value = u64::from_le_bytes(read_n(raw, i, 8)?.try_into().unwrap());
+        i += 8;
+        let script_len = read_varint(raw, &mut i)? as usize;
+        let script = read_n(raw, i, script_len)?.to_vec();
+        i += script_len;
+        outputs.push((value, script));
+    }
+
+    // locktime must be present, which also rejects a truncated transaction
+    if i + 4 > raw.len() {
+        return Err(SolbeamError::MalformedTx.into());
+    }
+    Ok(outputs)
+}
+
+/// The payload of an `OP_RETURN` output, if it is one.
+pub fn op_return_payload(script: &[u8]) -> Option<&[u8]> {
+    if script.first() != Some(&0x6a) {
+        return None;
+    }
+    let len = *script.get(1)? as usize;
+    script.get(2..2 + len)
+}
+
+/// A canonical P2PKH script: `76 a9 14 <20 bytes> 88 ac`, 25 bytes.
+pub fn is_p2pkh(script: &[u8]) -> bool {
+    script.len() == 25
+        && script[0] == 0x76
+        && script[1] == 0xa9
+        && script[2] == 0x14
+        && script[23] == 0x88
+        && script[24] == 0xac
+}
+
 // ---------------------------------------------------------------------------
 
 #[error_code]
@@ -338,4 +653,30 @@ pub enum SolbeamError {
     Paused,
     #[msg("arithmetic overflow")]
     Overflow,
+    #[msg("no header at that height is inside the window")]
+    HeaderNotInWindow,
+    #[msg("the raw transaction does not hash to the claimed txid")]
+    TxidMismatch,
+    #[msg("the Merkle branch does not fold to the block's root")]
+    BadMerkleProof,
+    #[msg("the transaction is not valid legacy format")]
+    MalformedTx,
+    #[msg("no such output in that transaction")]
+    NoSuchOutput,
+    #[msg("the output does not carry the claimed amount")]
+    AmountMismatch,
+    #[msg("the output carries no value")]
+    ZeroValue,
+    #[msg("the output does not pay the bridge's deposit script")]
+    WrongOutputScript,
+    #[msg("no OP_RETURN carrying this recipient")]
+    MissingPayload,
+    #[msg("not enough confirmations yet")]
+    InsufficientConfirmations,
+    #[msg("this deposit has already been minted")]
+    AlreadyMinted,
+    #[msg("the used-deposit list is full")]
+    NoRoomForMoreDeposits,
+    #[msg("the deposit script must be a P2PKH script")]
+    DepositScriptNotP2pkh,
 }
