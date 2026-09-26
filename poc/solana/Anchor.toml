@@ -26,7 +26,8 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-# npx rather than `yarn run`: the build box has npm and no yarn, while Anchor's
-# own default assumes yarn. npx resolves ts-mocha from the local
-# devDependencies, so the install step decides the version.
-test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+# Plain mocha plus ts-node, NOT ts-mocha. ts-mocha hard-pins ts-node 7.0.1 — a
+# 2018 release that cannot register the .ts loader on Node 18 — and npm nests
+# that copy, so overriding it from the top level does not reliably win.
+# Also not `yarn run`: the build box has npm and no yarn.
+test = "mocha --require ts-node/register --timeout 1000000 tests/**/*.ts"
