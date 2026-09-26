@@ -158,7 +158,8 @@ describe("solbeam — verify a deposit against the window", () => {
     index: fixture.proof.index,
     // branch elements are already internal order in the fixture
     branch: fixture.proof.branch.map((h: string) => Array.from(Buffer.from(h, "hex"))),
-    tx: Array.from(Buffer.from(fixture.deposit_tx_raw, "hex")),
+    // Vec<u8>, so a Buffer rather than an Array — see above.
+    tx: Buffer.from(fixture.deposit_tx_raw, "hex"),
   });
 
   before(async () => {
@@ -179,7 +180,9 @@ describe("solbeam — verify a deposit against the window", () => {
     }
     if (!(await provider.connection.getAccountInfo(usedDeposits))) {
       await program.methods
-        .initializeBridge(Array.from(Buffer.from(fixture.deposit_script, "hex")))
+        // Vec<u8> must be a Buffer, not an Array: borsh encodes it as `bytes`
+      // and calls .copy() on it.
+      .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
         .accounts({ usedDeposits, depositScript, payer: provider.wallet.publicKey })
         .rpc();
     }
