@@ -577,7 +577,7 @@ fn read_varint(raw: &[u8], i: &mut usize) -> Result<u64> {
 }
 
 fn read_n<'a>(raw: &'a [u8], at: usize, n: usize) -> Result<&'a [u8]> {
-    raw.get(at..at + n).ok_or(SolbeamError::MalformedTx)
+    raw.get(at..at + n).ok_or(SolbeamError::MalformedTx.into())
 }
 
 /// The outputs of a legacy transaction, as `(value, script)`.
