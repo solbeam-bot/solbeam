@@ -1,176 +1,183 @@
-# Running the PoC on your own machine
+# Running the PoC — setup and replication
 
-Everything below is copy-paste. A fresh clone to a working result takes about a minute, and most of it needs **only Python 3.11+**.
+From an empty machine to a passing test suite. Written from a box that was built this way, so the steps and the failure modes are both real.
 
 ---
 
-## 1. Thirty-second start
+## 1. What you need
+
+**An x86_64 Linux box**, Ubuntu 22.04 or 24.04. Not a preference:
+
+| Dependency | Ships for arm64 Linux? |
+|---|---|
+| Solana / Agave CLI | **No, and never has.** Every release is `x86_64-unknown-linux-gnu` or `aarch64-apple-darwin` |
+| SV Node (`bitcoin-sv`) | **No.** Only `bitcoin-sv-1.1.1-x86_64-linux-gnu.tar.gz` exists; v1.2.x publishes no binaries |
+
+4 cores, 8 GB RAM, ~40 GB disk is comfortable. Nothing needs installing beforehand.
+
+> **On multipass:** it can only launch guests matching the **host** architecture, so an arm64 host gives an arm64 guest and nothing here will run. Cross-architecture support is an open multipass feature request, not a flag you missed. Use QEMU/UTM with full emulation, or a cloud x86_64 VM.
+
+---
+
+## 2. One-command setup
 
 ```bash
-git clone git@github.com:solbeam-bot/solbeam.git
+git clone https://github.com/solbeam-bot/solbeam.git
 cd solbeam
+poc/scripts/bootstrap.sh          # ~10 minutes
+source ~/.profile                 # bootstrap appends the toolchain paths here
+poc/scripts/doctor.sh             # must exit 0
+```
 
-# 1. The checker suite: 154 checks, plus 13 adversarial plays
+`bootstrap.sh` is re-runnable and writes `VERSIONS.lock` recording what it resolved. It installs:
+
+| | Why this one |
+|---|---|
+| **SV Node 1.1.1** | The last release that publishes a binary *at all* |
+| **Solana CLI `stable`** (4.1.2) | Ships `solana-test-validator` |
+| **Anchor 1.2.0** via `avm` | |
+| **Node 22 from NodeSource** | Ubuntu's `nodejs` is 18, and Anchor 1.x needs **≥ 20.18** |
+| **Rust** via rustup | |
+| **A Solana keypair** | `anchor test` deploys with it and stops dead without it |
+
+**`source ~/.profile` is not optional in the same shell.** The installers put their binaries on a PATH only a *new* login shell knows, so bootstrap exports them for itself and persists them for later. An already-open shell has not read the new file — and that looks exactly like "the install did nothing".
+
+`doctor.sh` is the acceptance test, and it is phase-selective:
+
+```bash
+poc/scripts/doctor.sh 1a    # only Phase 1A — runs anywhere, even on arm64
+poc/scripts/doctor.sh       # everything; non-zero if anything is missing
+```
+
+---
+
+## 3. Phase 1A — the BSV primitives and a mint instruction
+
+Needs only Python 3.11+, so it runs on **any** machine:
+
+```bash
 bash poc/checks/run_all.sh
 ```
 
-You should see, in order: `20/20`, `51/51`, `17/17`, `48/48`, `18/18`, `13/13`, then **`ALL CHECKERS PASSED`**.
+Expected: `20/20`, `51/51`, `17/17`, `48/48`, `20/20`, `13/13`, then **`ALL CHECKERS PASSED`**.
+
+Two of the six reach the network to validate against live chain data (mainnet block 800000, real testnet blocks and signatures). The rest are offline, and without network the two **fail** rather than silently passing — deliberately.
+
+The deliverable is `poc/fixtures/deposit_1.json`: a byte-deterministic, self-verifying **202-byte mint instruction**.
+
+---
+
+## 4. Phase 1B — pin the formats against a real SV Node
 
 ```bash
-# 2. Is this machine able to run the PoC?
-bash poc/scripts/doctor.sh 1a
-
-# 3. Try to break it yourself
-python3 poc/adversary/attack.py --list        # what you can attempt
-python3 poc/adversary/attack.py --all         # attempt all 13
-python3 poc/adversary/attack.py orphan        # or one, with the reasoning printed
-```
-
-All of these work from **any** directory — they resolve their own paths.
-
----
-
-## 2. What you are looking at
-
-| Command | What it proves |
-|---|---|
-| `check_bsv_core.py` | Header serialisation, proof of work, Merkle roots and branches — validated against **live mainnet and testnet blocks** |
-| `check_bsv_tx.py` | Transaction codec and `SIGHASH_FORKID` — validated against **real network signatures** |
-| `check_bsv_deposit.py` | Addresses, `OP_RETURN` payloads, and signing both transaction shapes |
-| `check_bsv_pegin.py` | **Phase 1A.** A whole deposit path on a generated regtest chain, ending in a portable mint instruction |
-| `check_bsv_node.py --selftest` | Phase 1B's harness, exercised without a node |
-| `attack.py --all` | Thirteen attacks, each either rejected with the code the design claims, or `ACCEPTED` when that is the correct answer |
-
-**Two of them reach the network** (`check_bsv_core.py`, `check_bsv_tx.py`) because they validate against live chain data. Everything else is offline. With no network they report **failures**, rather than silently passing — which is deliberate.
-
----
-
-## 3. Reading the results
-
-- **`PASS`** means the behaviour matched what the design claims.
-- **`FAIL`** means it did not. In the adversary plays that is a **finding, not a broken test** — if you make the system do something it says it cannot do, that is the single most useful thing that can happen. Write it in the table in [`ADVERSARY_PLAYBOOK.md`](ADVERSARY_PLAYBOOK.md) §7 and commit it.
-- **`SKIP`** on the live node pin is expected unless an SV Node is running. The suite stays green, because there is nothing to pin against.
-
-The one result worth doing by hand: change the confirmation depth in `poc/checks/bsvchain.py` (`CONFIRMATIONS_REQUIRED`) and re-run. Watching `early` flip is a better way to understand that parameter than reading about it.
-
----
-
-## 4. What needs the x86_64 host
-
-Two things do not run on an ARM machine or without a toolchain, and both say so plainly rather than half-working:
-
-| Need | Why |
-|---|---|
-| **The live SV Node pin** (Phase 1B) | Needs `bitcoind`/`bitcoin-cli` from an SV Node. `regtest-up.sh` refuses to run against Bitcoin Core, which cannot pin what we need |
-| **Phases 2–3** | Need the Solana CLI, and Agave publishes no aarch64 Linux build — see [`VERSIONS.md`](VERSIONS.md) |
-
-On the x86_64 VM:
-
-```bash
-poc/scripts/bootstrap.sh          # installs everything, writes VERSIONS.lock
-poc/scripts/doctor.sh             # all phases; must exit 0
-poc/scripts/regtest-up.sh         # SV Node in regtest, 101 blocks mined
+poc/scripts/regtest-up.sh                 # SV Node in regtest, mines 101 blocks
 
 export SOLBEAM_RPC=http://127.0.0.1:18443
 export SOLBEAM_RPC_USER=solbeam
 export SOLBEAM_RPC_PASS=solbeam
+export SOLBEAM_REQUIRE_NODE=1             # makes a skipped pin a failure
 
-bash poc/checks/run_all.sh        # now the live pin runs too, not SKIPPED
+bash poc/checks/run_all.sh                # the live pin runs instead of SKIPPING
 ```
 
-The first live run records the raw `getmerkleproof2` response to `poc/fixtures/node_merkleproof_raw.json`. **Commit that file** — it turns the node's response shape into part of the repo instead of something someone remembers.
+The pin rebuilds a deposit on the real chain and asserts every byte format matches: our txid, our codec against `decoderawtransaction`, our 80-byte header against the node's raw header, our Merkle root, and our branch against `getmerkleproof2`. **21 checks.**
 
-### Is the node running?
+It writes `poc/fixtures/node_merkleproof_raw.json` — the node's actual response, so the format is a fact in the repo rather than something someone remembers. Commit it.
+
+**The node does not restart itself** (it runs with `-daemon`, not as a service):
 
 ```bash
-poc/scripts/regtest-up.sh status
+poc/scripts/regtest-up.sh status     # chain, height, hash rate
+poc/scripts/regtest-up.sh            # idempotent: starts it, keeps the chain
 ```
-
-That prints the chain, the block height and the hash rate, or tells you plainly that the node is not running. It needs no environment variables — it uses the datadir and RPC credentials it wrote when it started the node.
-
-If you would rather ask directly:
-
-```bash
-pgrep -x bitcoind >/dev/null && echo running || echo "not running"
-
-bitcoin-cli -regtest -datadir="$HOME/.solbeam/regtest" \
-  -rpcuser=solbeam -rpcpassword=solbeam getblockcount
-```
-
-**It does not restart itself.** `regtest-up.sh` starts `bitcoind` with `-daemon`, not as a systemd service, so a reboot or a stop leaves it down. `regtest-up.sh` is idempotent — running it again starts the node and leaves the existing chain alone.
-
-**Phase 2 does not need it.** The light client consumes `fixtures/deposit_1.json`, a static file. The node is only needed to re-run the Phase 1B pin or to generate fresh proofs from real blocks.
-
-To make a skipped pin a hard failure (what CI on the VM should do):
-
-```bash
-export SOLBEAM_REQUIRE_NODE=1
-```
-
-### Automating it: cloud-init
-
-On DigitalOcean, paste [`scripts/cloud-init.sh`](scripts/cloud-init.sh) into **Additional Options → Startup scripts** on the droplet creation page. That field *is* the user-data field — the docs say "Enable **Startup scripts** and add your user data in the box that appears", so the UI label and the API's `user_data` are the same mechanism. You can save it and reuse it on later droplets; you cannot edit it after the droplet exists.
-
-```bash
-cat poc/scripts/cloud-init.sh        # read it before you paste it
-```
-
-It is safe in that environment in the ways the bare four commands are not:
-
-- it **re-execs as the login user**, because every installer writes into `$HOME` and root's `$HOME` is not yours
-- it waits for **apt/dpkg to be free** — unattended-upgrades holding the lock is the single most common cause of a first-run failure
-- it waits for the network, rather than assuming it
-- it clones over **HTTPS**, so no key is needed on a fresh box
-
-Then watch it:
-
-```bash
-tail -f /var/log/solbeam-startup.log
-ls -l /home/ubuntu/SOLBEAM_*
-```
-
-> The script redirects its own output, so cloud-init's `/var/log/cloud-init-output.log` looks quiet after the first line. That's expected — `solbeam-startup.log` is the one you want.
-
-Success leaves `SOLBEAM_READY`; failure leaves `SOLBEAM_FAILED`. When it works you get `poc/fixtures/node_merkleproof_raw.json` — the Phase 1B artefact — and the log tells you so explicitly.
-
-> **A bug this exercise found.** The first version of `bootstrap.sh` would have failed its own final `doctor.sh` check on any fresh machine: the Solana installer puts its binaries on `PATH` by editing `~/.profile`, which the *running* shell never re-reads. So the install succeeded and then every subsequent step could not find the tools it had just installed. It now exports the install locations for the current run **and** persists them for future shells. This is worth knowing because a startup script would have hit the same wall, with far less visible output.
 
 ---
 
-## 5. If something looks wrong
-
-| Symptom | Cause |
-|---|---|
-| `doctor.sh` warns about `aarch64` | Expected on ARM. Phase 1A is fine; 1B–3 are not |
-| `check_bsv_core.py` fails on "at least one real multi-tx block verified" | No network, or WhatsOnChain is unreachable. It is a required check, so it fails loudly |
-| `check_bsv_node.py` prints `SKIP` | No `SOLBEAM_RPC` set. Expected unless a node is running |
-| `bootstrap.sh` exits 1 immediately | Not an x86_64 host. It refuses rather than half-installing |
-| `bootstrap.sh` exits 2 | Unknown argument. `--dry-run`, `--skip-solana`, `--skip-svnode` are the options |
-
----
-
-## 6. Phase 2 — build and test the Solana program
+## 5. Phase 2 — the Solana program
 
 ```bash
 poc/scripts/solana-test.sh              # pull, sync keys, install, build, test
-poc/scripts/solana-test.sh --build-only # stop after a successful build
+poc/scripts/solana-test.sh --build-only
 poc/scripts/solana-test.sh --skip-pull  # build from what is on disk
 ```
 
-It exists because three of its four steps have a non-obvious failure mode, and one of them is a git trap that has already cost a round trip:
+It exists because three of its steps have a non-obvious failure mode:
 
-- **`git pull` can refuse to run.** `check_bsv_node.py` *writes* `poc/fixtures/node_merkleproof_raw.json`, and the repo also *tracks* it — so on a machine that has run the live pin there is an untracked copy in the way, and git aborts with *"untracked working tree files would be overwritten by merge"*. The script moves it aside to `*.local-backup` and says so, rather than deleting a file someone might be reading.
-- **`anchor keys sync` rewrites tracked files** — `declare_id!` in `lib.rs` and the program id in `Anchor.toml`. That is intended, and the result should be committed.
-- **`anchor test` needs `--validator legacy`.** Anchor 1.x defaults to Surfpool; this box has `solana-test-validator`, which is what the flag selects.
+- **`git pull` can refuse to run.** `check_bsv_node.py` *writes* `poc/fixtures/node_merkleproof_raw.json` and the repo also *tracks* it, so on a machine that has run the live pin there is an untracked copy in the way and git aborts with *"untracked working tree files would be overwritten by merge"*. The script moves it to `*.local-backup` and says so, rather than deleting a file someone might be reading.
+- **`anchor keys sync` rewrites tracked files** — `declare_id!` and the program id. Intended; commit the result.
+- **`anchor test` needs `--validator legacy`**, because Anchor 1.x defaults to Surfpool and this box has `solana-test-validator`.
 
-**Expect the first `anchor build` to fail.** The program was written against the Anchor 1.x API from its release notes, on a machine with no Rust toolchain, so it has never been compiled. The errors are the point of that step, and they arrive in a batch rather than one at a time.
+By hand:
 
-## 7. Where to go next
+```bash
+cd poc/solana
+anchor keys sync          # only if target/ is empty
+npm install
+anchor build
+anchor test --validator legacy
+```
+
+**Expect the first `anchor build` to fail.** The program was written against the Anchor 1.x API from its release notes, on a machine with no Rust toolchain. The errors are the point of that step.
+
+---
+
+## 6. A box that configures itself
+
+Paste [`scripts/cloud-init.sh`](scripts/cloud-init.sh) into the provider's **Startup scripts** field — on DigitalOcean that is *Additional Options → Startup scripts*, and that field **is** the user-data field. It re-execs as the login user, waits for apt and the network, clones over HTTPS, and runs everything.
+
+```bash
+tail -f /var/log/solbeam-startup.log     # everything goes here
+ls -l /home/ubuntu/SOLBEAM_*             # READY or FAILED
+```
+
+cloud-init's own `/var/log/cloud-init-output.log` looks quiet after the first line, because the script redirects its output. Expected, not a silent failure.
+
+---
+
+## 7. When it goes wrong
+
+All of these were hit for real. The error message rarely names the cause.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `anchor: command not found` after bootstrap | Shell has not re-read `~/.profile` | `source ~/.profile`, or a new session |
+| `doctor` reports missing tools bootstrap just installed | Same | Same |
+| `git pull` refuses: *untracked working tree files would be overwritten* | The pin's fixture is untracked but now tracked | `solana-test.sh` handles it; by hand, move the file aside |
+| `Unknown file extension ".ts"` from mocha | Node too old. The real cause is an ESM/CJS failure in a transitive dependency | Node 22 from NodeSource |
+| `ERR_REQUIRE_ESM` in `rpc-websockets` | Same | Same |
+| `command not found: mocha` | Anchor does not put `node_modules/.bin` on PATH | The script uses `npx` |
+| `Unable to read keypair file` | No Solana keypair | `solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json` |
+| `anchor.web3.getAssociatedTokenAddressSync is not a function` | `anchor.web3` is a partial re-export in Anchor 1.x | Derive the ATA with `findProgramAddressSync` |
+| `Account already in use` in test setup | Two suites, one validator, both initialising | Keep setup idempotent |
+| `src.copy is not a function` | A `Vec<u8>` argument was a plain Array | Pass a `Buffer` |
+| `no create_type / DISCRIMINATOR for anchor_spl::token::Mint` | IDL build needs `anchor-spl/idl-build` | Enable that feature |
+| `cannot find hash in solana_program` | Solana 3.x removed it | Use `solana-sha256-hasher` |
+| `this bitcoind is not Bitcoin SV` | Bitcoin Core cannot pin BSV formats | Use an SV Node |
+| `bootstrap.sh` exits 1 immediately | Not an x86_64 host | See §1 |
+
+The full list of toolchain facts, with reasoning, is in [`VERSIONS.md`](VERSIONS.md).
+
+---
+
+## 8. How you know it worked
+
+| | |
+|---|---|
+| `poc/scripts/doctor.sh` | exits 0 — **19 ok, 0 failures** |
+| `bash poc/checks/run_all.sh` | **ALL CHECKERS PASSED** — 156 offline, 157 with a node, plus 13 plays |
+| `poc/scripts/regtest-up.sh status` | chain `regtest`, a block height, a hash rate |
+| `anchor test --validator legacy` | **9 passing** |
+| `poc/fixtures/` | `deposit_1.json` and `node_merkleproof_raw.json` |
+
+---
+
+## 9. Where to go next
 
 | You want to | Read |
 |---|---|
-| Understand what is proven and what is not | [`TEST_PLAN.md`](TEST_PLAN.md) §1 |
-| Attack it yourself, deliberately | [`ADVERSARY_PLAYBOOK.md`](ADVERSARY_PLAYBOOK.md) |
-| Know what the website will eventually publish | [`PHASE5_MONITORING.md`](PHASE5_MONITORING.md) |
-| Know exactly what is pinned and why | [`VERSIONS.md`](VERSIONS.md) |
-| Understand the trust model itself | [`../docs/04-trust-model.md`](../docs/04-trust-model.md) |
+| What is proven, and what is not | [`TEST_PLAN.md`](TEST_PLAN.md) §1 |
+| Attack it yourself | [`ADVERSARY_PLAYBOOK.md`](ADVERSARY_PLAYBOOK.md) |
+| What is pinned, and why | [`VERSIONS.md`](VERSIONS.md) |
+| The Solana program | [`solana/README.md`](solana/README.md) |
+| The trust model | [`../docs/04-trust-model.md`](../docs/04-trust-model.md) |
+| What the site will publish once there is data | [`PHASE5_MONITORING.md`](PHASE5_MONITORING.md) |
