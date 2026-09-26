@@ -121,10 +121,11 @@
         <span class="phase__state">In progress</span>
       </div>
       <ul>
-        <li><strong>Done: the light client on-chain.</strong> A checkpoint, a rolling window of 64 headers, and the two checks that make a header chain mean anything — linkage and proof of work. <strong>4 tests passing</strong> against the Phase&nbsp;1A fixture.</li>
+        <li><strong>Done: the light client on-chain.</strong> A checkpoint, a rolling window of 64 headers, and the two checks that make a header chain mean anything — linkage and proof of work. <strong>9 tests passing</strong> against the Phase&nbsp;1A fixture.</li>
         <li><strong>Done: the two implementations agree.</strong> The on-chain client derives the same header hash as the Phase&nbsp;1A Python reference, from the same fixture, unmodified.</li>
         <li>Left: accumulated chainwork, so a valid but lower-work competing chain is rejected.</li>
-        <li>Left: the Merkle fold and the mint, consuming the fixture's 202-byte instruction rather than just its headers.</li>
+        <li><strong>Done: the deposit verifier.</strong> It consumes the fixture's 202-byte instruction — Merkle fold, on-chain transaction parsing, exact output script, confirmation depth, and replay refusal. It accepts the real deposit and refuses four tampered versions of it.</li>
+        <li>Left: the SPL token mint itself. The verifier already records the amount and recipient the mint will need.</li>
         <li>Left: <code>solBSV</code> as a classic SPL token — 8 decimals, no freeze authority.</li>
         <li>Left: the hostile advancer, which is the test that matters most here.</li>
       </ul>
@@ -160,7 +161,7 @@
       <span><b>156</b> checks offline</span>
       <span><b>157</b> with a live node</span>
       <span><b>13</b> adversarial plays</span>
-      <span><b>4</b> on-chain tests</span>
+      <span><b>9</b> on-chain tests</span>
       <span>all passing</span>
     </div>
 
