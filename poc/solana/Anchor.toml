@@ -1,0 +1,22 @@
+# SOLBEAM PoC — Anchor workspace.
+#
+# Note for Anchor 1.x: the [registry] section is no longer recognised (it was
+# removed in 1.0.0), so it is deliberately absent. See the Anchor 1.0.0 release
+# notes for the other changes that shaped this workspace.
+
+[toolchain]
+anchor_version = "1.2.0"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+solbeam = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
