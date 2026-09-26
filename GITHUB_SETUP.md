@@ -185,16 +185,27 @@ Then either issue a token for subsequent work, or keep exchanging tarballs.
 ## 7. Repo layout the agent will push
 
 ```
-solbeam-poc/
-├── README.md              plan, scope, task list, test matrix
+solbeam/
+├── README.md              what the project is; repository layout
 ├── GITHUB_SETUP.md        this file
-└── checks/
-    ├── bsvlib.py          shared BSV primitives (the reference implementation)
-    ├── check_bsv_core.py  headers, PoW, Merkle
-    ├── check_bsv_tx.py    transaction codec, SIGHASH_FORKID vs real signatures
-    ├── check_bsv_deposit.py  deposit/redemption construction and signing
-    └── run_all.sh         runs everything
+├── wrangler.jsonc         Cloudflare Worker config for the website
+├── docs/                  the documentation (GitBook)
+├── website/               the static site at solbeam.me
+└── poc/                   the proof of concept — disposable
+    ├── README.md          scope, claims, task list
+    ├── TEST_PLAN.md       the Phase 0–5 plan and test matrices
+    ├── checks/
+    │   ├── bsvlib.py      shared BSV primitives (the reference implementation)
+    │   ├── bsvchain.py    synthetic regtest chain (Phase 1A)
+    │   ├── check_bsv_core.py     headers, PoW, Merkle
+    │   ├── check_bsv_tx.py       codec, SIGHASH_FORKID vs real signatures
+    │   ├── check_bsv_deposit.py  deposit/redemption construction and signing
+    │   ├── check_bsv_pegin.py    Phase 1A: deposit -> portable mint instruction
+    │   └── run_all.sh     runs everything
+    ├── fixtures/          the mint instruction Phase 2 consumes
+    └── scripts/           bootstrap, doctor, regtest bring-up
 ```
 
-Later: `services/` (Go bot), `programs/` (Anchor program), `scripts/` (regtest
-and validator bring-up).
+Later, and only if the PoC justifies it: `programs/` (Anchor program) and
+`services/` in whichever language the team chooses — deliberately not decided
+here. See [`poc/TEST_PLAN.md`](poc/TEST_PLAN.md) §10.

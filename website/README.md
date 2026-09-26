@@ -226,7 +226,7 @@ Already done:
 
 - [x] Domain registered, DNS on Cloudflare
 - [x] Site live at `solbeam.me`
-- [x] `checks/`, `docs/` and `website/` all in `solbeam-bot/solbeam`
+- [x] `poc/`, `docs/` and `website/` all in `solbeam-bot/solbeam`
 - [x] Cloudflare GitHub App granted access to the `solbeam-bot` account
 - [x] Worker `solbeam-main` on `solbeam-bot/solbeam`, branch `main`
 - [x] Asset root declared as `website/` in `wrangler.jsonc`
