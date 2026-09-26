@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Status — SOLBEAM</title>
+  <meta name="description" content="Where the SOLBEAM proof of concept has got to: what has been proven, what has not, and what is left in each phase." />
+  <meta name="theme-color" content="#05060A" />
+  <meta property="og:title" content="Status — SOLBEAM" />
+  <meta property="og:description" content="What the SOLBEAM proof of concept has proven so far, and what is left." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://solbeam.me/status/" />
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .lp { max-width: 760px; text-align: left; }
+    .lp h1 { font-size: clamp(34px, 9vw, 54px); margin: 0 0 6px; }
+    .lp .lede { color: var(--muted); font-size: 17px; line-height: 1.6; margin: 0 0 6px; }
+    .lp h2 {
+      font-size: 13px; font-weight: 700; margin: 38px 0 14px;
+      color: var(--sol-green); letter-spacing: .20em; text-transform: uppercase;
+    }
+    .note {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 14px 18px; color: #C9D2E3; font-size: 15px; line-height: 1.6;
+      backdrop-filter: blur(8px);
+    }
+    .phase {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 16px 18px; margin-bottom: 12px; backdrop-filter: blur(8px);
+    }
+    .phase__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .phase__mark { font-size: 17px; line-height: 1; }
+    .mark--ok { color: var(--sol-green); }
+    .mark--no { color: #667085; }
+    .phase__name { font-weight: 700; color: var(--text); font-size: 16px; }
+    .phase__state {
+      margin-left: auto; font-size: 11px; letter-spacing: .14em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .phase ul { margin: 10px 0 0; padding-left: 18px; color: #C9D2E3; font-size: 15px; line-height: 1.65; }
+    .phase li { margin: 5px 0; }
+    .phase code {
+      font-size: 13px; background: rgba(255,255,255,.06);
+      border-radius: 5px; padding: 1px 5px;
+    }
+    .tally { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+    .tally span {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+      padding: 7px 14px; font-size: 14px; color: #C9D2E3;
+    }
+    .tally b { color: var(--text); }
+    .lp .points { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .lp .points li {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 14px 18px; color: #C9D2E3; font-size: 15px; line-height: 1.6;
+      backdrop-filter: blur(8px);
+    }
+    .lp .points strong { color: var(--text); }
+    .lp .back { display: inline-block; margin-top: 36px; color: var(--muted); text-decoration: none; font-size: 14px; }
+    .lp .back:hover { color: var(--text); text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <span class="bg__glow bg__glow--purple"></span>
+    <span class="bg__glow bg__glow--green"></span>
+    <span class="bg__glow bg__glow--blue"></span>
+    <span class="bg__grid"></span>
+  </div>
+
+  <main class="wrap lp">
+    <h1 class="title">Status</h1>
+    <p class="lede">Where the proof of concept has got to — what has been proven, and what has not.</p>
+
+    <h2>Implementation plan</h2>
+
+    <div class="phase">
+      <div class="phase__head">
+        <span class="phase__mark mark--ok" aria-hidden="true">&#10004;</span>
+        <span class="phase__name">Phase 0 &middot; Environment</span>
+        <span class="phase__state">Complete</span>
+      </div>
+      <ul>
+        <li>One x86_64 VM, provisioned by a single script. <code>doctor</code> reports <strong>19 passing, 0 failing</strong>.</li>
+        <li>SV&nbsp;Node v1.1.1 in regtest, Rust, Solana CLI 4.1.2, Anchor and <code>solana-test-validator</code> — all installed and running.</li>
+      </ul>
+    </div>
+
+    <div class="phase">
+      <div class="phase__head">
+        <span class="phase__mark mark--ok" aria-hidden="true">&#10004;</span>
+        <span class="phase__name">Phase 1A &middot; Peg-in, BSV side</span>
+        <span class="phase__state">Complete</span>
+      </div>
+      <ul>
+        <li>A BSV deposit produces a <strong>portable mint instruction</strong>: 202 bytes, byte-identical on every run, verifiable from the file alone.</li>
+        <li><strong>48 tests</strong>, including tampered proofs, inflated amounts, replays, malformed deposits, and a chain reorg that discards a deposit.</li>
+        <li>Needs no node — a generated chain — so it runs anywhere.</li>
+      </ul>
+    </div>
+
+    <div class="phase">
+      <div class="phase__head">
+        <span class="phase__mark mark--ok" aria-hidden="true">&#10004;</span>
+        <span class="phase__name">Phase 1B &middot; Against a real SV Node</span>
+        <span class="phase__state">Complete</span>
+      </div>
+      <ul>
+        <li>Every byte format matched the node: transaction id, transaction codec, block header, Merkle root and Merkle branch.</li>
+        <li><strong>21 live checks.</strong> The node's raw response is committed, so the format is a fact in the repository rather than something someone remembers.</li>
+      </ul>
+    </div>
+
+    <div class="phase">
+      <div class="phase__head">
+        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__name">Phase 2 &middot; Solana token and light client</span>
+        <span class="phase__state">Not started</span>
+      </div>
+      <ul>
+        <li><code>solBSV</code> as a classic SPL token: 8 decimals, no freeze authority.</li>
+        <li>A BSV light client <em>on Solana</em>: header chain, proof of work, Merkle inclusion.</li>
+        <li>The same 202-byte instruction verified on-chain — the Python and on-chain implementations must agree on the identical fixture.</li>
+      </ul>
+    </div>
+
+    <div class="phase">
+      <div class="phase__head">
+        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__name">Phase 3 &middot; Peg-out</span>
+        <span class="phase__state">Not started</span>
+      </div>
+      <ul>
+        <li>Burn &rarr; a bonded relayer pays BSV &rarr; the payout is proved on-chain &rarr; settled.</li>
+        <li>Deadline, automatic refund, bond slashing, and an unbonding period that outlasts both.</li>
+        <li>13 adversarial plays already run against the Phase 1A verifier; 12 more are specified for this phase.</li>
+      </ul>
+    </div>
+
+    <div class="phase">
+      <div class="phase__head">
+        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__name">Phase 5 &middot; Public monitoring</span>
+        <span class="phase__state">Plan only</span>
+      </div>
+      <ul>
+        <li>The absolute cost to rewrite the BSV chain, and how much SHA-256 is actually available to rent.</li>
+        <li>Reserve against supply, published as a check anyone can run for themselves.</li>
+      </ul>
+    </div>
+
+    <h2>What is proven so far</h2>
+    <div class="tally">
+      <span><b>156</b> checks offline</span>
+      <span><b>157</b> with a live node</span>
+      <span><b>13</b> adversarial plays</span>
+      <span>all passing</span>
+    </div>
+
+    <h2>What is not proven</h2>
+    <ul class="points">
+      <li><strong>Nothing has run on Solana yet.</strong> The light client and the token are designed and specified, not built.</li>
+      <li><strong>Redemption is not built.</strong> It is the trust-minimised half, and the hardest part — see the trust model in the documentation.</li>
+      <li><strong>Nothing is audited.</strong> This is a proof of concept on a throwaway chain, and it is not safe to use with real money.</li>
+    </ul>
+
+    <p class="note" style="margin-top:22px">
+      This page is temporary. It exists so a small group can see exactly what is real — every claim above
+      is a test you can run yourself from the repository. It will be removed before any wider release.
+    </p>
+
+    <a class="back" href="/">&larr; Back to SOLBEAM</a>
+  </main>
+</body>
+</html>

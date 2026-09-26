@@ -19,9 +19,21 @@ website/
 ├── assets/
 │   ├── solana.webp         ← Solana coin face
 │   └── bsv.jpg             ← BSV coin face
-└── about/
-    └── index.html          ← About page ("WHAT" + links)
+├── about/
+│   └── index.html          ← About page ("WHAT" + links)
+└── status/
+    └── index.html          ← Implementation status (temporary — see below)
 ```
+
+### The status page
+
+`/status/` is a **temporary** page for a small test group: phase-by-phase ticks and crosses, the
+check counts, and an explicit list of what has *not* been proven. It is linked from the footer and
+from `/about/`.
+
+It carries `<meta name="robots" content="noindex">` and is deliberately **not** in `sitemap.xml`,
+because a status page is exactly the kind of thing that becomes embarrassingly stale once search
+engines cache it. Delete the directory, the two links and that is the whole removal.
 
 ---
 
