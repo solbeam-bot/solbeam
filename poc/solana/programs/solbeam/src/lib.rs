@@ -30,7 +30,7 @@ use anchor_lang::prelude::*;
 // play, no chance of a mismatch with anchor's own.
 use anchor_lang::solana_program::hash::hash as sha256;
 
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+declare_id!("EYsckW3596zBL1pxfxGev44z6LH4hEpoHff7tSisvjCW");
 
 /// BSV headers are always exactly 80 bytes.
 pub const HEADER_LEN: usize = 80;

@@ -1,8 +1,12 @@
 # SOLBEAM PoC — Anchor workspace.
 #
 # Note for Anchor 1.x: the [registry] section is no longer recognised (it was
-# removed in 1.0.0), so it is deliberately absent. See the Anchor 1.0.0 release
-# notes for the other changes that shaped this workspace.
+# removed in 1.0.0), so it is deliberately absent.
+#
+# Be aware that `anchor keys sync` REWRITES this file and STRIPS COMMENTS from
+# it. The program id below is therefore the real one, synced once on the build
+# box and folded back in, so that a fresh clone and the running box agree
+# without anyone having to re-run sync.
 
 [toolchain]
 anchor_version = "1.2.0"
@@ -12,11 +16,17 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-solbeam = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+# Derived from the keypair in target/deploy/solbeam-keypair.json, which is
+# gitignored. A fresh clone with an empty target/ must run `anchor keys sync`
+# to regenerate the pair and reuse this id.
+solbeam = "EYsckW3596zBL1pxfxGev44z6LH4hEpoHff7tSisvjCW"
 
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+# npx rather than `yarn run`: the build box has npm and no yarn, while Anchor's
+# own default assumes yarn. npx resolves ts-mocha from the local
+# devDependencies, so the install step decides the version.
+test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

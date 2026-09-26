@@ -17,13 +17,19 @@ On the x86_64 box (the droplet that already has Anchor 1.2.0):
 ```bash
 cd poc/solana
 
-anchor keys sync            # replaces the placeholder program id
-yarn install                # or: npm install
+anchor keys sync            # only if target/ is empty — see below
+npm install                 # the build box has npm; it has no yarn
 anchor build
 anchor test --validator legacy
 ```
 
-**`--validator legacy` matters.** Anchor 1.x uses **Surfpool** as the default
+**The program id is **committed** (`EYsckW3596zBL1pxfxGev44z6LH4hEpoHff7tSisvjCW`), so a box that
+already has `target/deploy/solbeam-keypair.json` needs no sync. A fresh clone
+with an empty `target/` does need `anchor keys sync`, which regenerates the
+keypair and rewrites the id — and, note, **strips the comments out of
+`Anchor.toml`** while doing it.
+
+`--validator legacy` matters.** Anchor 1.x uses **Surfpool** as the default
 backend for `anchor test` and `anchor localnet`. If Surfpool is not installed,
 pass `--validator legacy` to keep using `solana-test-validator`, which the
 droplet already has.
