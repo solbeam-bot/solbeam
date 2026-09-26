@@ -550,6 +550,10 @@ pub struct InitializeToken<'info> {
     #[account(
         init,
         payer = payer,
+        // A PDA rather than a keypair, so the address is deterministic and a
+        // re-run against a validator that already has state is idempotent.
+        seeds = [b"mint"],
+        bump,
         mint::decimals = TOKEN_DECIMALS,
         mint::authority = light_client,
         // mint::freeze_authority is deliberately NOT set. Omitting it is what

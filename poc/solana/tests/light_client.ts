@@ -3,6 +3,7 @@ import { Program } from "@anchor-lang/core";
 import { Solbeam } from "../target/types/solbeam";
 import { expect } from "chai";
 import { createHash } from "crypto";
+import { getAccount } from "@solana/spl-token";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -146,6 +147,15 @@ describe("solbeam — verify a deposit against the window", () => {
     [Buffer.from("used_deposits")], program.programId);
   const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("deposit_script")], program.programId);
+  const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("mint")], program.programId);
+
+  // The Solana address named in the deposit's OP_RETURN. Its key is what the
+  // program checks against the payload, and its ATA is where tokens land.
+  const recipientOwner = new anchor.web3.PublicKey(
+    Buffer.from(fixture.proof.recipient, "hex"));
+  const recipientAta = anchor.web3.getAssociatedTokenAddressSync(
+    mint, recipientOwner);
 
   /** The fixture stores the txid in display order; the program compares internal. */
   const proof = () => ({
@@ -191,7 +201,11 @@ describe("solbeam — verify a deposit against the window", () => {
   it("accepts the fixture's deposit and records it as minted", async () => {
     await program.methods
       .verifyDeposit(proof())
-      .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+      .accounts({
+        lightClient, usedDeposits, depositScript, mint,
+        recipientTokenAccount: recipientAta, recipientOwner,
+        submitter: provider.wallet.publicKey,
+      })
       .rpc();
 
     // Assert on STATE rather than scraping logs. Scraping is fragile — the
@@ -204,13 +218,22 @@ describe("solbeam — verify a deposit against the window", () => {
     expect(Buffer.from(used.keys[0].txid).toString("hex"))
       .to.equal(displayToInternal(fixture.proof.txid).toString("hex"));
     expect(used.keys[0].vout).to.equal(fixture.proof.vout);
+
+    // And the tokens exist. Eight decimals, one base unit per satoshi, so the
+    // minted amount must equal the deposit exactly — no scaling anywhere.
+    const account = await getAccount(provider.connection, recipientAta);
+    expect(Number(account.amount)).to.equal(fixture.proof.amount);
   });
 
   it("refuses the same deposit twice", async () => {
     try {
       await program.methods
         .verifyDeposit(proof())
-        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .accounts({
+        lightClient, usedDeposits, depositScript, mint,
+        recipientTokenAccount: recipientAta, recipientOwner,
+        submitter: provider.wallet.publicKey,
+      })
         .rpc();
       expect.fail("should have refused a replay");
     } catch (e: any) {
@@ -224,7 +247,11 @@ describe("solbeam — verify a deposit against the window", () => {
     try {
       await program.methods
         .verifyDeposit(bad)
-        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .accounts({
+        lightClient, usedDeposits, depositScript, mint,
+        recipientTokenAccount: recipientAta, recipientOwner,
+        submitter: provider.wallet.publicKey,
+      })
         .rpc();
       expect.fail("should have refused a bad branch");
     } catch (e: any) {
@@ -238,7 +265,11 @@ describe("solbeam — verify a deposit against the window", () => {
     try {
       await program.methods
         .verifyDeposit(bad)
-        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .accounts({
+        lightClient, usedDeposits, depositScript, mint,
+        recipientTokenAccount: recipientAta, recipientOwner,
+        submitter: provider.wallet.publicKey,
+      })
         .rpc();
       expect.fail("should have refused an inflated amount");
     } catch (e: any) {
@@ -252,7 +283,11 @@ describe("solbeam — verify a deposit against the window", () => {
     try {
       await program.methods
         .verifyDeposit(bad)
-        .accounts({ lightClient, usedDeposits, depositScript, submitter: provider.wallet.publicKey })
+        .accounts({
+        lightClient, usedDeposits, depositScript, mint,
+        recipientTokenAccount: recipientAta, recipientOwner,
+        submitter: provider.wallet.publicKey,
+      })
         .rpc();
       expect.fail("should have refused a missing payload");
     } catch (e: any) {
