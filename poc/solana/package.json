@@ -4,7 +4,7 @@
   "private": true,
   "description": "SOLBEAM proof of concept \u2014 BSV light client and the solBSV peg",
   "scripts": {
-    "test": "mocha --require ts-node/register --timeout 1000000 tests/**/*.ts"
+    "test": "npx mocha --require ts-node/register --timeout 1000000 tests/**/*.ts"
   },
   "dependencies": {
     "@anchor-lang/core": "^1.2.0"

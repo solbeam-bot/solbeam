@@ -30,4 +30,4 @@ wallet = "~/.config/solana/id.json"
 # 2018 release that cannot register the .ts loader on Node 18 — and npm nests
 # that copy, so overriding it from the top level does not reliably win.
 # Also not `yarn run`: the build box has npm and no yarn.
-test = "mocha --require ts-node/register --timeout 1000000 tests/**/*.ts"
+test = "npx mocha --require ts-node/register --timeout 1000000 tests/**/*.ts"
