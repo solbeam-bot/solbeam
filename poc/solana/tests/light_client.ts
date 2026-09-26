@@ -162,20 +162,27 @@ describe("solbeam — verify a deposit against the window", () => {
   });
 
   before(async () => {
-    // Light client first: the verifier reads the header window.
-    const cp = raws[0];
-    await program.methods
-      .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-      .accounts({ lightClient, payer: provider.wallet.publicKey })
-      .rpc();
-    for (const raw of raws.slice(1)) {
-      await program.methods.pushHeader(Array.from(raw))
-        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    // Idempotent on purpose. Both describe blocks share one validator, and the
+    // first block has already created these PDAs — so re-initialising would
+    // fail with "account already in use", which says nothing useful about the
+    // code under test. Create only what is missing.
+    if (!(await provider.connection.getAccountInfo(lightClient))) {
+      const cp = raws[0];
+      await program.methods
+        .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
+        .accounts({ lightClient, payer: provider.wallet.publicKey })
+        .rpc();
+      for (const raw of raws.slice(1)) {
+        await program.methods.pushHeader(Array.from(raw))
+          .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      }
     }
-    await program.methods
-      .initializeBridge(Array.from(Buffer.from(fixture.deposit_script, "hex")))
-      .accounts({ usedDeposits, depositScript, payer: provider.wallet.publicKey })
-      .rpc();
+    if (!(await provider.connection.getAccountInfo(usedDeposits))) {
+      await program.methods
+        .initializeBridge(Array.from(Buffer.from(fixture.deposit_script, "hex")))
+        .accounts({ usedDeposits, depositScript, payer: provider.wallet.publicKey })
+        .rpc();
+    }
   });
 
   it("accepts the fixture's deposit and emits the amount and recipient", async () => {
