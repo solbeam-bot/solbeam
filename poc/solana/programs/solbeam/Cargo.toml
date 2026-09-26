@@ -22,7 +22,12 @@ anchor-debug = []
 # `anchor_lang::solana_program`, so there is exactly one version of it in the
 # build — a direct dependency on it here is the usual cause of a
 # version-mismatch failure.
-anchor-lang = "1.2.0"
+# init-if-needed: so the recipient's token account can be created on their
+# behalf, meaning a first-time user needs no SOL to RECEIVE solBSV.
+anchor-lang = { version = "1.2.0", features = ["init-if-needed"] }
+
+# token for the mint, associated_token for deriving the recipient's ATA.
+anchor-spl = { version = "1.2.0", features = ["token", "associated_token"] }
 
 # Solana 3.x moved SHA-256 out of `solana_program`, and anchor_lang re-exports
 # no replacement, so this is needed directly. It calls the on-chain `sol_sha256`

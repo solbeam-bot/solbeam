@@ -26,6 +26,8 @@
 //!   clear of the Anchor 1.x `CpiContext` change.
 
 use anchor_lang::prelude::*;
+use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 // Solana 3.x moved hashing out of `solana_program` entirely — there is no
 // `solana_program::hash` — and anchor_lang re-exports no replacement. This
 // crate is already in the tree transitively; on the SBF target it calls the
@@ -46,6 +48,11 @@ pub const WINDOW: usize = 64;
 /// roughly two hours on BSV. The test matrix compresses time, not depth, so this
 /// stays a real number.
 pub const MIN_CONFIRMATIONS: u64 = 12;
+
+/// `solBSV` is a classic SPL token with eight decimals, matching BSV's own
+/// satoshi precision. One satoshi is one base unit, so no conversion is ever
+/// needed when minting a deposit.
+pub const TOKEN_DECIMALS: u8 = 8;
 
 /// How many deposits one account remembers, to refuse replays. Fixed rather than
 /// growable so the account can be sized up front and never needs reallocating.
@@ -151,6 +158,21 @@ pub mod solbeam {
         Ok(())
     }
 
+    /// Create `solBSV`.
+    ///
+    /// Two absences are deliberate and are the point:
+    ///   * **no freeze authority** — nobody can freeze a holder's balance
+    ///   * **mint authority is a PDA of this program**, not a key, so no
+    ///     operator holds a token that can conjure supply
+    pub fn initialize_token(ctx: Context<InitializeToken>) -> Result<()> {
+        msg!(
+            "SOLBEAM solBSV mint {} — {} decimals, no freeze authority, authority = program PDA",
+            ctx.accounts.mint.key(),
+            TOKEN_DECIMALS
+        );
+        Ok(())
+    }
+
     /// Create the bridge's own state: the script a deposit must pay, and the
     /// list of deposits already minted.
     pub fn initialize_bridge(ctx: Context<InitializeBridge>, deposit_script: Vec<u8>) -> Result<()> {
@@ -248,7 +270,32 @@ pub mod solbeam {
         require!(used.keys.len() < MAX_USED, SolbeamError::NoRoomForMoreDeposits);
         used.keys.push(key);
 
-        emit!(DepositVerified {
+        // 8. The recipient named in the OP_RETURN is the account that receives
+        //    the tokens. This is the binding between the BSV payload and the
+        //    Solana destination, so it is checked rather than assumed.
+        require!(
+            ctx.accounts.recipient_owner.key().to_bytes() == claim.recipient,
+            SolbeamError::RecipientMismatch
+        );
+
+        // 9. Mint. The authority is this program's own PDA, so the program
+        //    signs for it — no operator key can mint.
+        let bump = ctx.accounts.light_client.bump;
+        let seeds: &[&[u8]] = &[b"light_client", &[bump]];
+        token::mint_to(
+            CpiContext::new(
+                ctx.accounts.token_program.key(),
+                MintTo {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.recipient_token_account.to_account_info(),
+                    authority: ctx.accounts.light_client.to_account_info(),
+                },
+            )
+            .with_signer(&[seeds]),
+            claim.amount,
+        )?;
+
+        emit!(DepositMinted {
             txid: claim.txid,
             vout: claim.vout,
             amount: claim.amount,
@@ -499,6 +546,26 @@ pub struct InitializeBridge<'info> {
 }
 
 #[derive(Accounts)]
+pub struct InitializeToken<'info> {
+    #[account(
+        init,
+        payer = payer,
+        mint::decimals = TOKEN_DECIMALS,
+        mint::authority = light_client,
+        // mint::freeze_authority is deliberately NOT set. Omitting it is what
+        // makes the token unfreezable; there is no way to add one later.
+    )]
+    pub mint: Account<'info, Mint>,
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
 pub struct VerifyDeposit<'info> {
     #[account(seeds = [b"light_client"], bump = light_client.bump)]
     pub light_client: Account<'info, LightClient>,
@@ -506,11 +573,30 @@ pub struct VerifyDeposit<'info> {
     pub used_deposits: Account<'info, UsedDeposits>,
     #[account(seeds = [b"deposit_script"], bump = deposit_script.bump)]
     pub deposit_script: Account<'info, DepositScript>,
+    #[account(mut)]
+    pub mint: Account<'info, Mint>,
+    /// Created on the recipient's behalf if they have never held solBSV, so a
+    /// first-time user needs no SOL to receive.
+    #[account(
+        init_if_needed,
+        payer = submitter,
+        associated_token::mint = mint,
+        associated_token::authority = recipient_owner,
+    )]
+    pub recipient_token_account: Account<'info, TokenAccount>,
+    /// CHECK: the ATA address is derived from this account, and its key is
+    /// checked against the OP_RETURN payload before anything is minted. It is
+    /// never read or written.
+    pub recipient_owner: UncheckedAccount<'info>,
+    #[account(mut)]
     pub submitter: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }
 
 #[event]
-pub struct DepositVerified {
+pub struct DepositMinted {
     pub txid: [u8; 32],
     pub vout: u32,
     pub amount: u64,
@@ -679,4 +765,6 @@ pub enum SolbeamError {
     NoRoomForMoreDeposits,
     #[msg("the deposit script must be a P2PKH script")]
     DepositScriptNotP2pkh,
+    #[msg("the recipient account does not match the OP_RETURN payload")]
+    RecipientMismatch,
 }
