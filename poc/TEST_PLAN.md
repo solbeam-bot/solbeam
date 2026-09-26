@@ -10,7 +10,7 @@ The intent is unchanged: **get the design in front of reviewers as running code.
 
 ### 1.1 Done — the BSV primitives, validated against live chain data
 
-The Python checker suite passes **157/157** and runs anywhere Python runs. These are the regression vectors every later implementation must match.
+The Python checker suite passes **156/156** offline, and **157/157** with a live SV Node (the live pin adds one check that needs a real node). It runs anywhere Python runs. These are the regression vectors every later implementation must match.
 
 | Checker | Proves | Result |
 |---|---|---|
