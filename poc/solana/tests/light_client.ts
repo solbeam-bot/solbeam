@@ -51,14 +51,9 @@ describe("solbeam — BSV light client", () => {
   it("agrees with the fixture's checkpoint", async () => {
     const cp = raws[0];
     await program.methods
-      .initialize(
-        new anchor.BN(fixture.checkpoint.height),
-        Array.from(cp.subarray(4, 36)), // prev
-        Array.from(cp.subarray(36, 68)), // merkle root
-        cp.readUInt32LE(68),
-        cp.readUInt32LE(72),
-        cp.readUInt32LE(76),
-      )
+      // The whole 80-byte header, not its fields: nothing can be dropped or
+      // mis-ordered this way, which is exactly how the version field got lost.
+      .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
       .accounts({ lightClient, payer: provider.wallet.publicKey })
       .rpc();
 

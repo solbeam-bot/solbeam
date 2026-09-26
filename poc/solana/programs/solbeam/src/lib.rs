@@ -56,30 +56,24 @@ pub mod solbeam {
     use super::*;
 
     /// Establish the trusted starting point. The checkpoint is the *only*
-    /// thing here that is trusted, which is why it is governance-set, buried
-    /// deep, and published.
+    /// thing trusted here, which is why it is governance-set, buried deep and
+    /// published — and why it is taken as the **raw 80-byte header** rather
+    /// than as individual fields.
+    ///
+    /// That is not fussiness; it is a bug this test found. The first version
+    /// took prev, merkle root, time, bits and nonce separately and rebuilt the
+    /// header, hardcoding the version. The synthetic chain uses version
+    /// 0x20000000, the rebuilt header used 1, the hashes differed, and the
+    /// checkpoint failed its own proof-of-work check with `CheckpointBadPow`.
+    /// Raw bytes make that class of mistake impossible: there are no fields
+    /// left to drop.
     pub fn initialize(
         ctx: Context<Initialize>,
         checkpoint_height: u64,
-        checkpoint_prev: [u8; 32],
-        checkpoint_merkle_root: [u8; 32],
-        checkpoint_time: u32,
-        checkpoint_bits: u32,
-        checkpoint_nonce: u32,
+        header: [u8; HEADER_LEN],
     ) -> Result<()> {
-        // Rebuild the checkpoint header from its fields rather than accepting a
-        // hash, so the hash is *derived* and cannot disagree with the fields.
-        let header = compose_header(
-            checkpoint_prev,
-            checkpoint_merkle_root,
-            checkpoint_time,
-            checkpoint_bits,
-            checkpoint_nonce,
-        );
-        require!(
-            meets_target(&header, checkpoint_bits),
-            SolbeamError::CheckpointBadPow
-        );
+        let bits = read_u32_le(&header, 72);
+        require!(meets_target(&header, bits), SolbeamError::CheckpointBadPow);
 
         let lc = &mut ctx.accounts.light_client;
         lc.checkpoint_height = checkpoint_height;
@@ -248,26 +242,6 @@ pub struct SetCheckpoint<'info> {
 //
 // This must agree with `poc/checks/bsvlib.py` byte for byte. If it does not,
 // the disagreement is the bug — not the fixture.
-
-/// The 80-byte header, exactly as BSV serialises it: version(4) prev(32)
-/// merkle(32) time(4) bits(4) nonce(4), all little-endian apart from the two
-/// hashes which are raw digest order.
-pub fn compose_header(
-    prev: [u8; 32],
-    merkle_root: [u8; 32],
-    time: u32,
-    bits: u32,
-    nonce: u32,
-) -> [u8; HEADER_LEN] {
-    let mut h = [0u8; HEADER_LEN];
-    h[0..4].copy_from_slice(&1u32.to_le_bytes()); // version — not consensus-critical here
-    h[4..36].copy_from_slice(&prev);
-    h[36..68].copy_from_slice(&merkle_root);
-    h[68..72].copy_from_slice(&time.to_le_bytes());
-    h[72..76].copy_from_slice(&bits.to_le_bytes());
-    h[76..80].copy_from_slice(&nonce.to_le_bytes());
-    h
-}
 
 /// Double SHA-256 of the header, in *internal* byte order.
 pub fn header_hash(header: &[u8; HEADER_LEN]) -> [u8; 32] {
