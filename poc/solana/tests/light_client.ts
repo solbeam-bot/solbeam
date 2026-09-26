@@ -60,10 +60,17 @@ describe("solbeam — BSV light client", () => {
     const lc = await program.account.lightClient.fetch(lightClient);
     expect(lc.tipHeight.toNumber()).to.equal(fixture.checkpoint.height);
 
-    // The on-chain hash must equal the hash computed here from the raw bytes.
-    // This is the Python/on-chain agreement test, one header at a time.
-    const expected = doubleSha256(cp).reverse().toString("hex");
-    expect(Buffer.from(lc.tipHash).toString("hex")).to.equal(expected);
+    // tip_hash is stored in INTERNAL byte order — the same order the Python
+    // reference uses and the order the Merkle fold consumes. So compare like
+    // for like: reversing here compares the internal value against the display
+    // form, which are byte-reverses of each other and will never match.
+    const internal = doubleSha256(cp).toString("hex");
+    expect(Buffer.from(lc.tipHash).toString("hex")).to.equal(internal);
+
+    // And the display form must be what the fixture recorded, which ties the
+    // on-chain value back to Phase 1A rather than only to this file.
+    expect(Buffer.from(internal, "hex").reverse().toString("hex"))
+      .to.equal(fixture.checkpoint.hash);
   });
 
   it("accepts every remaining header and reaches the fixture's tip", async () => {
@@ -80,7 +87,7 @@ describe("solbeam — BSV light client", () => {
 
     expect(lc.tipHeight.toNumber()).to.equal(lastHeight);
     expect(Buffer.from(lc.tipHash).toString("hex"))
-      .to.equal(doubleSha256(last).reverse().toString("hex"));
+      .to.equal(doubleSha256(last).toString("hex"));
     expect(lc.headers.length).to.equal(raws.length - 1);
     expect(lc.paused).to.equal(false);
   });
