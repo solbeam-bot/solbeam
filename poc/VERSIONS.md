@@ -38,6 +38,20 @@ These cost real time to establish, so they are written down.
 
 `doctor.sh` encodes all of this and refuses to report a machine as ready when it is not.
 
+## SV Node RPC facts
+
+Read from the pinned tag's own source (`src/rpc/rawtransaction.cpp`). Neither is guessable, and both cost a round trip to discover.
+
+| Fact | Value |
+|---|---|
+| **`getmerkleproof2` signature** | `getmerkleproof2 "blockhash" "txid" ( includeFullTx targetType format )` — **block hash first**. Passing only the txid makes the node read it as a block hash and answer HTTP 500 |
+| **`getmerkleproof2` result** | The TSC Merkle-proof form: `{ "flags": 2, "index": n, "txOrId": "<txid>", "target": {block header}, "nodes": [...] }` |
+| The branch key is **`nodes`**, not `proof` | A parser looking for `proof` finds nothing |
+| A node may be the string **`"*"`** | "A copy of the node being calculated" — the odd-level duplication case. Our `merkle_branch()` emits the real duplicated *hash* instead, so the two encodings differ while proving the same thing. The harness resolves `*` into concrete hashes before handing the branch to `verify_deposit()`, which takes real values because those are what fold on-chain |
+| `getmerkleproof` is **deprecated** | Its help text says "use getmerkleproof2 instead". Same result shape |
+
+**The lesson worth keeping.** The first live run passed everything except this: txid, transaction codec, header serialisation and Merkle root all matched the node byte for byte — then failed on an argument *order*. `getmerkleproof2` was the only piece no amount of offline work could have pinned, which is the entire reason Phase 1B exists as a separate step rather than being folded into Phase 1A.
+
 ## Regtest genesis
 
 SV Node's regtest genesis is **not** Bitcoin's — different header, different target, different message. Any hard-coded assumption about the genesis hash silently breaks.

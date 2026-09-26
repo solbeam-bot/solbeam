@@ -96,8 +96,22 @@ class NodeRPC:
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
                 body = json.load(r)
+        except urllib.error.HTTPError as e:
+            # SV Node returns HTTP 500 for JSON-RPC errors, and the useful part
+            # is in the BODY: {"error":{"code":-32601,"message":"Method not
+            # found"}}. Raising on the status alone throws that away, which cost
+            # a round trip when getmerkleproof2 was called with the wrong
+            # argument order.
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", "replace")[:400]
+            except Exception:  # noqa: BLE001
+                pass
+            raise NodeUnavailable(
+                f"{method}: HTTP {e.code} {e.reason}"
+                + (f" — {detail}" if detail else "")) from e
         except Exception as e:  # noqa: BLE001
-            raise NodeUnavailable(str(e)) from e
+            raise NodeUnavailable(f"{method}: {e}") from e
         if body.get("error"):
             raise RuntimeError(f"{method}: {body['error']}")
         return body["result"]
@@ -116,7 +130,13 @@ class NodeRPC:
     def sendtoaddress(self, addr, amount):        return self.call("sendtoaddress", addr, amount)
     def getnetworkhashps(self):                   return self.call("getnetworkhashps")
     def getblockchaininfo(self):                  return self.call("getblockchaininfo")
-    def getmerkleproof2(self, txid):              return self.call("getmerkleproof2", txid)
+
+    def getmerkleproof2(self, blockhash, txid):
+        """SV Node v1.1.1 signature: getmerkleproof2 "blockhash" "txid"
+        ( includeFullTx targetType format ). Note the argument ORDER — block
+        hash first. Passing only the txid makes the node treat it as a block
+        hash and fail with an HTTP 500."""
+        return self.call("getmerkleproof2", blockhash, txid)
 
 
 class StubRPC:
@@ -182,12 +202,40 @@ class StubRPC:
     def sendrawtransaction(self, raw):
         return B.txid_of(bytes.fromhex(raw))
 
-    def getmerkleproof2(self, txid):
+    def getmerkleproof2(self, blockhash, txid):
+        """Emits SV Node's real response shape.
+
+        Confirmed from the v1.1.1 source (src/rpc/rawtransaction.cpp): the
+        signature is `getmerkleproof2 "blockhash" "txid" ( includeFullTx
+        targetType format )`, and the result is the TSC Merkle-proof form:
+
+            { "flags": 2, "index": n, "txOrId": "<txid>",
+              "target": {block header}, "nodes": ["hash", "*", ...] }
+
+        `"*"` means "a copy of the node being calculated" — the odd-level
+        duplication case. Our own merkle_branch() emits the duplicated hash
+        itself, so the two encodings differ while proving the same thing. The
+        stub emits the node's encoding so the parser is exercised faithfully.
+        """
         blk, index = self.chain.find_tx(txid)
-        branch = B.merkle_branch(blk["txids"], index)
-        return {"txid": txid, "blockhash": blk["hash"], "index": index,
-                "merkleroot": blk["merkle"][::-1].hex(),
-                "proof": [b.hex() for b in branch]}
+        if blockhash and blk["hash"] != blockhash:
+            raise RuntimeError(f"tx {txid} is not in block {blockhash}")
+
+        # Build the branch in the TSC encoding: walk the tree, and where our
+        # sibling is the node itself, emit "*".
+        level = [B.le(t) for t in blk["txids"]]
+        nodes, i = [], index
+        while len(level) > 1:
+            if len(level) % 2:
+                level.append(level[-1])
+            sibling = level[i ^ 1]
+            nodes.append("*" if sibling == level[i] else sibling.hex())
+            level = [B.merkle_hash(level[j], level[j + 1]) for j in range(0, len(level), 2)]
+            i //= 2
+
+        return {"flags": 2, "index": index, "txOrId": txid,
+                "target": self.getblockheader(blk["hash"], True),
+                "nodes": nodes}
 
     # not needed by the pin, present so the surface matches
     def generatetoaddress(self, n, addr): raise NotImplementedError
@@ -196,25 +244,104 @@ class StubRPC:
     def getnetworkhashps(self):           return 0
 
 
-def extract_branch(proof: dict):
-    """Pull (branch, index) out of a getmerkleproof2 response.
+# The TSC proof's "*": "a copy of the node being calculated", i.e. the
+# odd-level duplication case. Our merkle_branch() emits the duplicated hash
+# itself, so the two encodings differ while proving the same thing.
+DUPLICATE = None
 
-    The exact shape is one of the things Phase 1B exists to discover, so this
-    accepts the plausible spellings and reports what it actually saw.
+
+def materialise_branch(txid_display: str, index: int, branch: list) -> list:
+    """Turn a TSC branch (which may contain "*") into concrete 32-byte hashes.
+
+    verify_deposit() takes concrete hashes, because on-chain we fold real
+    values. "*" is a wire-format shorthand for "the node being calculated", so
+    it resolves to whatever the fold has produced at that step.
+    """
+    current, i, out = B.le(txid_display), index, []
+    for node in branch:
+        if node is DUPLICATE:
+            out.append(current)
+            current = B.merkle_hash(current, current)
+        else:
+            out.append(node)
+            current = B.merkle_hash(current, node) if i % 2 == 0 \
+                else B.merkle_hash(node, current)
+        i //= 2
+    return out
+
+
+def extract_branch(proof: dict):
+    """Pull (branch, index, keys) out of a getmerkleproof2 response.
+
+    Confirmed shape (SV Node v1.1.1, src/rpc/rawtransaction.cpp):
+        { "flags": 2, "index": n, "txOrId": "<txid>",
+          "target": {block header}, "nodes": ["hash", "*", ...] }
+
+    The key is `nodes`, not `proof` — and a node may be the string "*" rather
+    than a hash. Both of those would have broken the first version of this
+    parser even once the call succeeded.
     """
     raw_keys = sorted(proof.keys())
-    branch = None
-    for key in ("proof", "branches", "merkle", "merklebranch", "branch"):
+    nodes = None
+    for key in ("nodes", "proof", "branches", "merkle", "merklebranch", "branch"):
         if key in proof and isinstance(proof[key], list):
-            branch = [bytes.fromhex(x) if isinstance(x, str) else bytes(x)
-                      for x in proof[key]]
+            nodes = proof[key]
             break
-    if branch is None:
+    if nodes is None:
         raise AssertionError(f"no branch found in {raw_keys}")
+
+    branch = []
+    for n in nodes:
+        if n == "*":
+            branch.append(DUPLICATE)
+        else:
+            branch.append(bytes.fromhex(n) if isinstance(n, str) else bytes(n))
+
     for key in ("index", "pos", "txpos", "position"):
         if key in proof:
             return branch, int(proof[key]), raw_keys
     raise AssertionError(f"no index found in {raw_keys}")
+
+
+def fold_tsc_branch(txid_display: str, index: int, branch: list) -> bytes:
+    """Fold a TSC branch, honouring the "*" duplicate sentinel."""
+    current, i = B.le(txid_display), index
+    for node in branch:
+        if node is DUPLICATE:
+            current = B.merkle_hash(current, current)
+        elif i % 2 == 0:
+            current = B.merkle_hash(current, node)
+        else:
+            current = B.merkle_hash(node, current)
+        i //= 2
+    return current
+
+
+def branches_equivalent(txid: str, index: int, ours: list, theirs: list):
+    """Are our branch and the node's the same proof, allowing for encoding?
+
+    Ours puts the real duplicated hash where the node puts "*". Compare
+    element by element, accepting "*" wherever our element equals the node
+    being calculated at that step.
+    """
+    if len(ours) != len(theirs):
+        return False, f"length {len(ours)} vs {len(theirs)}"
+    current, i = B.le(txid), index
+    for k, (o, t) in enumerate(zip(ours, theirs)):
+        if t is DUPLICATE:
+            if o != current:
+                return False, (f"element {k}: node says duplicate, ours is "
+                               f"{o.hex()[:16]} not {current.hex()[:16]}")
+        elif o != t:
+            return False, f"element {k}: ours {o.hex()[:16]} vs node {t.hex()[:16]}"
+        if t is DUPLICATE:
+            current = B.merkle_hash(current, current)
+        elif i % 2 == 0:
+            current = B.merkle_hash(current, o)
+        else:
+            current = B.merkle_hash(o, current)
+        i //= 2
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +401,21 @@ def run_pin(rpc, log, check) -> None:
                                    fee=DEPOSIT_FEE, priv=priv)
         deposit_raw = B.serialise_tx(deposit_tx)
         deposit_txid = B.txid_of(deposit_raw)
-        chain.mine_block([deposit_raw], coinbase_script=miner_script)
+
+        # Put a second transaction in the same block, BEFORE the deposit, so the
+        # deposit sits at index 2 of a 3-leaf tree. That is what makes the TSC
+        # proof emit its "*" sentinel — the odd-level duplication case. Without
+        # it the sentinel path never runs offline, and the live node is free to
+        # produce it the first time it matters.
+        extra_src = mature[1]
+        extra_tx = B.new_tx()
+        B.add_input(extra_tx, B.le(extra_src["txid"]), extra_src["vout"])
+        B.add_output(extra_tx, extra_src["value"] - 1000, miner_script)
+        extra_tx["vin"][0]["script"] = B.sign_input(
+            extra_tx, 0, priv, extra_src["value"], extra_src["script"])
+        extra_raw = B.serialise_tx(extra_tx)
+
+        chain.mine_block([extra_raw, deposit_raw], coinbase_script=miner_script)
         chain.mine_empty(MIN_CONFIRMATIONS - 1, coinbase_script=miner_script)
         node_txid = deposit_txid
 
@@ -327,7 +468,7 @@ def run_pin(rpc, log, check) -> None:
           ours_root[::-1].hex() == block["merkleroot"],
           f"{ours_root[::-1].hex()} vs {block['merkleroot']}")
 
-    proof = rpc.getmerkleproof2(deposit_txid)
+    proof = rpc.getmerkleproof2(block_hash, deposit_txid)
     if isinstance(rpc, NodeRPC):
         os.makedirs(FIXTURE_DIR, exist_ok=True)
         path = os.path.join(FIXTURE_DIR, "node_merkleproof_raw.json")
@@ -339,20 +480,39 @@ def run_pin(rpc, log, check) -> None:
     node_branch, node_index, raw_keys = extract_branch(proof)
     log(f"     node returned keys: {raw_keys}")
     ours_branch = B.merkle_branch(txids, index)
+    # Resolve any "*" into concrete hashes: that is the form verify_deposit()
+    # takes, and the form the on-chain verifier will fold.
+    node_branch_concrete = materialise_branch(deposit_txid, node_index, node_branch)
+    if any(n is DUPLICATE for n in node_branch):
+        log(f"     node used the '*' sentinel "
+            f"{sum(1 for n in node_branch if n is DUPLICATE)} time(s) — "
+            f"odd-level duplication, now materialised")
 
     check("index convention agrees", node_index == index,
           f"node {node_index} vs ours {index}")
     check("branch length agrees", len(node_branch) == len(ours_branch),
           f"node {len(node_branch)} vs ours {len(ours_branch)}")
-    same = (len(node_branch) == len(ours_branch)
-            and all(a == b for a, b in zip(node_branch, ours_branch)))
-    check("EVERY branch element matches byte for byte", same,
-          "ours " + ours_branch[0].hex()[:16] + " node " + node_branch[0].hex()[:16]
-          if ours_branch and node_branch else "empty branch")
+    equivalent, why = branches_equivalent(deposit_txid, index, ours_branch, node_branch)
+    check("every branch element agrees (allowing the '*' duplicate sentinel)",
+          equivalent, why)
+    check("the materialised node branch equals ours byte for byte",
+          node_branch_concrete == ours_branch,
+          f"{[x.hex()[:8] for x in node_branch_concrete]} vs "
+          f"{[x.hex()[:8] for x in ours_branch]}")
     check("the node's branch folds to the block root",
-          B.fold_branch(deposit_txid, node_index, node_branch) == B.le(block["merkleroot"]))
+          fold_tsc_branch(deposit_txid, node_index, node_branch) == B.le(block["merkleroot"]),
+          f"folded {fold_tsc_branch(deposit_txid, node_index, node_branch).hex()[:16]}")
     check("our branch folds to the block root",
           B.fold_branch(deposit_txid, index, ours_branch) == B.le(block["merkleroot"]))
+
+    # The TSC proof carries the block header as `target` — cross-check it.
+    target = proof.get("target")
+    if isinstance(target, dict):
+        check("the proof's target header hashes to the block we asked about",
+              B.block_hash(target) == block_hash,
+              f"{B.block_hash(target)[:16]} vs {block_hash[:16]}")
+    check("the proof's txOrId is our transaction",
+          proof.get("txOrId", deposit_txid) == deposit_txid)
 
     # -- 5. the instruction, from node-supplied primitives ----------------
     log("5. the mint instruction, built from the node's own data")
@@ -369,7 +529,7 @@ def run_pin(rpc, log, check) -> None:
         "amount": DEPOSIT_VALUE,
         "recipient": RECIPIENT,
         "index": node_index,
-        "branch": node_branch,
+        "branch": node_branch_concrete,
     }
     ours_proof = dict(node_proof, index=index, branch=ours_branch)
 
@@ -442,8 +602,9 @@ def main() -> int:
         print("failed: " + ", ".join(failures))
         return 1
     if selftest:
-        print("all good — the pin harness agrees with itself. ONLY a live SV Node")
-        print("can settle the real getmerkleproof2 shape; run without --selftest.")
+        print("all good — the pin harness agrees with itself. The response shape")
+        print("is taken from the SV Node v1.1.1 source (src/rpc/rawtransaction.cpp);")
+        print("only a live call confirms it in practice. Run without --selftest.")
     else:
         print("all good — our byte formats agree with SV Node")
     return 0
