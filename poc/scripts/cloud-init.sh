@@ -66,15 +66,40 @@ fail() {
 }
 
 # -- 1. network --------------------------------------------------------------
-echo "--- waiting for network"
+#
+# This script runs ON the droplet, so it uses the DROPLET's internet access,
+# not your laptop's. A DigitalOcean droplet reaches github.com with no
+# configuration and no key — the repo is public. If your own network blocks
+# GitHub, that is a separate problem and does not affect this.
+#
+# The two hosts are probed separately so a failure says which one it is:
+# "no network" and "GitHub unreachable from this droplet" need different fixes.
+echo "--- checking network"
+STATE=""
 for i in $(seq 1 60); do
   if curl -sS -o /dev/null -m 8 https://api.github.com 2>/dev/null; then
-    echo "    ok"
+    STATE="github"
+    echo "    ok — github.com is reachable"
     break
   fi
-  [ "$i" = "60" ] && fail "no network after 5 minutes"
+  if curl -sS -o /dev/null -m 8 https://www.cloudflare.com 2>/dev/null; then
+    STATE="no-github"
+    echo "    network is up, but github.com is NOT reachable from this droplet"
+    break
+  fi
   sleep 5
 done
+
+case "$STATE" in
+  github) : ;;
+  no-github)
+    fail "the droplet has internet, but cannot reach github.com, so the repo cannot be cloned.
+    Check for a firewall rule or a region restriction. If GitHub is genuinely
+    blocked, clone the repo somewhere else and copy it up as a tarball — every
+    other step depends on having the repo. See RUNNING.md." ;;
+  *)
+    fail "no network after 5 minutes" ;;
+esac
 
 # -- 2. let apt settle -------------------------------------------------------
 # NOT 'cloud-init status --wait': this script is itself run by cloud-init's
