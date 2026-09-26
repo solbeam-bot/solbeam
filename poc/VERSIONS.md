@@ -63,6 +63,22 @@ Four wrong assumptions about this one RPC, each found by a live run and none by 
 
 Every other part of the pin passed on its first attempt — txid, the transaction codec against `decoderawtransaction`, the 80-byte header against the node's raw header, and the Merkle root against the block's. That asymmetry is the whole argument for Phase 1B being a separate step: **the primitives could be validated offline; the node's wire format could not.**
 
+## Solana toolchain facts
+
+Each of these cost a round trip to find, and none is guessable from the error it produces.
+
+| Fact | Value |
+|---|---|
+| **`@anchor-lang/core` needs Node >= 20.18** | It declares `engines: {"node": ">=20.18"}`. Ubuntu 24.04's `nodejs` is 18. The symptom is nothing like the cause: `ERR_REQUIRE_ESM` from `rpc-websockets` requiring an ESM-only `uuid`. Node 20.19+/22 fix that too, via `require(esm)`. Install Node 22 from NodeSource |
+| **The TS package is `@anchor-lang/core`** | Renamed from `@coral-xyz/anchor` in Anchor 1.0.0. Both exist on npm; the old one stops at 0.32.1 |
+| **`ts-mocha` pins `ts-node` 7.0.1 exactly** | Not a range. npm nests it, so a top-level `ts-node@^10` does not reliably win. Use `mocha --require ts-node/register` directly and drop ts-mocha |
+| **Anchor does not put `node_modules/.bin` on PATH** for the `[scripts] test` command | A bare `mocha` gives `command not found` (exit 127). Use `npx mocha` |
+| **`anchor test` needs `~/.config/solana/id.json`** | Otherwise it stops with `Unable to read keypair file`. Any throwaway localnet key will do |
+| **`anchor test` defaults to Surfpool** | Pass `--validator legacy` to keep `solana-test-validator` |
+| **`anchor keys sync` rewrites `Anchor.toml` and strips its comments** | Expect the header to vanish. Fold the synced program id back into the repo |
+| **Solana 3.x removed `solana_program::hash`** | `anchor_lang::solana_program` re-exports no hasher either. Use `solana-sha256-hasher` — already in the tree, calls the on-chain `sol_sha256` syscall, and its `sha2` feature (not default) is what makes a host build work |
+| **`[registry]` is gone from `Anchor.toml`** | Removed in Anchor 1.0.0 |
+
 ## Regtest genesis
 
 SV Node's regtest genesis is **not** Bitcoin's — different header, different target, different message. Any hard-coded assumption about the genesis hash silently breaks.

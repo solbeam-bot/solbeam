@@ -128,9 +128,12 @@ if [ "$(id -u)" -ne 0 ]; then
   if have sudo; then SUDO="sudo"; else die "need root or sudo for apt packages"; fi
 fi
 
+# Deliberately NO nodejs/npm here: Ubuntu 24.04 ships Node 18, and Anchor 1.x
+# needs >= 20.18 (see the Node step below). Installing apt's version first only
+# creates a confusing two-versions problem.
 APT_PACKAGES=(build-essential pkg-config libssl-dev libboost-all-dev libevent-dev
               libzmq3-dev libdb++-dev libtool autoconf automake python3 python3-pip
-              git curl jq ca-certificates nodejs npm)
+              git curl jq ca-certificates)
 
 # -- system packages --------------------------------------------------------
 
@@ -223,6 +226,37 @@ else
     shell_run "git clone --depth 1 --branch v${SVNODE_VERSION} https://github.com/bitcoin-sv/bitcoin-sv.git \$HOME/solbeam-svnode-src"
     shell_run "cd \$HOME/solbeam-svnode-src && ./autogen.sh && ./configure --without-gui --disable-tests --disable-bench && make -j\"\$(nproc)\""
     solbeam_paths
+  fi
+fi
+
+# -- node -------------------------------------------------------------------
+
+say "Node.js 20+ (the Anchor test harness needs >= 20.18)"
+NODE_MAJOR="$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+if [ "${NODE_MAJOR:-0}" -ge 20 ] 2>/dev/null; then
+  info "already present — node $(node --version)"
+else
+  info "installing Node 22 from NodeSource (Ubuntu ships 18, which is too old)"
+  shell_run "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -"
+  run $SUDO apt-get -o DPkg::Lock::Timeout=600 install -y -qq nodejs
+fi
+
+# -- solana keypair ---------------------------------------------------------
+
+# `anchor test` deploys with the provider wallet, and stops dead without this:
+#   Error: Unable to read keypair file (/root/.config/solana/id.json)
+# Throwaway key for localnet only; never used against anything of value.
+if [ "$SKIP_SOLANA" = "1" ]; then
+  say "Solana keypair — skipped (--skip-solana)"
+else
+  say "Solana keypair"
+  if [ -f "$HOME/.config/solana/id.json" ]; then
+    info "already present — $(solana address 2>/dev/null || echo 'unreadable')"
+  elif have solana-keygen; then
+    run solana-keygen new --no-bip39-passphrase --silent --force -o "$HOME/.config/solana/id.json"
+    info "created $(solana address 2>/dev/null || echo '')"
+  else
+    warn "solana-keygen not on PATH; skipping"
   fi
 fi
 

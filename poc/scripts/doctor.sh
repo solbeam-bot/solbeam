@@ -162,9 +162,31 @@ req 2 solana  "solana CLI" --version
 req 2 anchor  "anchor"    --version
 
 if want 2; then
-  if has node; then ok "node — $(first_line node --version)"; else bad "node — missing, needed by Phase 2"; fi
+  # Presence is not enough. Ubuntu ships Node 18; @anchor-lang/core requires
+  # >= 20.18, and the failure it produces is an ESM/CJS error in a transitive
+  # dependency that gives no hint about the real cause.
+  if has node; then
+    NODE_MAJOR="$(node -e 'console.log(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+    if [ "${NODE_MAJOR:-0}" -ge 20 ] 2>/dev/null; then
+      ok "node — $(first_line node --version)"
+    else
+      bad "node is $(first_line node --version) — Anchor 1.x needs >= 20.18"
+      info "  Ubuntu's nodejs is 18. Install Node 22: https://deb.nodesource.com/setup_22.x"
+    fi
+  else
+    bad "node — missing, needed by Phase 2"
+  fi
+
   if has solana-test-validator; then ok "solana-test-validator present"
   else bad "solana-test-validator — missing; it ships with the Solana CLI"; fi
+
+  # `anchor test` deploys with the provider wallet and refuses to start without it
+  if [ -f "$HOME/.config/solana/id.json" ]; then
+    ok "solana keypair at ~/.config/solana/id.json"
+  else
+    bad "no solana keypair — 'anchor test' stops with 'Unable to read keypair file'"
+    info "  solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json"
+  fi
 fi
 
 # -- what the PoC needs installed but nothing checks for --------------------
