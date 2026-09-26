@@ -33,7 +33,7 @@ The Python checker suite passes **156/156** offline, and **157/157** with a live
 
 ### 1.3 Not started
 
-- **Phase 2** — the Anchor program and the BSV light client on `solana-test-validator`.
+- **Phase 2 — in progress.** The light client is built and verified on-chain (checkpoint, 64-header window, linkage, proof of work; 4 tests against the fixture). Outstanding: chainwork, the Merkle fold and mint, `solBSV`, and the hostile advancer.
 - **Phase 3** — the off-chain services (advancer / watcher / relayer); bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
 - **Phase 5** — monitoring. Plan only; see §11.

@@ -34,6 +34,7 @@
     .phase__mark { font-size: 17px; line-height: 1; }
     .mark--ok { color: var(--sol-green); }
     .mark--no { color: #667085; }
+    .mark--part { color: var(--bsv-gold, #E4A11B); }
     .phase__name { font-weight: 700; color: var(--text); font-size: 16px; }
     .phase__state {
       margin-left: auto; font-size: 11px; letter-spacing: .14em;
@@ -115,14 +116,17 @@
 
     <div class="phase">
       <div class="phase__head">
-        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__mark mark--part" aria-hidden="true">&#9680;</span>
         <span class="phase__name">Phase 2 &middot; Solana token and light client</span>
-        <span class="phase__state">Not started</span>
+        <span class="phase__state">In progress</span>
       </div>
       <ul>
-        <li><code>solBSV</code> as a classic SPL token: 8 decimals, no freeze authority.</li>
-        <li>A BSV light client <em>on Solana</em>: header chain, proof of work, Merkle inclusion.</li>
-        <li>The same 202-byte instruction verified on-chain — the Python and on-chain implementations must agree on the identical fixture.</li>
+        <li><strong>Done: the light client on-chain.</strong> A checkpoint, a rolling window of 64 headers, and the two checks that make a header chain mean anything — linkage and proof of work. <strong>4 tests passing</strong> against the Phase&nbsp;1A fixture.</li>
+        <li><strong>Done: the two implementations agree.</strong> The on-chain client derives the same header hash as the Phase&nbsp;1A Python reference, from the same fixture, unmodified.</li>
+        <li>Left: accumulated chainwork, so a valid but lower-work competing chain is rejected.</li>
+        <li>Left: the Merkle fold and the mint, consuming the fixture's 202-byte instruction rather than just its headers.</li>
+        <li>Left: <code>solBSV</code> as a classic SPL token — 8 decimals, no freeze authority.</li>
+        <li>Left: the hostile advancer, which is the test that matters most here.</li>
       </ul>
     </div>
 
@@ -156,6 +160,7 @@
       <span><b>156</b> checks offline</span>
       <span><b>157</b> with a live node</span>
       <span><b>13</b> adversarial plays</span>
+      <span><b>4</b> on-chain tests</span>
       <span>all passing</span>
     </div>
 
