@@ -3,7 +3,6 @@ import { Program } from "@anchor-lang/core";
 import { Solbeam } from "../target/types/solbeam";
 import { expect } from "chai";
 import { createHash } from "crypto";
-import { getAccount } from "@solana/spl-token";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -154,8 +153,17 @@ describe("solbeam — verify a deposit against the window", () => {
   // program checks against the payload, and its ATA is where tokens land.
   const recipientOwner = new anchor.web3.PublicKey(
     Buffer.from(fixture.proof.recipient, "hex"));
-  const recipientAta = anchor.web3.getAssociatedTokenAddressSync(
-    mint, recipientOwner);
+
+  // Derived by hand rather than with a helper. anchor.web3 is a limited
+  // re-export in Anchor 1.x — PublicKey is there, getAssociatedTokenAddressSync
+  // is not — and deriving it is two lines with no extra dependency.
+  const TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+  const ASSOCIATED_TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+  const [recipientAta] = anchor.web3.PublicKey.findProgramAddressSync(
+    [recipientOwner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM);
 
   /** The fixture stores the txid in display order; the program compares internal. */
   const proof = () => ({
@@ -221,8 +229,14 @@ describe("solbeam — verify a deposit against the window", () => {
 
     // And the tokens exist. Eight decimals, one base unit per satoshi, so the
     // minted amount must equal the deposit exactly — no scaling anywhere.
-    const account = await getAccount(provider.connection, recipientAta);
-    expect(Number(account.amount)).to.equal(fixture.proof.amount);
+    // Read the amount straight out of the token account rather than through a
+    // helper. An SPL token account is mint(32) owner(32) amount(8), so the
+    // balance is a u64 at offset 64 — no library needed and no API to be
+    // missing.
+    const ataInfo = await provider.connection.getAccountInfo(recipientAta);
+    expect(ataInfo, "the recipient's token account should have been created")
+      .to.not.equal(null);
+    expect(Number(ataInfo!.data.readBigUInt64LE(64))).to.equal(fixture.proof.amount);
   });
 
   it("refuses the same deposit twice", async () => {

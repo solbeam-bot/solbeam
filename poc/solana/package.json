@@ -7,8 +7,7 @@
     "test": "npx mocha --require ts-node/register --timeout 1000000 tests/**/*.ts"
   },
   "dependencies": {
-    "@anchor-lang/core": "^1.2.0",
-    "@solana/spl-token": "^0.4.9"
+    "@anchor-lang/core": "^1.2.0"
   },
   "devDependencies": {
     "@types/chai": "^4.3.11",
