@@ -454,7 +454,8 @@ The cost is honest: Python is not the production language, so some code will be 
 
 | Document | What it covers |
 |---|---|
-| [`PHASE5_MONITORING.md`](PHASE5_MONITORING.md) | **Phase 5 — public monitoring on solbeam.me.** Hash rate → the cost to rewrite the chain; value at risk; the safety multiple that tells a user how much to keep in flight; TVL and the reserve invariant; activity and latency. Plan only |
+| [`RUNNING.md`](RUNNING.md) | **Start here to run it yourself.** Fresh clone to a working result in about a minute; what needs the x86_64 host; how to read the results |
+| [`PHASE5_MONITORING.md`](PHASE5_MONITORING.md) | **Phase 5 — public monitoring on solbeam.me.** The **absolute** cost to attack BSV, total SHA-256 available for rent, the feasibility gate, value at risk published *alongside* rather than as a ratio, TVL and the reserve invariant. Plan only |
 | [`ADVERSARY_PLAYBOOK.md`](ADVERSARY_PLAYBOOK.md) | How a person participates as the man in the middle, and the results record to commit. Includes the two plays the protocol **cannot** win |
 | [`adversary/attack.py`](adversary/attack.py) | Runs the plays. `python3 poc/adversary/attack.py --all` — 13 runnable now; the rest are listed so the whole threat model is visible in one place |
 | [`VERSIONS.md`](VERSIONS.md) | Pin policy, the verified pins, and the architecture facts that cost real time to establish |
