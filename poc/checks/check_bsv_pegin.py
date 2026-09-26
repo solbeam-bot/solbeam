@@ -84,12 +84,18 @@ def build_deposit(utxo, recipient, amount=DEPOSIT_VALUE, fee=FEE,
                   deposit_script=DEPOSIT_SCRIPT, change_script=USER_SCRIPT,
                   include_payload=True, priv=USER_PRIV):
     """The user's payment: deposit output, OP_RETURN payload, change."""
+    change = utxo["value"] - amount - fee
+    if change < 0:
+        raise ValueError(
+            f"deposit would create a negative change output — input {utxo['value']} "
+            f"sats, amount {amount}, fee {fee} -> {change}. The input must be funded "
+            f"with more than amount + fee.")
     tx = B.new_tx()
     B.add_input(tx, B.le(utxo["txid"]), utxo["vout"])
     B.add_output(tx, amount, deposit_script)
     if include_payload:
         B.add_output(tx, 0, B.op_return_script(recipient))
-    B.add_output(tx, utxo["value"] - amount - fee, change_script)
+    B.add_output(tx, change, change_script)
     tx["vin"][0]["script"] = B.sign_input(tx, 0, priv, utxo["value"], utxo["script"])
     return tx
 

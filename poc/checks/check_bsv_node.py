@@ -36,6 +36,7 @@ and the first live run records the raw response to
 import json
 import os
 import sys
+import traceback
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +55,17 @@ RPC_PASS = os.environ.get("SOLBEAM_RPC_PASS", "solbeam")
 REQUIRE_NODE = os.environ.get("SOLBEAM_REQUIRE_NODE", "0") == "1"
 
 MIN_CONFIRMATIONS = C.CONFIRMATIONS_REQUIRED
+
+# How much the funding transaction pays to the deposit owner. It must exceed the
+# deposit amount plus the fee, or the change output is negative — which is the
+# exact bug the first live run hit: `sendtoaddress(addr, 1.0)` funded precisely
+# the 1 BSV deposit, so change was -1000 sats and `.to_bytes` raised
+# OverflowError. The offline stub funded from a 50 BSV coinbase and never
+# exercised the same arithmetic, which is why the selftest passed while the live
+# run failed. Both paths now use these constants.
+FUND_BSV = 2.0
+FUND_VALUE = int(FUND_BSV * 100_000_000)
+DEPOSIT_FEE = 1000
 
 
 class NodeUnavailable(Exception):
@@ -221,15 +233,17 @@ def run_pin(rpc, log, check) -> None:
         priv = int.from_bytes(bytes.fromhex("11" * 32), "big")
         fund_script = p2pkh_script_for(priv)
         fund_addr = B.p2pkh_address(B.hash160(B.pubkey_from_priv(priv)), B.TESTNET_P2PKH)
-        fund_txid = rpc.sendtoaddress(fund_addr, 1.0)
+        fund_txid = rpc.sendtoaddress(fund_addr, FUND_BSV)
         rpc.generatetoaddress(1, miner_addr)
         funded = rpc.getrawtransaction(fund_txid, True)
         vout = next(o for o in funded["vout"]
                     if o["scriptPubKey"]["hex"].lower() == fund_script.hex())
         utxo = {"txid": fund_txid, "vout": vout["n"],
                 "value": int(round(vout["value"] * 1e8)), "script": fund_script}
+        log(f"     funded {utxo['value']} sats; deposit {DEPOSIT_VALUE}, "
+            f"fee {DEPOSIT_FEE}, change {utxo['value'] - DEPOSIT_VALUE - DEPOSIT_FEE}")
         deposit_tx = build_deposit(utxo, RECIPIENT, amount=DEPOSIT_VALUE,
-                                   fee=1000, priv=priv)
+                                   fee=DEPOSIT_FEE, priv=priv)
         deposit_raw = B.serialise_tx(deposit_tx)
         deposit_txid = rpc.sendrawtransaction(deposit_raw.hex())
         node_txid = deposit_txid
@@ -240,9 +254,24 @@ def run_pin(rpc, log, check) -> None:
         priv = int.from_bytes(bytes.fromhex("22" * 32), "big")
         miner_script = p2pkh_script_for(priv)
         mature = [u for u in chain.mature_coinbases() if u["script"] == miner_script]
-        utxo = mature[0]
+
+        # Mirror the live path exactly: an intermediate funding transaction that
+        # pays FUND_VALUE to the deposit owner, which the deposit then spends.
+        fund_src = mature[0]
+        fund_tx = B.new_tx()
+        B.add_input(fund_tx, B.le(fund_src["txid"]), fund_src["vout"])
+        B.add_output(fund_tx, FUND_VALUE, miner_script)
+        fund_tx["vin"][0]["script"] = B.sign_input(
+            fund_tx, 0, priv, fund_src["value"], fund_src["script"])
+        fund_raw = B.serialise_tx(fund_tx)
+        chain.mine_block([fund_raw], coinbase_script=miner_script)
+        utxo = {"txid": B.txid_of(fund_raw), "vout": 0,
+                "value": FUND_VALUE, "script": miner_script}
+        log(f"     funded {utxo['value']} sats (mirrors the live path); "
+            f"change {utxo['value'] - DEPOSIT_VALUE - DEPOSIT_FEE}")
+
         deposit_tx = build_deposit(utxo, RECIPIENT, amount=DEPOSIT_VALUE,
-                                   fee=1000, priv=priv)
+                                   fee=DEPOSIT_FEE, priv=priv)
         deposit_raw = B.serialise_tx(deposit_tx)
         deposit_txid = B.txid_of(deposit_raw)
         chain.mine_block([deposit_raw], coinbase_script=miner_script)
@@ -402,6 +431,10 @@ def main() -> int:
     try:
         run_pin(rpc, log, check)
     except Exception as e:  # noqa: BLE001
+        # Print the traceback. This harness runs on a remote box: a bare
+        # exception name costs a whole round trip to diagnose, and that is
+        # exactly what the first live run cost.
+        traceback.print_exc()
         check(f"pin run completed ({type(e).__name__})", False, str(e))
 
     print(f"\n{checks - len(failures)}/{checks} checks passed")
