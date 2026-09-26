@@ -49,6 +49,29 @@
 
 set -uo pipefail
 
+# Refuse to run interactively. This script is user-data: it re-execs, waits for
+# apt, and runs a ~10-minute bootstrap, with all its output going to a log
+# rather than the terminal. Run by hand it looks like it has hung.
+if [ -t 0 ] && [ "${SOLBEAM_FORCE:-0}" != "1" ]; then
+  cat >&2 <<'EOF'
+
+cloud-init.sh is user-data. It is meant to be pasted into your provider's
+"Startup scripts" / User Data field, not run by hand — interactively it looks
+like it hangs, because everything goes to /var/log/solbeam-startup.log.
+
+Run these instead:
+
+    ./poc/scripts/bootstrap.sh      # installs everything, ~10 min
+    ./poc/scripts/doctor.sh         # must exit 0
+    ./poc/scripts/regtest-up.sh     # SV Node in regtest
+    bash poc/checks/run_all.sh      # the suite, with the live pin
+
+To run this anyway:  SOLBEAM_FORCE=1 ./poc/scripts/cloud-init.sh
+
+EOF
+  exit 2
+fi
+
 LOG=/var/log/solbeam-startup.log
 REPO_URL="${SOLBEAM_REPO_URL:-https://github.com/solbeam-bot/solbeam.git}"
 RPC_PORT="${SOLBEAM_RPCPORT:-18443}"

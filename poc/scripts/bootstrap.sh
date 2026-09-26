@@ -130,7 +130,7 @@ fi
 
 APT_PACKAGES=(build-essential pkg-config libssl-dev libboost-all-dev libevent-dev
               libzmq3-dev libdb++-dev libtool autoconf automake python3 python3-pip
-              git curl jq ca-certificates)
+              git curl jq ca-certificates nodejs npm)
 
 # -- system packages --------------------------------------------------------
 
