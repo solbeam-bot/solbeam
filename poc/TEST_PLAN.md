@@ -29,6 +29,7 @@ The Python checker suite passes **156/156** offline, and **157/157** with a live
 
 - **Phase 0 — executed.** `bootstrap.sh` ran end to end on a clean x86_64 Ubuntu droplet and installed SV Node v1.1.1, Rust 1.98.1, Solana CLI 4.1.2, Anchor 1.2.0, node and `solana-test-validator`. `doctor.sh` reports **19 ok, 1 warning, 0 failures** and exits 0.
 - **Phase 1B — passed.** `check_bsv_node.py` pinned every byte format against a live SV Node in regtest. It took four corrections to get there, all of them about one RPC's wire format rather than about our own logic — see [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts).
+- **Phase 1B is idempotent against a chain that already has blocks.** It ran five times against the same node without ever resetting it, and passed on every run after the fixes. The chain height confirms the accounting exactly: 101 blocks from `regtest-up.sh`, 102 from the run that failed partway, and 114 (101 + 1 + 12) from each of the three later runs — the 545 the node reports. A pin that quietly assumed a fresh chain would have failed here.
 
 ### 1.3 Not started
 
