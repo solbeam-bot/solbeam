@@ -149,7 +149,23 @@ Success leaves `SOLBEAM_READY`; failure leaves `SOLBEAM_FAILED`. When it works y
 
 ---
 
-## 6. Where to go next
+## 6. Phase 2 — build and test the Solana program
+
+```bash
+poc/scripts/solana-test.sh              # pull, sync keys, install, build, test
+poc/scripts/solana-test.sh --build-only # stop after a successful build
+poc/scripts/solana-test.sh --skip-pull  # build from what is on disk
+```
+
+It exists because three of its four steps have a non-obvious failure mode, and one of them is a git trap that has already cost a round trip:
+
+- **`git pull` can refuse to run.** `check_bsv_node.py` *writes* `poc/fixtures/node_merkleproof_raw.json`, and the repo also *tracks* it — so on a machine that has run the live pin there is an untracked copy in the way, and git aborts with *"untracked working tree files would be overwritten by merge"*. The script moves it aside to `*.local-backup` and says so, rather than deleting a file someone might be reading.
+- **`anchor keys sync` rewrites tracked files** — `declare_id!` in `lib.rs` and the program id in `Anchor.toml`. That is intended, and the result should be committed.
+- **`anchor test` needs `--validator legacy`.** Anchor 1.x defaults to Surfpool; this box has `solana-test-validator`, which is what the flag selects.
+
+**Expect the first `anchor build` to fail.** The program was written against the Anchor 1.x API from its release notes, on a machine with no Rust toolchain, so it has never been compiled. The errors are the point of that step, and they arrive in a batch rather than one at a time.
+
+## 7. Where to go next
 
 | You want to | Read |
 |---|---|

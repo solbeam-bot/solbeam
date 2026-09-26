@@ -3,3 +3,4 @@ __pycache__/
 .env
 *.key
 *.pem
+*.local-backup
