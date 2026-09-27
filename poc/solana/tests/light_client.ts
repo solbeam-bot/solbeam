@@ -415,14 +415,17 @@ describe("solbeam — a hostile advancer", () => {
     expect((await tipHash()).toString("hex")).to.equal(before.toString("hex"));
   });
 
-  it("cannot follow a fork, which is the gap this test exists to expose", async () => {
-    // A header built on an *older* block: exactly what a legitimate reorg
-    // presents. It is rejected, correctly, because it does not extend the tip —
-    // but the consequence is that the client cannot FOLLOW a reorg either. It
-    // stalls and stays on the abandoned branch.
+  it("cannot smuggle a fork through push_header", async () => {
+    // A header built on an *older* block. push_header refuses it because it does
+    // not extend the tip, and that refusal is load-bearing: it is what stops an
+    // advancer reordering, replaying, rewinding or substituting a branch.
     //
-    // That is the honest state: safe against a hostile advancer, but blind to a
-    // real reorg. Recorded in TEST_PLAN.md as a known gap with a plan.
+    // Following a legitimate reorg is a *separate*, explicit path (init_staging /
+    // push_fork_header / commit_fork), where the branch is validated header by
+    // header and only replaces the tip if it is strictly heavier. The two must
+    // stay separate: the cheap permissionless path must never be able to rewind
+    // the chain, or the hostile-advancer guarantee above is gone. See TEST_PLAN
+    // 4.5 and 4.6.
     const forked = Buffer.alloc(80, 0x33);
     forked.writeUInt32LE(0x20000000, 0);          // version
     raws[3].copy(forked, 4, 4, 36);               // parent = an OLD header
