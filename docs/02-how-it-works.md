@@ -12,6 +12,63 @@ That is the whole user experience. Everything below is what happens underneath.
 
 ---
 
+## What it costs to run
+
+The light client is the only part of SOLBEAM that has to be kept alive continuously, so it is worth being precise about which of its costs actually recur.
+
+### Storage is a one-time deposit, not a burn
+
+Solana charges rent-exemption up front, at roughly **5,080 lamports per byte**, and **the entire amount is returned when the account is closed**. It is a deposit, not a fee.
+
+| | Size | One-time | at $77/SOL |
+|---|---|---|---|
+| Light client, 24-hour window (today) | 9,286 B | 0.048 SOL | **$3.68** |
+| Light client, 24-hour window, hash-only | 4,678 B | 0.024 SOL | **$1.88** |
+| *(Solana's per-account creation ceiling)* | *10,240 B* | *0.053 SOL* | *$4.06* |
+
+**This does not grow with the BSV chain, and that is the entire point of the rolling window.** If the client stored history instead, the same numbers would be:
+
+| | Size | One-time | at $77/SOL |
+|---|---|---|---|
+| Every BSV header, 80 B each | 77 MB | 394 SOL | **$30,305** |
+| Every BSV block hash, 32 B each | 31 MB | 157 SOL | **$12,122** |
+
+…and it would keep climbing forever. The window turns a cost that grows without bound into a fixed deposit of a few dollars — roughly a **3,000×** reduction, and permanently capped.
+
+### The recurring cost is transaction fees
+
+Every BSV block needs one header pushed, so the client costs **144 transactions a day — 52,560 a year.** Each is a single-signature transaction whose base fee is 5,000 lamports. The measured compute is about 4,571 CU, so priority fees stack on top:
+
+| Priority fee (µlamports/CU) | Fee per header | Per year | At $77/SOL |
+|---|---|---|---|
+| 0 (base fee only) | 5,000 lamports | 0.263 SOL | **$20** |
+| 100,000 | 5,457 | 0.287 SOL | $22 |
+| 1,000,000 | 9,571 | 0.503 SOL | $39 |
+| 10,000,000 | 50,710 | 2.665 SOL | $205 |
+| 100,000,000 | 462,100 | 24.29 SOL | $1,870 |
+
+**Base fees are trivial; priority fees are the real variable.** Under congestion this is the number that matters, and it is beyond the protocol's control.
+
+Two mitigations exist. Headers can be **batched**, since about 13 fit in one transaction: that cuts base fees to **$1.56/year**, at the cost of the client lagging about two hours behind the chain — acceptable, because minting already waits twelve confirmations. Batching does not reduce priority fees, which dominate.
+
+### Being parsimonious: we are storing one thing we do not need
+
+The header record currently holds a 32-byte block hash **and** a 32-byte Merkle root. The hash is what authenticates the header. But **the Merkle root is a field inside the header** — bytes 36 to 68 of the same 80 bytes the hash was computed from.
+
+So the Merkle root is already covered by the hash, and storing it separately is redundant. A deposit claim can simply carry the raw 80-byte header; the program checks `hash(supplied) == stored_hash[height]` and reads the Merkle root out of it. That is the same security for half the storage:
+
+| | Per header | Window | Fits in one account |
+|---|---|---|---|
+| Today | 64 B | 144 (24 h) | 158 headers |
+| Hash only | 32 B | 144 (24 h) | 317 headers |
+| Hash only, same budget | 32 B | **288 (48 h)** | — |
+
+Same deposit, **twice the reorg horizon**: two days instead of one, which leaves a full day of margin over the "BSV is broken if it reorgs for a day" line. This is the recommended direction.
+
+A further step is possible — store only every Nth hash and have the claimant supply the handful of headers that bridge the gap — but it is bounded by the same 1232-byte transaction limit that constrains everything else here, and it buys storage the protocol does not currently need. Worth knowing about; not worth doing yet.
+
+---
+
 ## Mint — BSV → solBSV (trustless, permissionless)
 
 ```
