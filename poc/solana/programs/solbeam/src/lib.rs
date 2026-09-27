@@ -170,6 +170,14 @@ pub mod solbeam {
     /// only happens if the branch is STRICTLY heavier; a tie keeps the
     /// incumbent, so nobody can grind a tiebreak.
     ///
+    /// **KNOWN NOT TO WORK AS WRITTEN.** A Solana transaction is capped at 1232
+    /// bytes, so a branch of more than about 13 headers cannot be submitted in
+    /// one instruction at all — the client fails with "Invalid bytes for
+    /// branch_bytes: length exceeds remaining bytes", which reads like an
+    /// encoding bug and is a size limit. This needs a staging area and an
+    /// incremental push-then-commit, which is a design decision as much as
+    /// code. See TEST_PLAN 4.6.
+    ///
     /// **Weight here is height.** Regtest fixes the difficulty, so every header
     /// carries the same work and accumulated work is proportional to length.
     /// Testnet needs real chainwork - `work = 2^256 / (target + 1)`, summed -

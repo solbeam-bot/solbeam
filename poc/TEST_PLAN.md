@@ -276,6 +276,26 @@ That is a correctness gap, not a security one: no false proof becomes acceptable
 2. **a way to submit a competing branch** — some form of `push_fork(from_height, headers[])`, validating linkage and proof of work across the branch before considering it.
 3. **the replacement policy**, which is the actual decision: does a heavier branch replace the window unconditionally, how far back may it fork, and what happens to redemptions already settled against a header that is later orphaned? That last question is a *design* question with real consequences, and it belongs with the peg-out discussion rather than being settled by whoever is typing.
 
+### 4.6 The branch cannot be submitted in one transaction
+
+`push_fork` was implemented taking the whole branch as one argument, and it cannot work. The failure is instructive:
+
+```
+RangeError: Invalid bytes for "branch_bytes": length 5760 exceeds N remaining bytes
+```
+
+That is a **sizing** error, not an encoding one. **A Solana transaction is capped at 1232 bytes.** The fixture's competing branch is 72 headers — 5,760 bytes — so it does not fit, and never could. The practical ceiling is roughly **13 headers per transaction** once the signatures, accounts and instruction overhead are accounted for.
+
+The error names the symptom and says nothing about the cause, which is why it read as a serialisation bug for a while.
+
+**What this forces, and the decision it creates.** The branch has to be submitted incrementally, which means the program needs somewhere to put a branch while it is being assembled:
+
+1. a **staging area** in an account — a partial branch, with its fork point and the headers so far;
+2. `push_fork_header` appends one header, validating linkage and proof of work as it goes, exactly as `push_header` does;
+3. a **commit** that compares accumulated work against the current tip and swaps if strictly heavier — the comparison already written.
+
+**The decision:** a staging area is a single mutable slot, so whoever holds it can be griefed — an attacker could occupy it with a junk branch and deny legitimate reorgs. Options are a per-submitter staging account (rent cost, but no contention), a bond on the staging slot, or accepting the contention because a stalled reorg is no worse than today's behaviour. That is a design call, not a coding one, and it belongs with the reorg policy rather than being settled in passing.
+
 Deliberately not guessed at. Recorded so the next person starts from the gap rather than rediscovering it.
 
 ## 5. Phase 3 — peg out
