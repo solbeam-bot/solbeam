@@ -321,6 +321,52 @@ compensate them.** They are not identifiable from on-chain state, they never
 interacted with the bridge, and there is nothing to re-mint them with. That is a
 stronger argument for setting `C` conservatively than anything about the exit gate.
 
+### The staking buffer closes the hole
+
+**Stakers bear the fraud loss**, and what makes that work is *where the stake sits*:
+**in the reserve, as over-collateralisation**. The reserve then holds more BSV than
+there is `solBSV` outstanding, and a fraudulent mint eats the surplus rather than
+anyone's backing.
+
+| | Custody | Supply | Peg holds? |
+|---|---|---|---|
+| Normal | `D` | `D` | Yes — 1:1 |
+| With staking buffer `S` | `D + S` | `D` | Yes — over-collateralised by `S` |
+| Fraudulent mint of `M` | `D + S` | `D + M` | Yes, **iff `S ≥ M`** |
+| Attacker then exits via peg-out | `D + S − M` | `D` | Yes, iff `S ≥ M` — **stakers are down `M`; nobody else is** |
+
+So the market never sees the shortfall. A DEX LP holding the unbacked tokens holds
+something that is *still fully backed*, and an exchange never has to book a loss. That
+is what fixes the hole: the loss is socialised onto volunteers instead of landing on
+people who never chose it.
+
+**The safety condition becomes checkable without an oracle:**
+
+> `staked buffer  ≥  maximum mintable within one reorg window`
+
+Both are protocol quantities — no price feed, no hashpower estimate, no judgement
+beyond the cap itself. That is firmer footing than sizing `FLOOR` against an attack
+cost nobody can measure.
+
+**Three tiers, in order:**
+
+1. **Detected in time** → staged tokens burned. No loss at all.
+2. **Detection fails, buffer covers it** → stakers lose; the market does not.
+3. **Buffer short** → holders absorb a discount. The one case that cannot be repaired.
+
+Only tier 3 is a real failure, and its likelihood is essentially `1 − buffer/max mint`.
+That ratio is the number worth watching.
+
+**This creates one new requirement: unstaking must be delayed.** If stakers can leave
+at will, the first to notice a fraud exits before it is confirmed, leaving a buffer
+sized for a calmer day. An unbonding period is not a nicety — it is what keeps the
+buffer present when it is needed, and it belongs with the same family of parameters as
+the redemption deadline.
+
+**And the practical tension, stated plainly:** the buffer has to be large enough to
+matter, and whether a fixed 10 bp attracts capital *at that size* is exactly what the
+simple model has to prove. It is measurable, which is the argument for building it.
+
 ### Who gets slashed, and who gets paid
 
 The bond is a **performance bond**. It guarantees the relayer pays valid redemptions.
