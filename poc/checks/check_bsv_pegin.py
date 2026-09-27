@@ -469,9 +469,33 @@ def main() -> int:
         # deposit must pay, and the depth at which it becomes mintable.
         "deposit_script": DEPOSIT_SCRIPT.hex(),
         "min_confirmations": MIN_CONFIRMATIONS,
+        # A competing branch, for Phase 2's reorg handling. Built with the same
+        # chain builder as the main chain, forking ABOVE the deposit so the
+        # deposit's own proof stays valid, and longer than the branch it
+        # replaces - which on a fixed-difficulty chain means heavier.
         "instruction_hex": instruction_hex,
         "instruction_commitment_sha256d": B.sha256d(bytes.fromhex(instruction_hex))[::-1].hex(),
     }
+    fork_from = deposit_block["height"] + 2
+    height_before_fork = chain.height
+    chain.invalidate_from(fork_from)
+    extra = (height_before_fork - fork_from) + 3      # three blocks longer
+    chain.mine_empty(extra, coinbase_script=FAUCET_SCRIPT)
+    fixture["fork"] = {
+        "from_height": fork_from,
+        "headers": [
+            {"height": h, "raw": B.header_bytes(chain.at(h)["header"]).hex()}
+            for h in range(fork_from, chain.height + 1)
+        ],
+        "tip_height": chain.height,
+    }
+    check("competing branch is longer than the one it replaces",
+          chain.height > height_before_fork)
+    check("the fork starts above the deposit, so the proof stays valid",
+          fork_from > deposit_block["height"])
+    check("the fork's headers hash to the fork's tip",
+          B.block_hash(chain.at(chain.height)["header"]) == chain.at(chain.height)["hash"])
+
     os.makedirs(os.path.dirname(FIXTURE_PATH), exist_ok=True)
     with open(FIXTURE_PATH, "w") as f:
         json.dump(fixture, f, indent=2)

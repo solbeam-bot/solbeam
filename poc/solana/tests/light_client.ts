@@ -400,3 +400,65 @@ describe("solbeam — a hostile advancer", () => {
     expect(await attempt(forked)).to.equal("BrokenLinkage");
   });
 });
+
+describe("solbeam — following a reorg", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as Program<Solbeam>;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const raws: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+
+  before(async () => {
+    if (!(await provider.connection.getAccountInfo(lightClient))) {
+      const cp = raws[0];
+      await program.methods
+        .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
+        .accounts({ lightClient, payer: provider.wallet.publicKey }).rpc();
+      for (const raw of raws.slice(1)) {
+        await program.methods.pushHeader(Array.from(raw))
+          .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      }
+    }
+  });
+
+  it("follows a strictly heavier competing branch", async () => {
+    const fork = fixture.fork;
+    const branch = fork.headers.map((h: any) => Array.from(Buffer.from(h.raw, "hex")));
+
+    const before = await program.account.lightClient.fetch(lightClient);
+    expect(before.tipHeight.toNumber()).to.equal(fixture.tip_height);
+
+    await program.methods
+      .pushFork(new anchor.BN(fork.from_height), branch)
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+
+    const after = await program.account.lightClient.fetch(lightClient);
+    const last = Buffer.from(fork.headers[fork.headers.length - 1].raw, "hex");
+
+    expect(after.tipHeight.toNumber()).to.equal(fork.tip_height);
+    expect(Buffer.from(after.tipHash).toString("hex"))
+      .to.equal(doubleSha256(last).toString("hex"));
+    // The window is bounded, so the deepest headers fall out of it.
+    expect(after.headers.length).to.be.at.most(64);
+  });
+
+  it("refuses a branch that is not heavier", async () => {
+    const fork = fixture.fork;
+    // Re-submitting the same branch leaves the tip unchanged, so it is not
+    // strictly heavier and must be refused rather than accepted as a no-op.
+    try {
+      await program.methods
+        .pushFork(new anchor.BN(fork.from_height),
+                  fork.headers.map((h: any) => Array.from(Buffer.from(h.raw, "hex"))))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      expect.fail("should have refused a branch that is not heavier");
+    } catch (e: any) {
+      const m = String(e).match(/Error Code: (\w+)/);
+      expect(m ? m[1] : String(e)).to.be.oneOf(["ForkNotHeavier", "ForkPointNotInWindow"]);
+    }
+  });
+});

@@ -158,6 +158,87 @@ pub mod solbeam {
         Ok(())
     }
 
+    /// Follow a reorg.
+    ///
+    /// Without this the client is safe against a hostile advancer but blind to
+    /// a legitimate reorg: a header built on an older block is rejected, and
+    /// the client stalls on the abandoned branch forever.
+    ///
+    /// The whole branch is validated before it is considered - linkage from the
+    /// fork point, proof of work, and the difficulty check on every header - so
+    /// a hostile advancer gains nothing it did not already have. The replacement
+    /// only happens if the branch is STRICTLY heavier; a tie keeps the
+    /// incumbent, so nobody can grind a tiebreak.
+    ///
+    /// **Weight here is height.** Regtest fixes the difficulty, so every header
+    /// carries the same work and accumulated work is proportional to length.
+    /// Testnet needs real chainwork - `work = 2^256 / (target + 1)`, summed -
+    /// and that is a flag on this comparison rather than a rewrite, in the same
+    /// way DAA is. It cannot be exercised on regtest, where the target never
+    /// changes, so implementing it here would be untested code.
+    pub fn push_fork(
+        ctx: Context<PushHeader>,
+        from_height: u64,
+        headers: Vec<[u8; HEADER_LEN]>,
+    ) -> Result<()> {
+        let lc = &mut ctx.accounts.light_client;
+        require!(!lc.paused, SolbeamError::Paused);
+        require!(!headers.is_empty(), SolbeamError::EmptyFork);
+
+        // The fork point must be a header we still hold. Deeper than the window
+        // needs a checkpoint reset, which is a governance action.
+        let fork_idx = lc
+            .headers
+            .iter()
+            .position(|h| h.height == from_height)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?;
+
+        // Validate the entire branch first. Nothing is written until all of it
+        // checks out.
+        let mut prev = lc.headers[fork_idx].hash;
+        let mut branch: Vec<HeaderRecord> = Vec::with_capacity(headers.len());
+        for (i, raw) in headers.iter().enumerate() {
+            require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
+            let bits = read_u32_le(raw, 72);
+            require!(meets_target(raw, bits), SolbeamError::BadPow);
+            require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
+
+            let hash = header_hash(raw);
+            branch.push(HeaderRecord {
+                height: from_height + 1 + i as u64,
+                hash,
+                prev,
+                merkle_root: read32(raw, 36),
+                time: read_u32_le(raw, 68),
+                bits,
+                nonce: read_u32_le(raw, 76),
+            });
+            prev = hash;
+        }
+
+        let new_tip_height = from_height + headers.len() as u64;
+        require!(new_tip_height > lc.tip_height, SolbeamError::ForkNotHeavier);
+
+        // Keep the prefix up to and including the fork point, append the branch,
+        // then prune to the window.
+        let mut rebuilt: Vec<HeaderRecord> = lc.headers[..=fork_idx].to_vec();
+        rebuilt.extend(branch);
+        if rebuilt.len() > WINDOW {
+            let excess = rebuilt.len() - WINDOW;
+            rebuilt.drain(0..excess);
+        }
+
+        lc.headers = rebuilt;
+        lc.tip_height = new_tip_height;
+        lc.tip_hash = prev;
+
+        emit!(ChainReorganised {
+            from_height,
+            new_tip_height,
+        });
+        Ok(())
+    }
+
     /// Create `solBSV`.
     ///
     /// Two absences are deliberate and are the point:
@@ -600,6 +681,12 @@ pub struct VerifyDeposit<'info> {
 }
 
 #[event]
+pub struct ChainReorganised {
+    pub from_height: u64,
+    pub new_tip_height: u64,
+}
+
+#[event]
 pub struct DepositMinted {
     pub txid: [u8; 32],
     pub vout: u32,
@@ -771,4 +858,10 @@ pub enum SolbeamError {
     DepositScriptNotP2pkh,
     #[msg("the recipient account does not match the OP_RETURN payload")]
     RecipientMismatch,
+    #[msg("a competing branch must contain at least one header")]
+    EmptyFork,
+    #[msg("the fork point is not inside the header window")]
+    ForkPointNotInWindow,
+    #[msg("the competing branch is not heavier than the current one")]
+    ForkNotHeavier,
 }
