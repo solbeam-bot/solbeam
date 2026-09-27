@@ -305,7 +305,7 @@ row is listed first.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Single bonded relayer, fee set by off-chain auction** ✅ | Simple; one bond; one hot float; competition on fee | Liveness: relayer down = peg-outs stall (users still protected by re-mint); the auction is an off-chain trust point unless the winner is attested on-chain |
+| **Bonded set — auction sets the reference fee, any bonded relayer may pay** ✅ | One bad relayer cannot block the peg; competition still sets the price | More bonds to track; the auction remains an off-chain trust point for the benchmark |
 | Single nominated relayer | Simplest | No fee competition; nomination is a trusted choice |
 | Bonded set, open entry | Better liveness | Capital fragmented across bonds; coordination on who pays |
 | Fully permissionless | Best liveness | Anyone can attempt payout; no bond means no recourse |
@@ -345,35 +345,72 @@ row is listed first.
 
 ---
 
-## Open questions
+## Decisions from review
 
-1. **Relayer fallback.** If the single relayer is down past the deadline, users are
-   re-minted — but the peg-out *service* is unavailable. Is that acceptable, or is
-   a permissionless fallback path (anyone may pay, with a bond) worth the
-   complexity?
-2. **Auction attestation.** Is the off-chain fee auction acceptable as a trusted
-   component, or must the winning relayer be attested on-chain per epoch?
-3. **Bond `k`.** What depeg does `k` have to absorb if any part of the bond stays
-   in `solBSV`?
-4. **Slashing destination.** Slashed `solBSV` does not compensate victims, who
-   need BSV. Burned, or auctioned for BSV into the reserve?
-5. **`RECENT_REORG_WINDOW` vs `C`.** Is a wall-clock cooldown needed at all once
-   the depth rule and the block-time signals are in place?
-6. **Reserve invariant.** Does `custodied BSV ≥ outstanding solBSV` hold
-   *continuously*, or only after settlement? Re-mints make it transiently false.
-7. **Is `MAX_PEG_IN` a safety parameter at all?** The real bound on a theft is the
-   **hot float cap**, not the deposit size — a fraudulent mint can only be cashed
-   out up to what a relayer can actually pay. If `MAX_PEG_IN` is only operational,
-   it can be set for reserve management. If it is meant as a safety bound, it must
-   sit *below* the cost of reorging `C` BSV blocks. A 10,000 BSV maximum is roughly
-   $300k at writing against a 12-block reorg costing orders of magnitude less, so
-   as it stands the number is not doing safety work — the float cap is.
-8. **Calibrating `C` to BSV.** What is the actual cost of acquiring enough BSV
-   hashpower to out-mine `C` blocks for the required duration, and how often must
-   that be re-measured as BSV's hashrate moves? This is the input the whole
-   economic argument rests on and nothing in the PoC measures it.
+1. **Relayer fallback — permissionless.** A single relayer must not be able to block
+   the peg. The auction still sets the reference fee, but **any bonded relayer may
+   pay**, so the winning bid is a price and not an exclusive right. Liveness then
+   does not depend on any one participant, which is the point of keeping the loop
+   open. The single-relayer model in §Considerations is superseded on this point.
 
----
+2. **Bond `k` — assume no persistent depeg.** `solBSV` and BSV are the same asset,
+   so any deviation is an arbitrage and closes; `k = 1` is defensible rather than
+   having to absorb a standing discount. The consequence of that assumption is
+   recorded in decision 3, because it is what makes the compensation rule coherent.
+
+3. **Slashing destination — the victims, in `solBSV`.** The BSV never reached the
+   end user, so compensating them in BSV is not available; the slashed `solBSV`
+   returns to them instead, and they hold the same *amount* on the wrong chain.
+   This is the honest consequence of refusing a freeze authority: **holders keep
+   their balance through a default and absorb any shortfall as a discount rather
+   than a confiscation.** The bond protects against the relayer absconding — it
+   does **not** protect against the reserve being short, and it should not be
+   described as if it does.
+
+4. **`C` calibration — open by design.** Arbitrary at PoC, measured in Phase 5, and
+   needing a change mechanism that is itself a proposal. Getting the mechanism right
+   matters more than the starting number, because the number decays as BSV's
+   hashrate moves.
+
+5. **`RECENT_REORG_WINDOW` — monitoring first, not a gate.** Block times are
+   directly available: the header carries a Unix timestamp at offset 68, so the
+   observed mining rate over the window is computable on-chain, and a mean spacing
+   far below ten minutes is worth **warning** users about. Whether it becomes a gate
+   (delay or RTS) is deferred, because a genuine hashpower surge looks identical to
+   an attack. Note the variance is real — a dozen blocks is a small sample.
+
+## Still open
+
+6. **Auction attestation.** Is the off-chain fee auction acceptable as a trusted
+   component, or must the winning relayer be attested on-chain per epoch? Now that
+   the auction sets a price rather than an exclusive right, the trusted part is
+   smaller — but not gone, since the benchmark still influences what everyone
+   charges.
+
+7. **Reserve invariant.** Does `custodied BSV ≥ outstanding solBSV` hold
+   *continuously*, or only after settlement? Re-mints make it transiently false, and
+   decision 3 makes the question sharper: a shortfall is absorbed as a discount by
+   holders rather than covered from the bond, so the invariant may be better stated
+   as a **target with an explicit failure mode** than as a hard assertion.
+
+### The cap that actually bounds a reorg: per window, not per transaction
+
+This answers the open question about `MAX_PEG_IN`. The concern is right — a reorg
+can mint unbacked `solBSV`, and that supply exits through the peg-out path — but a
+**per-transaction** maximum does not bound it. A BSV block holds thousands of
+transactions, so an attacker building a fraudulent branch simply fills it with many
+deposits, each comfortably under the limit.
+
+The instrument that works is an **aggregate cap per window**:
+
+> Total minted within the last `C` blocks ≤ `MAX_MINT_PER_WINDOW`, chosen so that
+> `MAX_MINT_PER_WINDOW × BSV value < cost of reorging C blocks`.
+
+That is the safety parameter, and it is what makes `C` meaningful rather than
+decorative. `MAX_PEG_IN` remains useful — reserve management and fat-finger
+protection — but it is **operational**. Without the aggregate cap, `C` alone carries
+the whole economic argument, and `C` is the number nobody has measured yet
+(decision 4).
 
 ## What this changes downstream
 
@@ -390,4 +427,11 @@ Once the recommended state is agreed, these flow from it:
   following reorgs and should not be conflated with `RECENT_REORG_WINDOW`, which is
   a *safety* parameter. They are currently the same idea in two places and must be
   named apart.
+- **A per-window mint cap** (`MAX_MINT_PER_WINDOW`) must be enforced, not just a
+  per-transaction maximum — see §The cap that actually bounds a reorg.
+- **The replay list is no longer a lifetime limit.** It is now pruned by height, so
+  it bounds deposits *per window* rather than total usage. The previous fixed list
+  of 256 stopped the peg-in path permanently once reached, which ordinary volume
+  would have done on its own. A test that mints across a window boundary to
+  exercise the prune is still wanted — the current fixture cannot reach one.
 - **Tests** in `poc/TEST_PLAN.md` §4 and §5 gain the gate and capacity cases.

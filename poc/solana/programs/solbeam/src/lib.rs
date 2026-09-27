@@ -69,9 +69,14 @@ pub const MIN_CONFIRMATIONS: u64 = 12;
 /// needed when minting a deposit.
 pub const TOKEN_DECIMALS: u8 = 8;
 
-/// How many deposits one account remembers, to refuse replays. Fixed rather than
-/// growable so the account can be sized up front and never needs reallocating.
-pub const MAX_USED: usize = 256;
+/// How many deposits the replay list remembers at once. **Not a lifetime limit.**
+///
+/// Entries are pruned once their block leaves the header window, because a claim
+/// against a height below `window_start` is refused before the replay check is
+/// ever reached — so the list only has to cover the window. It is therefore a
+/// bound on *deposits per window*, not on total usage; the original fixed list was
+/// never pruned and silently stopped the peg-in path after 256 mints in its life.
+pub const MAX_USED: usize = 200;
 
 /// Size of one `HeaderRecord`: a bare block hash, and nothing else. Height is
 /// derived from the window's start; `prev`, `time`, `bits` and `nonce` are used
@@ -96,6 +101,11 @@ pub const MAX_FORK_BATCH: usize = 12;
 const _: () = assert!(
     LightClient::SPACE <= MAX_ACCOUNT_CREATE,
     "LightClient::SPACE exceeds Solana's account-creation cap: shrink HeaderRecord or WINDOW"
+);
+
+const _: () = assert!(
+    UsedDeposits::SPACE <= MAX_ACCOUNT_CREATE,
+    "UsedDeposits::SPACE exceeds Solana's account-creation cap: lower MAX_USED"
 );
 
 const _: () = assert!(
@@ -529,7 +539,21 @@ pub mod solbeam {
         // 7. Replay. The (txid, vout) pair is the identity of a deposit, so it is
         //    what gets remembered.
         let used = &mut ctx.accounts.used_deposits;
-        let key = DepositKey { txid: claim.txid, vout: claim.vout };
+
+        // Drop entries whose block has left the window. Pruning is safe precisely
+        // because of check 1 above: a claim is refused unless its height is at or
+        // above `window_start`, so a deposit whose block has fallen out can never
+        // reach this point to be replayed. Without the prune the list fills and
+        // the peg-in path stops working permanently — a cap on total usage rather
+        // than a replay defence, and one that ordinary volume reaches on its own.
+        let window_start = ctx.accounts.light_client.window_start;
+        used.keys.retain(|k| k.height >= window_start);
+
+        let key = DepositKey {
+            txid: claim.txid,
+            vout: claim.vout,
+            height: claim.height,
+        };
         require!(!used.keys.contains(&key), SolbeamError::AlreadyMinted);
         require!(used.keys.len() < MAX_USED, SolbeamError::NoRoomForMoreDeposits);
         used.keys.push(key);
@@ -865,6 +889,9 @@ pub struct DepositClaim {
 pub struct DepositKey {
     pub txid: [u8; 32],
     pub vout: u32,
+    /// The block the deposit is in. Carried so the list can be pruned once that
+    /// block leaves the header window — see the pruning in `verify_deposit`.
+    pub height: u64,
 }
 
 #[account]
@@ -874,7 +901,7 @@ pub struct UsedDeposits {
 }
 
 impl UsedDeposits {
-    pub const SPACE: usize = 8 + 4 + (MAX_USED * 36) + 1;
+    pub const SPACE: usize = 8 + 4 + (MAX_USED * 44) + 1; // 8,813 of 10,240
 }
 
 /// The bridge's deposit script, passed in so the check is against the account

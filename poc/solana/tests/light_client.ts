@@ -238,6 +238,10 @@ describe("solbeam — verify a deposit against the window", () => {
     expect(Buffer.from(used.keys[0].txid).toString("hex"))
       .to.equal(displayToInternal(fixture.proof.txid).toString("hex"));
     expect(used.keys[0].vout).to.equal(fixture.proof.vout);
+    // The height is stored so entries whose block leaves the window can be
+    // pruned. Without it the list could never be trimmed, and would cap lifetime
+    // usage rather than window usage -- the bug this field exists to fix.
+    expect(used.keys[0].height.toNumber()).to.equal(fixture.proof.height);
 
     // And the tokens exist. Eight decimals, one base unit per satoshi, so the
     // minted amount must equal the deposit exactly — no scaling anywhere.
