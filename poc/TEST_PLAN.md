@@ -298,6 +298,32 @@ The error names the symptom and says nothing about the cause, which is why it re
 
 Deliberately not guessed at. Recorded so the next person starts from the gap rather than rediscovering it.
 
+### 4.7 How large the rolling window should be
+
+The window was **64 headers** because 64 was a number that worked. Nothing justified it, and 64 headers is only about ten hours — a duration nobody chose. **The window should be sized by time, not by an arbitrary count**, and it is now **24 hours** (144 headers at BSV's ten-minute target).
+
+A day is the right scale because of what a deeper reorg would mean. If BSV reorganises by more than a day, the problem is not that the window should have been larger — it is that BSV is broken, and the peg has far larger problems than its header history. Sizing the window against that case is defending the wrong thing.
+
+**The change was nearly a trap, and the reason is worth recording.** Solana caps account creation at **10,240 bytes**: `init` allocates the whole `LightClient` in one instruction, and exceeding the cap makes `initialize` revert. It does not degrade, truncate or warn. With the existing 116-byte `HeaderRecord`, a 144-header window is **16,766 bytes**, so the obvious one-line change would have failed outright.
+
+The window is only affordable because the record shrank to **64 bytes** — storing what verification actually uses, and deriving the rest:
+
+| Field | Before | Now | Why |
+|---|---|---|---|
+| `height` | 8 | — | Derived from a single `window_start`; the window is contiguous, so a per-record height is implied |
+| `hash` | 32 | 32 | Linkage, and the tip |
+| `prev` | 32 | — | Linkage already uses the stored `tip_hash`; records link by position |
+| `merkle_root` | 32 | 32 | The root a deposit proof must fold to |
+| `time` | 4 | — | Read once on push, dead afterwards |
+| `bits` | 4 | — | Read once on push, dead afterwards |
+| `nonce` | 4 | — | Never used after the proof-of-work check |
+
+`144 × 64 + overhead = 9,286 bytes`, which fits with room. A **const assertion now fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
+
+Two latent bugs on the reorg path were fixed while the fields were being reshaped: `push_fork` never advanced `window_start` when it pruned the rebuilt window, and it indexed `headers[fork_idx]` directly — which would **panic** in the one state that is genuinely empty, immediately after `initialize`.
+
+**The trade-off this leaves open.** A larger window also survives longer advancer outages: a stalled client is safe but stops minting, so more history means more slack before a checkpoint reset is needed. The cost is rent (linear in the window) and compute on the mint path, because **the whole account is deserialised on every instruction**. At 9,286 bytes that is comfortable against the 200,000 CU budget, but it is the constraint that will bind first if the window grows much further — not rent.
+
 ## 5. Phase 3 — peg out
 
 **Goal: the enforcement path works — burn, pay, prove, settle — and cheating is bounded, punished, or both.**

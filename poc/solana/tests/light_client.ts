@@ -430,7 +430,7 @@ describe("solbeam — following a reorg", () => {
   // branch argument — the call fails before it reaches the chain with
   // `RangeError: Invalid bytes for branch_bytes`. Skipped rather than deleted
   // so the gap stays visible, and skipped rather than left failing so a real
-  // regression elsewhere is not hidden behind it. See TEST_PLAN 4.5.
+  // regression elsewhere is not hidden behind it. See TEST_PLAN 4.6.
   it.skip("follows a strictly heavier competing branch", async () => {
     const fork = fixture.fork;
     // One flat Buffer of 80-byte headers. A nested array (Vec<[u8; 80]>)
@@ -451,8 +451,9 @@ describe("solbeam — following a reorg", () => {
     expect(after.tipHeight.toNumber()).to.equal(fork.tip_height);
     expect(Buffer.from(after.tipHash).toString("hex"))
       .to.equal(doubleSha256(last).toString("hex"));
-    // The window is bounded, so the deepest headers fall out of it.
-    expect(after.headers.length).to.be.at.most(64);
+    // The window is bounded, so the deepest headers fall out of it. 144 is the
+    // 24-hour window, sized by time rather than picked — see TEST_PLAN 4.7.
+    expect(after.headers.length).to.be.at.most(144);
   });
 
   it.skip("refuses a branch that is not heavier", async () => {
