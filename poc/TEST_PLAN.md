@@ -288,11 +288,14 @@ That is a **sizing** error, not an encoding one. **A Solana transaction is cappe
 
 The error names the symptom and says nothing about the cause, which is why it read as a serialisation bug for a while.
 
-**The staging area, as built.** One header per transaction:
+**The staging area, as built.** Branch headers go up in batches of twelve — what a 1232-byte transaction actually carries — so the 72-header fixture costs six transactions rather than seventy-two:
 
 1. `init_staging(fork_height)` creates a staging PDA and records the fork point;
-2. `push_fork_header(header)` appends one header, validating linkage and proof of work exactly as `push_header` does;
-3. `commit_fork()` swaps the window onto the branch if it is strictly heavier, and **closes the account**, returning the rent.
+2. `push_fork_header(branch_bytes)` appends up to twelve headers, validating linkage and proof of work across the batch exactly as `push_header` does, and writing nothing unless all of them check out;
+3. `commit_fork()` swaps the window onto the branch if it is strictly heavier, and **closes the account**, returning the rent;
+4. `abandon_staging()` closes the account without committing, also returning the rent.
+
+**Why `abandon_staging` has to exist, and why it is not housekeeping.** `commit_fork` refuses a branch that is not strictly heavier. A refused instruction **reverts**, so the `close` constraint on its account never runs — and nothing else could close it. A staged branch that never became heavier therefore stranded its rent permanently. That is a capital leak rather than a fee, and it is exactly the kind of thing that only shows up when someone asks what the path costs to *use*, not what it costs to build. The test asserts the staging account still exists after a refused commit, then that `abandon_staging` removes it.
 
 **The griefing decision, and why it went the way it did.** A single shared staging slot can be occupied with junk, denying legitimate reorgs to everyone. The options were per-submitter accounts, a bond on a shared slot, or accepting the contention.
 

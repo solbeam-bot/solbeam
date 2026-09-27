@@ -477,8 +477,10 @@ describe("solbeam — following a reorg", () => {
       .accounts({ lightClient, staging, submitter: provider.wallet.publicKey,
                   systemProgram: anchor.web3.SystemProgram.programId }).rpc();
 
-    for (const raw of branch) {
-      await program.methods.pushForkHeader(Array.from(raw))
+    // Twelve headers is what a 1232-byte transaction carries, so the branch goes
+    // up in six transactions rather than seventy-two.
+    for (let i = 0; i < branch.length; i += 12) {
+      await program.methods.pushForkHeader(Buffer.concat(branch.slice(i, i + 12)))
         .accounts({ lightClient, staging, submitter: provider.wallet.publicKey }).rpc();
     }
 
@@ -513,8 +515,9 @@ describe("solbeam — following a reorg", () => {
       .initStaging(new anchor.BN(fork.from_height - 1))
       .accounts({ lightClient, staging, submitter: provider.wallet.publicKey,
                   systemProgram: anchor.web3.SystemProgram.programId }).rpc();
-    for (const h of fork.headers) {
-      await program.methods.pushForkHeader(Array.from(Buffer.from(h.raw, "hex")))
+    const headers = fork.headers.map((h: any) => Buffer.from(h.raw, "hex"));
+    for (let i = 0; i < headers.length; i += 12) {
+      await program.methods.pushForkHeader(Buffer.concat(headers.slice(i, i + 12)))
         .accounts({ lightClient, staging, submitter: provider.wallet.publicKey }).rpc();
     }
 
@@ -526,5 +529,13 @@ describe("solbeam — following a reorg", () => {
       const m = String(e).match(/Error Code: (\w+)/);
       expect(m ? m[1] : String(e)).to.equal("ForkNotHeavier");
     }
+
+    // A refused commit reverts, so its `close` constraint never runs. Without
+    // abandon_staging this account and its rent would be stranded permanently —
+    // which is the entire reason that instruction exists.
+    expect(await provider.connection.getAccountInfo(staging)).to.not.be.null;
+    await program.methods.abandonStaging()
+      .accounts({ staging, submitter: provider.wallet.publicKey }).rpc();
+    expect(await provider.connection.getAccountInfo(staging)).to.be.null;
   });
 });

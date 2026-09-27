@@ -86,6 +86,13 @@ pub const HEADER_RECORD_SIZE: usize = 32;
 /// sized against a 64-byte record rather than the 116-byte one it started with.
 pub const MAX_ACCOUNT_CREATE: usize = 10_240;
 
+/// How many branch headers fit in one transaction. A Solana transaction is
+/// capped at 1232 bytes; after the signature, accounts, blockhash, instruction
+/// header and the `Vec<u8>` length prefix roughly 215 bytes are gone, leaving
+/// about 12 headers of 80 bytes. The earlier `push_fork` failed precisely
+/// because it ignored this ceiling and tried to send 72.
+pub const MAX_FORK_BATCH: usize = 12;
+
 const _: () = assert!(
     LightClient::SPACE <= MAX_ACCOUNT_CREATE,
     "LightClient::SPACE exceeds Solana's account-creation cap: shrink HeaderRecord or WINDOW"
@@ -269,11 +276,22 @@ pub mod solbeam {
         Ok(())
     }
 
-    /// Append one header to a staged branch, validating linkage and proof of work
+    /// Append a **batch** of branch headers, validating linkage and proof of work
     /// exactly as `push_header` does for the main chain.
+    ///
+    /// Batched because one header per transaction is wasteful in the only
+    /// currency this path spends. About twelve headers fit in a 1232-byte
+    /// transaction, so a 72-header branch costs six transactions instead of
+    /// seventy-two — a twelfth of the fees, and a twelfth of the latency, which
+    /// matters when the thing being followed is a live reorg.
+    ///
+    /// The batch arrives as ONE flat byte vector rather than `Vec<[u8; 80]>`,
+    /// because nested fixed-size arrays do not survive borsh's layout on the
+    /// client side; a flat slice of 80-byte chunks serialises without drama and
+    /// is chunked here.
     pub fn push_fork_header(
         ctx: Context<PushForkHeader>,
-        header: [u8; HEADER_LEN],
+        branch_bytes: Vec<u8>,
     ) -> Result<()> {
         let lc = &ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
@@ -282,13 +300,21 @@ pub mod solbeam {
             staging.submitter == ctx.accounts.submitter.key(),
             SolbeamError::NotStagingOwner
         );
-        require!(staging.hashes.len() < WINDOW, SolbeamError::ForkTooLong);
+
+        require!(!branch_bytes.is_empty(), SolbeamError::EmptyFork);
+        require!(branch_bytes.len() % HEADER_LEN == 0, SolbeamError::MalformedTx);
+        let batch = branch_bytes.len() / HEADER_LEN;
+        require!(batch <= MAX_FORK_BATCH, SolbeamError::BatchTooLarge);
+        require!(
+            staging.hashes.len() + batch <= WINDOW,
+            SolbeamError::ForkTooLong
+        );
 
         // Link to the tip of the branch so far, or to the main chain at the fork
         // point while the branch is still empty. `get` rather than indexing: the
         // window can be empty immediately after `initialize`, which is a real
         // state rather than a panic.
-        let prev = match staging.hashes.last() {
+        let mut prev = match staging.hashes.last() {
             Some(h) => *h,
             None => {
                 let idx = lc
@@ -301,12 +327,32 @@ pub mod solbeam {
             }
         };
 
-        require!(read32(&header, 4) == prev, SolbeamError::BrokenLinkage);
-        let bits = read_u32_le(&header, 72);
-        require!(meets_target(&header, bits), SolbeamError::BadPow);
-        require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
+        // Validate the whole batch before writing any of it, so a bad header
+        // half-way through does not leave a partial branch staged.
+        let mut checked: Vec<[u8; 32]> = Vec::with_capacity(batch);
+        for raw in branch_bytes.chunks(HEADER_LEN) {
+            require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
+            let bits = read_u32_le(raw, 72);
+            require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
+            require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
 
-        staging.hashes.push(header_hash(&header));
+            let hash = header_hash_of_bytes(raw);
+            checked.push(hash);
+            prev = hash;
+        }
+        staging.hashes.extend(checked);
+        Ok(())
+    }
+
+    /// Close a staged branch without committing it, returning the rent.
+    ///
+    /// **This is not optional housekeeping.** `commit_fork` refuses a branch that
+    /// is not strictly heavier, and a refused instruction reverts — so its `close`
+    /// constraint never runs and there is no other way to release the account.
+    /// Without this instruction a branch that never becomes heavier strands its
+    /// rent permanently.
+    pub fn abandon_staging(_ctx: Context<AbandonStaging>) -> Result<()> {
+        // Nothing to do: the `close` constraint on the account does the work.
         Ok(())
     }
 
@@ -655,6 +701,22 @@ pub struct PushForkHeader<'info> {
         bump = staging.bump,
     )]
     pub staging: Account<'info, ForkStaging>,
+    pub submitter: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct AbandonStaging<'info> {
+    /// Seeds are derived from `submitter`, so only the owner's key can address
+    /// this account — someone else's key derives a different PDA and fails the
+    /// constraint. No explicit owner check is needed.
+    #[account(
+        mut,
+        seeds = [b"staging", submitter.key().as_ref()],
+        bump = staging.bump,
+        close = submitter,
+    )]
+    pub staging: Account<'info, ForkStaging>,
+    #[account(mut)]
     pub submitter: Signer<'info>,
 }
 
@@ -1084,4 +1146,6 @@ pub enum SolbeamError {
     NotStagingOwner,
     #[msg("the staged branch is longer than the window")]
     ForkTooLong,
+    #[msg("more headers in one batch than a transaction can carry")]
+    BatchTooLarge,
 }
