@@ -91,6 +91,37 @@ const _: () = assert!(
     "LightClient::SPACE exceeds Solana's account-creation cap: shrink HeaderRecord or WINDOW"
 );
 
+const _: () = assert!(
+    ForkStaging::SPACE <= MAX_ACCOUNT_CREATE,
+    "ForkStaging::SPACE exceeds Solana's account-creation cap: it mirrors the window, so \
+     shrinking WINDOW or HeaderRecord fixes both"
+);
+
+/// A competing branch being assembled across several transactions.
+///
+/// One per submitter, seeded on their key, so no two submitters can contend for
+/// the same slot. It holds the fork point and the branch hashes so far; the
+/// branch headers themselves are validated as they arrive and only their hashes
+/// are kept, for the same reason the main window keeps only hashes.
+#[account]
+pub struct ForkStaging {
+    pub submitter: Pubkey,
+    /// The **last common block** shared with the main chain — the common
+    /// ancestor. Branch headers begin at `fork_height + 1`.
+    pub fork_height: u64,
+    /// Branch headers, oldest first, excluding the fork point itself.
+    pub hashes: Vec<[u8; 32]>,
+    pub bump: u8,
+}
+
+impl ForkStaging {
+    pub const SPACE: usize = 8                  // discriminator
+        + 32                                    // submitter
+        + 8                                     // fork_height
+        + 4 + (WINDOW * HEADER_RECORD_SIZE)     // hashes: Vec length + records
+        + 1;                                    // bump
+}
+
 #[program]
 pub mod solbeam {
     use super::*;
@@ -202,60 +233,117 @@ pub mod solbeam {
     /// and that is a flag on this comparison rather than a rewrite, in the same
     /// way DAA is. It cannot be exercised on regtest, where the target never
     /// changes, so implementing it here would be untested code.
-    /// The branch arrives as ONE flat byte vector rather than a `Vec<[u8; 80]>`,
-    /// because nested fixed-size arrays do not survive borsh's layout on the
-    /// client side ("Out of range" from writeUIntLE, several frames from
-    /// anything to do with headers). A flat slice of 80-byte chunks serialises
-    /// without drama and is chunked here.
-    pub fn push_fork(
-        ctx: Context<PushHeader>,
-        from_height: u64,
-        branch_bytes: Vec<u8>,
+    /// A competing branch is submitted **one header at a time**. It cannot be
+    /// sent whole: a Solana transaction is capped at 1232 bytes, and a real branch
+    /// is far longer than the ~13 headers that would fit. So it is staged in a
+    /// per-submitter account and committed once complete — see `commit_fork`.
+    ///
+    /// **Per-submitter rather than one shared slot.** A single mutable staging
+    /// area can be occupied with junk, denying legitimate reorgs to everyone. A
+    /// PDA seeded on the submitter removes the contention structurally instead of
+    /// pricing it: you can only ever fill your own slot. Rent is a refundable
+    /// deposit rather than a fee, so spamming creates many empty accounts and
+    /// harms nobody, which is a better failure mode than a bond plus slashing
+    /// machinery for what is only a denial of reorg-following.
+    /// `fork_height` is the **last block the two branches share** — the common
+    /// ancestor, not the first block of the competing branch. The branch itself
+    /// begins at `fork_height + 1`, so a branch of N headers commits at tip
+    /// `fork_height + N`. Getting this off by one is easy and the fixture's own
+    /// `fork.from_height` uses the other convention (it is the first branch
+    /// block), so callers holding that value must pass `from_height - 1`.
+    pub fn init_staging(ctx: Context<InitStaging>, fork_height: u64) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        require!(!lc.paused, SolbeamError::Paused);
+        // The common ancestor must be a header we still hold. Deeper than the
+        // window needs a checkpoint reset, which is a governance action.
+        require!(
+            lc.index_of(fork_height).is_some(),
+            SolbeamError::ForkPointNotInWindow
+        );
+
+        let staging = &mut ctx.accounts.staging;
+        staging.submitter = ctx.accounts.submitter.key();
+        staging.fork_height = fork_height;
+        staging.hashes = Vec::new();
+        staging.bump = ctx.bumps.staging;
+        Ok(())
+    }
+
+    /// Append one header to a staged branch, validating linkage and proof of work
+    /// exactly as `push_header` does for the main chain.
+    pub fn push_fork_header(
+        ctx: Context<PushForkHeader>,
+        header: [u8; HEADER_LEN],
     ) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        require!(!lc.paused, SolbeamError::Paused);
+        let staging = &mut ctx.accounts.staging;
+        require!(
+            staging.submitter == ctx.accounts.submitter.key(),
+            SolbeamError::NotStagingOwner
+        );
+        require!(staging.hashes.len() < WINDOW, SolbeamError::ForkTooLong);
+
+        // Link to the tip of the branch so far, or to the main chain at the fork
+        // point while the branch is still empty. `get` rather than indexing: the
+        // window can be empty immediately after `initialize`, which is a real
+        // state rather than a panic.
+        let prev = match staging.hashes.last() {
+            Some(h) => *h,
+            None => {
+                let idx = lc
+                    .index_of(staging.fork_height)
+                    .ok_or(SolbeamError::ForkPointNotInWindow)?;
+                lc.headers
+                    .get(idx)
+                    .ok_or(SolbeamError::ForkPointNotInWindow)?
+                    .hash
+            }
+        };
+
+        require!(read32(&header, 4) == prev, SolbeamError::BrokenLinkage);
+        let bits = read_u32_le(&header, 72);
+        require!(meets_target(&header, bits), SolbeamError::BadPow);
+        require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
+
+        staging.hashes.push(header_hash(&header));
+        Ok(())
+    }
+
+    /// Swap the window onto the staged branch, if it is strictly heavier.
+    ///
+    /// **Strictly** heavier: a tie keeps the incumbent, so equal-length branches
+    /// cannot be used to churn the tip. The staging account is closed here and
+    /// its rent returns to the submitter.
+    pub fn commit_fork(ctx: Context<CommitFork>) -> Result<()> {
         let lc = &mut ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
-        require!(!branch_bytes.is_empty(), SolbeamError::EmptyFork);
+        let staging = &ctx.accounts.staging;
         require!(
-            branch_bytes.len() % HEADER_LEN == 0,
-            SolbeamError::MalformedTx
+            staging.submitter == ctx.accounts.submitter.key(),
+            SolbeamError::NotStagingOwner
         );
-        let headers: Vec<&[u8]> = branch_bytes.chunks(HEADER_LEN).collect();
+        require!(!staging.hashes.is_empty(), SolbeamError::EmptyFork);
 
-        // The fork point must be a header we still hold. Deeper than the window
-        // needs a checkpoint reset, which is a governance action.
-        let fork_idx = lc
-            .index_of(from_height)
-            .ok_or(SolbeamError::ForkPointNotInWindow)?;
+        let new_tip_height = staging.fork_height + staging.hashes.len() as u64;
 
-        // Validate the entire branch first. Nothing is written until all of it
-        // checks out. `get` rather than indexing: an empty window is a real
-        // state (immediately after `initialize`), not a panic.
-        let mut prev = lc
-            .headers
-            .get(fork_idx)
-            .ok_or(SolbeamError::ForkPointNotInWindow)?
-            .hash;
-        let mut branch: Vec<HeaderRecord> = Vec::with_capacity(headers.len());
-        for raw in headers.iter() {
-            require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
-            let bits = read_u32_le(raw, 72);
-            require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
-            require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
-
-            // header_hash_of_bytes takes a slice; the chunks are slices.
-            let hash = header_hash_of_bytes(raw);
-            branch.push(HeaderRecord { hash });
-            prev = hash;
-        }
-
-        let new_tip_height = from_height + headers.len() as u64;
+        // Regtest fixes the target, so every header carries the same work and
+        // accumulated work is proportional to length — length is the comparison
+        // here. Testnet needs real chainwork, `work = 2^256 / (target + 1)`
+        // summed, and that is a flag on this comparison rather than a rewrite, in
+        // the same way DAA is. It cannot be exercised on regtest, where the target
+        // never changes, so implementing it now would be untested code.
         require!(new_tip_height > lc.tip_height, SolbeamError::ForkNotHeavier);
+
+        let fork_idx = lc
+            .index_of(staging.fork_height)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?;
 
         // Keep the prefix up to and including the fork point, append the branch,
         // then prune to the window. The prefix always begins at headers[0], so
-        // window_start is only moved by whatever the prune discards.
+        // window_start only moves by whatever the prune discards.
         let mut rebuilt: Vec<HeaderRecord> = lc.headers[..=fork_idx].to_vec();
-        rebuilt.extend(branch);
+        rebuilt.extend(staging.hashes.iter().map(|hash| HeaderRecord { hash: *hash }));
         if rebuilt.len() > WINDOW {
             let excess = rebuilt.len() - WINDOW;
             rebuilt.drain(0..excess);
@@ -267,10 +355,10 @@ pub mod solbeam {
 
         lc.headers = rebuilt;
         lc.tip_height = new_tip_height;
-        lc.tip_hash = prev;
+        lc.tip_hash = *staging.hashes.last().unwrap();
 
         emit!(ChainReorganised {
-            from_height,
+            from_height: staging.fork_height,
             new_tip_height,
         });
         Ok(())
@@ -535,6 +623,56 @@ pub struct PushHeader<'info> {
     #[account(mut, seeds = [b"light_client"], bump = light_client.bump)]
     pub light_client: Account<'info, LightClient>,
     pub advancer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct InitStaging<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    /// One staging slot per submitter: `[b"staging", submitter]`. Two submitters
+    /// cannot collide, which is what removes the griefing problem rather than
+    /// pricing it.
+    #[account(
+        init,
+        payer = submitter,
+        space = ForkStaging::SPACE,
+        seeds = [b"staging", submitter.key().as_ref()],
+        bump
+    )]
+    pub staging: Account<'info, ForkStaging>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct PushForkHeader<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(
+        mut,
+        seeds = [b"staging", submitter.key().as_ref()],
+        bump = staging.bump,
+    )]
+    pub staging: Account<'info, ForkStaging>,
+    pub submitter: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CommitFork<'info> {
+    #[account(mut, seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    /// Closed on commit, returning the rent to the submitter — staging is a
+    /// deposit, not a cost, and a committed branch has no further use.
+    #[account(
+        mut,
+        seeds = [b"staging", submitter.key().as_ref()],
+        bump = staging.bump,
+        close = submitter,
+    )]
+    pub staging: Account<'info, ForkStaging>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -942,4 +1080,8 @@ pub enum SolbeamError {
     ForkPointNotInWindow,
     #[msg("the competing branch is not heavier than the current one")]
     ForkNotHeavier,
+    #[msg("the staging account belongs to a different submitter")]
+    NotStagingOwner,
+    #[msg("the staged branch is longer than the window")]
+    ForkTooLong,
 }

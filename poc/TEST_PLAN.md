@@ -262,41 +262,43 @@ Regtest has a fixed target, so DAA can be skipped for the PoC. **But it must be 
 
 ---
 
-### 4.5 Known gap: reorg handling
+### 4.5 Reorg handling — **closed**
 
-**Found by the hostile-advancer tests, not by inspection.** `push_header` requires a header to extend the current tip. That is what makes the client safe against a hostile advancer — it cannot reorder, replay, rewind or substitute a branch — but it has a second consequence:
+**Found by the hostile-advancer tests, not by inspection.** `push_header` requires a header to extend the current tip. That is what makes the client safe against a hostile advancer — it cannot reorder, replay, rewind or substitute a branch — but it had a second consequence:
 
-**the client cannot follow a legitimate reorg either.** A real reorg presents headers built on an older block. They are rejected, correctly, and the client stays on the abandoned branch. It stalls permanently rather than switching.
+**the client could not follow a legitimate reorg either.** A real reorg presents headers built on an older block. They were rejected, correctly, and the client stayed on the abandoned branch, stalling permanently rather than switching. A correctness gap rather than a security one — no false proof became acceptable, but minting stopped with the chain.
 
-That is a correctness gap, not a security one: no false proof becomes acceptable, but the header chain stops advancing and minting stops with it. It must be closed before testnet, where reorgs are real.
+Three parts were needed, and all three are now built:
 
-**The shape of the fix, and the decision it needs:**
+1. **a way to submit a competing branch** — `init_staging` / `push_fork_header` / `commit_fork` (§4.6);
+2. **the replacement policy** — **strictly heavier wins, ties keep the incumbent**, so an equal-length branch cannot be used to churn the tip; a branch may fork back to any height still inside the window, and deeper than that needs a checkpoint reset, which is a governance action;
+3. **what happens to already-minted deposits** — **nothing.** They are not reversed. The twelve-confirmation depth is the protection, and `solBSV` deliberately has no freeze authority, so reversal is not merely unimplemented but impossible by design. The trade is explicit: no confiscation, at the cost of a possible unbacked mint after a reorg deeper than twelve blocks.
 
-1. **accumulated chainwork** — `work = 2^256 / (target + 1)` per header, summed. On regtest every header has the same target, so work is proportional to *length* and the whole mechanism is untestable there; getting it right wants 256-bit arithmetic, most cleanly the `uint` crate. This is the same category as DAA: a flag on a mechanism that regtest cannot exercise.
-2. **a way to submit a competing branch** — some form of `push_fork(from_height, headers[])`, validating linkage and proof of work across the branch before considering it.
-3. **the replacement policy**, which is the actual decision: does a heavier branch replace the window unconditionally, how far back may it fork, and what happens to redemptions already settled against a header that is later orphaned? That last question is a *design* question with real consequences, and it belongs with the peg-out discussion rather than being settled by whoever is typing.
+**Chainwork remains flag-shaped.** `commit_fork` compares branch *length*, which is correct on regtest because the target never changes and work is therefore proportional to length. Testnet needs real chainwork — `work = 2^256 / (target + 1)`, summed — and that is a flag on this comparison rather than a rewrite, the same category as DAA. Implementing it now would be untested code, since regtest cannot exercise it.
 
 ### 4.6 The branch cannot be submitted in one transaction
 
-`push_fork` was implemented taking the whole branch as one argument, and it cannot work. The failure is instructive:
+The first `push_fork` took the whole branch as one argument, and it cannot work. The failure is instructive:
 
 ```
 RangeError: Invalid bytes for "branch_bytes": length 5760 exceeds N remaining bytes
 ```
 
-That is a **sizing** error, not an encoding one. **A Solana transaction is capped at 1232 bytes.** The fixture's competing branch is 72 headers — 5,760 bytes — so it does not fit, and never could. The practical ceiling is roughly **13 headers per transaction** once the signatures, accounts and instruction overhead are accounted for.
+That is a **sizing** error, not an encoding one. **A Solana transaction is capped at 1232 bytes.** The fixture's competing branch is 72 headers — 5,760 bytes — so it does not fit, and never could. The practical ceiling is roughly **13 headers per transaction** once signatures, accounts and instruction overhead are accounted for.
 
 The error names the symptom and says nothing about the cause, which is why it read as a serialisation bug for a while.
 
-**What this forces, and the decision it creates.** The branch has to be submitted incrementally, which means the program needs somewhere to put a branch while it is being assembled:
+**The staging area, as built.** One header per transaction:
 
-1. a **staging area** in an account — a partial branch, with its fork point and the headers so far;
-2. `push_fork_header` appends one header, validating linkage and proof of work as it goes, exactly as `push_header` does;
-3. a **commit** that compares accumulated work against the current tip and swaps if strictly heavier — the comparison already written.
+1. `init_staging(fork_height)` creates a staging PDA and records the fork point;
+2. `push_fork_header(header)` appends one header, validating linkage and proof of work exactly as `push_header` does;
+3. `commit_fork()` swaps the window onto the branch if it is strictly heavier, and **closes the account**, returning the rent.
 
-**The decision:** a staging area is a single mutable slot, so whoever holds it can be griefed — an attacker could occupy it with a junk branch and deny legitimate reorgs. Options are a per-submitter staging account (rent cost, but no contention), a bond on the staging slot, or accepting the contention because a stalled reorg is no worse than today's behaviour. That is a design call, not a coding one, and it belongs with the reorg policy rather than being settled in passing.
+**The griefing decision, and why it went the way it did.** A single shared staging slot can be occupied with junk, denying legitimate reorgs to everyone. The options were per-submitter accounts, a bond on a shared slot, or accepting the contention.
 
-Deliberately not guessed at. Recorded so the next person starts from the gap rather than rediscovering it.
+**Per-submitter, no bond.** The staging PDA is seeded `[b"staging", submitter]`, so no two submitters can contend for the same slot — the problem is removed structurally rather than priced. A bond would still leave one slot to fight over and would drag in slashing machinery for what is only a denial of reorg-following. And since rent is a refundable deposit rather than a fee, an attacker creating many staging accounts costs themselves opportunity cost and harms nobody, which is a better failure mode than a slashed bond.
+
+**An off-by-one worth recording.** `fork_height` is the **last block the two branches share** — the common ancestor — so a branch of N headers commits at tip `fork_height + N`. The fixture's own `fork.from_height` uses the *other* convention: it is the first block of the competing branch. The original `push_fork` computed `from_height + len`, which for the fixture is 191 rather than the correct 190. **That bug was invisible because the test was skipped** — it would have failed on its first real run, which is precisely the cost of leaving a gap marked rather than closed.
 
 ### 4.7 How large the rolling window should be
 

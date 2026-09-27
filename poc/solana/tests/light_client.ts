@@ -455,28 +455,35 @@ describe("solbeam — following a reorg", () => {
     }
   });
 
-  // SKIPPED, not passing. push_fork is implemented in the program and the
-  // program compiles; what is unresolved is the client-side encoding of the
-  // branch argument — the call fails before it reaches the chain with
-  // `RangeError: Invalid bytes for branch_bytes`. Skipped rather than deleted
-  // so the gap stays visible, and skipped rather than left failing so a real
-  // regression elsewhere is not hidden behind it. See TEST_PLAN 4.6.
-  it.skip("follows a strictly heavier competing branch", async () => {
+  // A branch is staged one header at a time because a Solana transaction caps at
+  // 1232 bytes, and this branch is 72 headers. See TEST_PLAN 4.6.
+  it("follows a strictly heavier competing branch", async () => {
     const fork = fixture.fork;
-    // One flat Buffer of 80-byte headers. A nested array (Vec<[u8; 80]>)
-    // does not survive borsh serialisation on the client.
-    const branch = Buffer.concat(
-      fork.headers.map((h: any) => Buffer.from(h.raw, "hex")));
+    const branch: Buffer[] = fork.headers.map((h: any) => Buffer.from(h.raw, "hex"));
 
     const before = await program.account.lightClient.fetch(lightClient);
     expect(before.tipHeight.toNumber()).to.equal(fixture.tip_height);
 
+    const [staging] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("staging"), provider.wallet.publicKey.toBuffer()], program.programId);
+
+    // fork.from_height is the first *branch* block; initStaging wants the last
+    // *shared* block, which is one below it.
     await program.methods
-      .pushFork(new anchor.BN(fork.from_height), branch)
-      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      .initStaging(new anchor.BN(fork.from_height - 1))
+      .accounts({ lightClient, staging, submitter: provider.wallet.publicKey,
+                  systemProgram: anchor.web3.SystemProgram.programId }).rpc();
+
+    for (const raw of branch) {
+      await program.methods.pushForkHeader(Array.from(raw))
+        .accounts({ lightClient, staging, submitter: provider.wallet.publicKey }).rpc();
+    }
+
+    await program.methods.commitFork()
+      .accounts({ lightClient, staging, submitter: provider.wallet.publicKey }).rpc();
 
     const after = await program.account.lightClient.fetch(lightClient);
-    const last = Buffer.from(fork.headers[fork.headers.length - 1].raw, "hex");
+    const last = branch[branch.length - 1];
 
     expect(after.tipHeight.toNumber()).to.equal(fork.tip_height);
     expect(Buffer.from(after.tipHash).toString("hex"))
@@ -484,21 +491,37 @@ describe("solbeam — following a reorg", () => {
     // The window is bounded, so the deepest headers fall out of it. 288 is the
     // 48-hour window, sized by time rather than picked — see TEST_PLAN 4.7.
     expect(after.headers.length).to.be.at.most(288);
+    // Committing closes the staging account and hands the rent back, so a
+    // successful reorg does not strand a deposit.
+    expect(await provider.connection.getAccountInfo(staging)).to.be.null;
   });
 
-  it.skip("refuses a branch that is not heavier", async () => {
+  it("refuses a branch that is not heavier", async () => {
+    // The previous test already moved the tip onto this branch, so replaying it
+    // lands on the same height. A tie must keep the incumbent rather than churn
+    // the tip, so the commit has to be refused.
     const fork = fixture.fork;
-    // Re-submitting the same branch leaves the tip unchanged, so it is not
-    // strictly heavier and must be refused rather than accepted as a no-op.
+    const [staging] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("staging"), provider.wallet.publicKey.toBuffer()], program.programId);
+
+    // fork.from_height is the first *branch* block; initStaging wants the last
+    // *shared* block, which is one below it.
+    await program.methods
+      .initStaging(new anchor.BN(fork.from_height - 1))
+      .accounts({ lightClient, staging, submitter: provider.wallet.publicKey,
+                  systemProgram: anchor.web3.SystemProgram.programId }).rpc();
+    for (const h of fork.headers) {
+      await program.methods.pushForkHeader(Array.from(Buffer.from(h.raw, "hex")))
+        .accounts({ lightClient, staging, submitter: provider.wallet.publicKey }).rpc();
+    }
+
     try {
-      await program.methods
-        .pushFork(new anchor.BN(fork.from_height),
-                  Buffer.concat(fork.headers.map((h: any) => Buffer.from(h.raw, "hex"))))
-        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      await program.methods.commitFork()
+        .accounts({ lightClient, staging, submitter: provider.wallet.publicKey }).rpc();
       expect.fail("should have refused a branch that is not heavier");
     } catch (e: any) {
       const m = String(e).match(/Error Code: (\w+)/);
-      expect(m ? m[1] : String(e)).to.be.oneOf(["ForkNotHeavier", "ForkPointNotInWindow"]);
+      expect(m ? m[1] : String(e)).to.equal("ForkNotHeavier");
     }
   });
 });
