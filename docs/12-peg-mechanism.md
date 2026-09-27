@@ -95,18 +95,18 @@ several, and **gating it is a speed bump rather than the defence.** See
 
 ### Parameters
 
-| Parameter | Proposed | Class | Notes |
-|---|---|---|---|
-| `FLOOR` — minimum deposit confirmations | 12 (~2 h) | **safety** | The hard bound. Depositors may commit to *more*, never less |
-| `C_payout` — payout confirmations | 12 | **safety** | Depth before a relayer may claim |
-| `D` — redemption deadline | 6 h | liveness | Relayer must pay within this |
-| `W` — challenge window | 24 h | **safety** | Must exceed reorg risk on the payout |
-| `RECENT_REORG_WINDOW` | 12 h | **safety** | Depth-aware, see below |
-| `TIP_STALENESS` | 2 h | **safety** | Pause if the tip stops advancing |
-| `MIN_PEG_IN` | 10 BSV | economic | Fee economics and dust/spam |
-| `MAX_PEG_IN` | 10,000 BSV | economic | Bounds per-transaction reserve exposure |
-| `MAX_PEG_OUT` | 10,000 BSV | economic | **Also bounded by live capacity** |
-| `HOT_FLOAT_CAP` | config | **safety** | The real bound on a drain |
+| ID | Parameter | Proposed | Class | Notes |
+|---|---|---|---|---|
+| **P1** | `FLOOR` — minimum deposit confirmations | 12 (~2 h) | **safety** | The hard bound. Depositors may commit to *more*, never less |
+| **P2** | `C_payout` — payout confirmations | 12 | **safety** | Depth before a relayer may claim |
+| **P3** | `D` — redemption deadline | 6 h | liveness | Measured in **slots**, not wall-clock |
+| **P4** | `W` — challenge window | 24 h | **safety** | Must exceed reorg risk on the payout |
+| **P5** | `RECENT_REORG_WINDOW` | 12 h | **safety** | Depth-aware, see §Rule 1 |
+| **P6** | `TIP_STALENESS` | 2 h | **safety** | Pause if the tip stops advancing |
+| **P7** | `MIN_PEG_IN` | 10 BSV | economic | Fee economics and dust/spam |
+| **P8** | `MAX_PEG_IN` | 10,000 BSV | economic | Per *transaction* only; see §aggregate mint cap |
+| **P9** | `MAX_PEG_OUT` | 10,000 BSV | economic | **Also bounded by live capacity** |
+| **P10** | `HOT_FLOAT_CAP` | config | **safety** | The real bound on a drain |
 | bond `k` | config | **safety** | `bond ≥ k × (hot float + releasable tranche)` |
 
 **Safety parameters may only be moved in the conservative direction by
@@ -636,6 +636,70 @@ conservative means shipping a new program. That gives the change mechanism the
 review asked for without turning the vote itself into the attack path — and it is
 the one place where the two positions in this document genuinely differ, so it is
 flagged rather than quietly settled.
+
+## Open items — blocking
+
+Two items must be decided before anything on the peg side can be built. Referenced
+`O1`, `O2` so they can be cited directly.
+
+### O1 — How stakers realise the yield
+
+**The question.** The 10 bp in / 10 bp out fee is taken at two different points, so it
+can accumulate in two different places and reach stakers in two different assets.
+Nothing in the document said which.
+
+**Recommendation: both fees land in an on-chain `solBSV` fee pool, and stakers realise
+through the ordinary peg-out path.** No new mechanism, and no operator involvement in
+paying yield.
+
+| Event | Reserve | `solBSV` supply | Fee pool |
+|---|---|---|---|
+| Peg-in 100 BSV | **+100** | 99.9 to user, 0.1 to pool = **+100** | +0.1 |
+| Peg-out 100 `solBSV` | **−99.9** | 99.9 burned | +0.1 |
+
+Both rows keep `custody == supply` **exactly** at 1:1, and the pool's balance is backed
+by the BSV the user never received, so it is not a claim on nothing.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **On-chain `solBSV` fee pool, realised via peg-out** ✅ | Fully on-chain; no operator needed to pay yield; keeps 1:1 exactly | Yield is in `solBSV`, so realising needs a peg-out like anyone else |
+| Operator pays yield in BSV | Stakers receive BSV directly | A trusted step, a queue, and a second thing the operator can refuse |
+| Fee left with the relayer, shared off-chain | Trivial to build | Fully trusted and unauditable |
+
+Sub-question: **how pool shares are accounted** — a share token (LP-token style) or a
+reward-per-stake accumulator. The share token is simpler and needs no per-staker loop.
+
+### O2 — The operator role
+
+**The question.** Somebody has to hold the BSV reserve keys, watch for deposits, and
+send payouts. **That party can steal the reserve.** Nothing currently says who they
+are or what stops them.
+
+This is the naked-spend risk the bond was introduced for, but staking sharpens it:
+**the reserve is now the stakers' money**, so an operator who leaves steals directly
+from them rather than from passive holders.
+
+**BSV removes one obvious mitigation.** Timelocked withdrawals are unavailable —
+`OP_CLTV` and `OP_CSV` are no-ops on BSV — so "the key holder cannot move funds for N
+hours" cannot be enforced natively.
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Single bonded operator; cold reserve behind a multisig; small hot float** ✅ | Bounds theft to the float, which the bond covers; the bulk needs several keys | The cold signer set is the system's trusted set, and refilling the float is manual and slow |
+| Multiple bonded operators, each with their own float | Any may fulfil a redemption, so one operator cannot block or censor | Shared reserve accounting; more bonds; coordination on who pays |
+| Operator is simply the largest staker | No separate role; incentives aligned | Stakers still must agree who holds the keys, and a large staker can still leave |
+
+**Three things must be decided regardless of which option:**
+
+- **Who signs the cold reserve multisig, and at what threshold.** This is the trusted
+  set of the entire system; it should be named rather than implied.
+- **What the operator earns.** The 10 bp is specified as going to stakers, which
+  leaves the operator with nothing. Either they are a staker earning on their own
+  stake, or they take a slice of the same 10 bp, or they charge separately. **As
+  written, the fee has no line for them.**
+- **How a permissionless fallback actually pays.** `O2` option 2 assumes any bonded
+  party may fund a payout, which needs more than one party holding BSV and keys — a
+  single cold address with one operator cannot offer that.
 
 ## Deliberately deferred
 
