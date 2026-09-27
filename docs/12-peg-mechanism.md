@@ -49,7 +49,7 @@ several, and **gating it is a speed bump rather than the defence.** See
 
 | Parameter | Proposed | Class | Notes |
 |---|---|---|---|
-| `C` — deposit confirmations | 12 (~2 h) | **safety** | Increase-only under governance |
+| `FLOOR` — minimum deposit confirmations | 12 (~2 h) | **safety** | The hard bound. Depositors may commit to *more*, never less |
 | `C_payout` — payout confirmations | 12 | **safety** | Depth before a relayer may claim |
 | `D` — redemption deadline | 6 h | liveness | Relayer must pay within this |
 | `W` — challenge window | 24 h | **safety** | Must exceed reorg risk on the payout |
@@ -71,6 +71,47 @@ testing" must be a `#[cfg(feature = …)]`, never a runtime value — a runtime 
 can leak to mainnet, a compile-time one cannot.
 
 ---
+
+### Confirmation depth is a market term, not just a constant
+
+`FLOOR` is a **floor**, not a fixed term. The depth a deposit actually waits is a
+term of the trade — chosen by the depositor, priced by whoever serves them.
+
+**How it is enforced.** The depositor's chosen depth is committed in the deposit's
+`OP_RETURN` alongside their Solana address, and the program requires both
+
+> `confirmations ≥ committed_depth` **and** `committed_depth ≥ FLOOR`
+
+The commitment is what makes it more than a promise, and the reason is easy to miss:
+**the claim is constructed by whoever submits it.** Without a commitment, a relayer
+could agree a long wait and then submit at the floor. Putting the depth in the
+deposit makes the depositor's choice binding and impossible to undercut by anyone
+downstream.
+
+**Four layers, in order of authority:**
+
+| Layer | Lives in | Role |
+|---|---|---|
+| **`FLOOR`** | Consensus — voted, increase-only | The hard protection. Binds every mint regardless of who asks |
+| **Committed depth** | The deposit's `OP_RETURN` | The depositor's own risk choice, enforced by the program |
+| **Relayer preferences** | Off-protocol advert | Preferred depth and size for their best rate |
+| **Recommendation** | UI and monitoring | An adaptive suggestion with no consensus role |
+
+**Why a depositor would ever choose above the floor.** A longer wait is less risky for
+whoever fronts the mint, so it buys a better rate — and it is better for the system,
+because fewer mints sit close to the tip where a reorg can reach them. The incentive
+has to come through the fee; a depositor has no reason to wait longer for nothing.
+
+**Why relayers advertise.** A relayer publishes the depth and size at which it offers
+its lowest rate. That is a **public schema rather than a contract** — published by the
+system, consumable by any front-end, changing nothing on-chain. It lets a depositor
+see what is on offer before choosing, and lets competing venues quote against the same
+terms.
+
+**Choosing too low** has exactly two honest outcomes: relayers decline, or they ask a
+higher rate. A depth below `FLOOR` is not discouraged but *refused* by the program,
+and the interface should say so plainly rather than presenting it as a live option —
+a warning on something the chain will reject anyway is false reassurance.
 
 ## Who this is for, and why the delays are acceptable
 
