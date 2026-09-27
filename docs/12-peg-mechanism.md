@@ -712,6 +712,58 @@ the staged tokens release and the attacker leaves. That is why `FLOOR` remains �
 the reorg expensive whether or not anyone notices — and why the buffer remains, to cover
 the case where notice arrives too late.
 
+## A6 — Remove the pooled reserve instead of securing it
+
+The question was what address type the deposit script should be. **The better answer is
+to have no shared address at all**, because a pooled reserve is what creates a single key
+worth stealing.
+
+### The proposal: deposits pay a relayer, not the bridge
+
+1. Each relayer registers a **BSV script of its own** — P2PKH for a single-key relayer,
+   or P2SH multisig if it wants shared custody. The registry lives on Solana and is
+   replaceable.
+2. A depositor sends BSV **to a relayer's script**, with the usual `OP_RETURN` naming
+   their Solana address.
+3. `verify_deposit` checks the output pays a **registered relayer's script**, not a
+   hardcoded bridge script.
+4. The proof itself tells the program which relayer received the deposit, so the program
+   **accumulates a per-relayer liability `owed_R` from verified proofs alone**.
+
+**There is then no bridge address**, so no single key whose theft drains everything, and
+no committee needed to hold one.
+
+### It also repairs part of A4
+
+A4's complaint was that the staking buffer is an unverifiable off-chain attestation. That
+was true of a **pooled** reserve. Per-relayer it stops being true on the side that matters:
+
+- `owed_R` is **derived from proofs the program verified itself**, not attested by anyone.
+- `bond_R ≥ k × owed_R` is therefore **checkable on-chain**.
+- `bond_R` is `solBSV` held by the program, so it is **seizable on-chain**.
+
+The binding constraint moves from "a custodian promises the buffer exists" to "the program
+measures each relayer's exposure and can seize its bond" — the first version of this design
+where the buffer is a protocol quantity rather than a promise.
+
+### On multisig
+
+Not needed for the reserve once deposits are per-relayer; a system-wide one would
+reintroduce exactly the signer set the design avoids.
+
+| Use | Recommendation |
+|---|---|
+| A relayer's own shared custody | **Fine** — its own P2SH multisig, its own signers, its own bond. Permissionless |
+| A shared system reserve | **Avoid** — recreates the single point of theft and needs a committee |
+| Last-resort recovery of stuck funds | **Defer** — Script cannot constrain where a key sends funds, so a recovery key is a backdoor whether or not it is ever used |
+
+### The end state
+
+The covenant track in [`04-trust-model.md`](04-trust-model.md#the-roadmap-to-a-signerless-reserve)
+— Script releasing funds only against a proof of the burn, via `OP_CAT`, `OP_MUL` and
+in-script verification — removes the spending key entirely. That is the destination;
+per-relayer deposits are the path that does not depend on it landing.
+
 ## Audit findings
 
 An adversarial review ran this document against the implemented program. Severities are
