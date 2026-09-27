@@ -367,10 +367,17 @@ row is listed first.
    does **not** protect against the reserve being short, and it should not be
    described as if it does.
 
-4. **`C` calibration — open by design.** Arbitrary at PoC, measured in Phase 5, and
-   needing a change mechanism that is itself a proposal. Getting the mechanism right
-   matters more than the starting number, because the number decays as BSV's
-   hashrate moves.
+4. **`C` is a policy parameter, not a derived one.** Sizing it from the cost of
+   reorging `C` blocks looks rigorous and is not. It needs a **BSV price oracle** to
+   value what is at risk and a **hashpower-rental oracle** to price the attack, and
+   this system deliberately has neither: by construction `1 BSV = 1 solBSV`, and
+   nothing consults an external market. Importing two oracles to tune one integer
+   would trade away the property the whole design rests on, in exchange for a number
+   that would still be a guess dressed as a calculation.
+
+   So `C` is set **high and conservatively as a policy choice**, changed by vote, and
+   **disclosed before someone transacts**. It does not need to be dynamic. What
+   matters is that it is *visible*, not that it is computed.
 
 5. **`RECENT_REORG_WINDOW` — monitoring first, not a gate.** Block times are
    directly available: the header carries a Unix timestamp at offset 68, so the
@@ -379,38 +386,56 @@ row is listed first.
    (delay or RTS) is deferred, because a genuine hashpower surge looks identical to
    an attack. Note the variance is real — a dozen blocks is a small sample.
 
-## Still open
+## Resolved and still open
 
-6. **Auction attestation.** Is the off-chain fee auction acceptable as a trusted
-   component, or must the winning relayer be attested on-chain per epoch? Now that
-   the auction sets a price rather than an exclusive right, the trusted part is
-   smaller — but not gone, since the benchmark still influences what everyone
-   charges.
+5. **Fee mechanism — the user sets the fee, or the right is exclusive.** Two
+   shapes, neither of which needs a winner attested on-chain:
 
-7. **Reserve invariant.** Does `custodied BSV ≥ outstanding solBSV` hold
+   - **User-set fee, open fulfilment.** The redemption carries a fee and any bonded
+     relayer may claim it if it clears their bar. There is no winner to attest,
+     because competition is continuous rather than at an epoch boundary.
+   - **Exclusive right, transaction starts at 0 fee.** One relayer holds the epoch,
+     so the user-facing fee can be zero — their compensation is what they paid for
+     the right.
+
+   This **dissolves** the attestation question rather than answering it. Attestation
+   is only needed when an off-chain auction produces a winner whose identity must be
+   proven on-chain; under open fulfilment there is no such winner, and under
+   exclusivity the obligation is on the holder rather than on a claim.
+
+6. **Reserve invariant.** Does `custodied BSV ≥ outstanding solBSV` hold
    *continuously*, or only after settlement? Re-mints make it transiently false, and
-   decision 3 makes the question sharper: a shortfall is absorbed as a discount by
-   holders rather than covered from the bond, so the invariant may be better stated
-   as a **target with an explicit failure mode** than as a hard assertion.
+   decision 3 sharpens the question: a shortfall is absorbed as a discount by holders
+   rather than covered from the bond, so the invariant may be better stated as a
+   **target with an explicit failure mode** than as a hard assertion. This is the one
+   genuinely unresolved item.
 
-### The cap that actually bounds a reorg: per window, not per transaction
+### The aggregate mint cap, restated as policy
 
-This answers the open question about `MAX_PEG_IN`. The concern is right — a reorg
-can mint unbacked `solBSV`, and that supply exits through the peg-out path — but a
-**per-transaction** maximum does not bound it. A BSV block holds thousands of
-transactions, so an attacker building a fraudulent branch simply fills it with many
-deposits, each comfortably under the limit.
+`MAX_PEG_IN` still does not bound a reorg — a BSV block holds thousands of
+transactions, so an attacker fills a fraudulent branch with many deposits under any
+per-transaction limit. The bound that works is an **aggregate cap per window**.
 
-The instrument that works is an **aggregate cap per window**:
+But decision 4 applies to it too: it is **set conservatively as policy, not derived**,
+because deriving it needs the same two oracles we have excluded. It is a coarse
+backstop beneath `C`, not a calibrated constant — and it is secondary to the two
+bounds that need no oracle at all:
 
-> Total minted within the last `C` blocks ≤ `MAX_MINT_PER_WINDOW`, chosen so that
-> `MAX_MINT_PER_WINDOW × BSV value < cost of reorging C blocks`.
+- **`C` set high**, which is what makes out-mining the honest chain expensive;
+- **the hot float cap**, which limits what a *successful* attack can actually extract.
 
-That is the safety parameter, and it is what makes `C` meaningful rather than
-decorative. `MAX_PEG_IN` remains useful — reserve management and fat-finger
-protection — but it is **operational**. Without the aggregate cap, `C` alone carries
-the whole economic argument, and `C` is the number nobody has measured yet
-(decision 4).
+All of these are **votable and disclosed**. The disclosure matters more than the
+value: a user should be able to see `C`, the cap and the float limit before they
+transact, and monitoring is what makes that possible.
+
+**One qualification on *votable*.** It should not mean freely *loosenable*. Whoever
+can vote `C` down toward zero holds a mint voucher, and no amount of deliberation
+makes that safe. The reconciling rule is **increase-only under governance**: a vote
+can make the system more conservative at any time, while making it *less*
+conservative means shipping a new program. That gives the change mechanism the
+review asked for without turning the vote itself into the attack path — and it is
+the one place where the two positions in this document genuinely differ, so it is
+flagged rather than quietly settled.
 
 ## What this changes downstream
 
@@ -427,8 +452,9 @@ Once the recommended state is agreed, these flow from it:
   following reorgs and should not be conflated with `RECENT_REORG_WINDOW`, which is
   a *safety* parameter. They are currently the same idea in two places and must be
   named apart.
-- **A per-window mint cap** (`MAX_MINT_PER_WINDOW`) must be enforced, not just a
-  per-transaction maximum — see §The cap that actually bounds a reorg.
+- **A per-window mint cap** (`MAX_MINT_PER_WINDOW`) is wanted as a coarse backstop,
+  set by policy rather than derived — see §The aggregate mint cap, restated as
+  policy. It sits beneath `C` and the hot float cap rather than replacing them.
 - **The replay list is no longer a lifetime limit.** It is now pruned by height, so
   it bounds deposits *per window* rather than total usage. The previous fixed list
   of 256 stopped the peg-in path permanently once reached, which ordinary volume
