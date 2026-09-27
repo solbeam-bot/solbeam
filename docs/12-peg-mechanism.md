@@ -642,102 +642,75 @@ review asked for without turning the vote itself into the attack path — and it
 the one place where the two positions in this document genuinely differ, so it is
 flagged rather than quietly settled.
 
-## Open items — blocking
+## O1 — Yield is paid in the asset staked
 
-Two items must be decided before anything on the peg side can be built. Referenced
-`O1`, `O2` so they can be cited directly.
+**Corrected from an earlier draft, which proposed a single `solBSV` pool.** Stakers are
+paid in what they staked, because that is what they are providing:
 
-### O1 — How stakers realise the yield
-
-**The question.** The 10 bp in / 10 bp out fee is taken at two different points, so it
-can accumulate in two different places and reach stakers in two different assets.
-Nothing in the document said which.
-
-**Recommendation: both fees land in an on-chain `solBSV` fee pool, and stakers realise
-through the ordinary peg-out path.** No new mechanism, and no operator involvement in
-paying yield.
-
-| Event | Reserve | `solBSV` supply | Fee pool |
+| Side | Stakes | Earns | When |
 |---|---|---|---|
-| Peg-in 100 BSV | **+100** | 99.9 to user, 0.1 to pool = **+100** | +0.1 |
-| Peg-out 100 `solBSV` | **−99.9** | 99.9 burned | +0.1 |
+| BSV | BSV in the reserve or a relayer's float | **BSV** | Deducted at peg-in, realised at once |
+| Solana | `solBSV` | **`solBSV`** | Deducted at peg-out, realised at once |
 
-Both rows keep `custody == supply` **exactly** at 1:1, and the pool's balance is backed
-by the BSV the user never received, so it is not a claim on nothing.
+Both fees are deducted where the payment happens and accrue to that side's stakers, so
+there is no cross-asset conversion, no second pool, and no third party paying anyone.
 
-| Option | Pros | Cons |
-|---|---|---|
-| **On-chain `solBSV` fee pool, realised via peg-out** ✅ | Fully on-chain; no operator needed to pay yield; keeps 1:1 exactly | Yield is in `solBSV`, so realising needs a peg-out like anyone else |
-| Operator pays yield in BSV | Stakers receive BSV directly | A trusted step, a queue, and a second thing the operator can refuse |
-| Fee left with the relayer, shared off-chain | Trivial to build | Fully trusted and unauditable |
+**Fees mature on the same schedule as the principal.** A fee withdrawable immediately
+while the mint behind it is still maturing would be an exit from maturity — the one
+thing the gates exist to prevent. So a fee is credited at once and *released* on the
+same schedule. That costs nothing in practice: the window is hours and the accounting
+is continuous.
 
-Sub-question: **how pool shares are accounted** — a share token (LP-token style) or a
-reward-per-stake accumulator. The share token is simpler and needs no per-staker loop.
+**The arithmetic still lands at 1:1.** A peg-in of 100 BSV mints 99.9 to the user and
+leaves 0.1 on the reserve side, so `custody == supply == 99.9` for that deposit. A
+peg-out of 100 `solBSV` burns 99.9 and pays 99.9, so both fall together. Neither leg
+creates a claim on nothing.
 
-### O2 — The operator role
+**This also collapses "staking" into "relaying".** The BSV-side staker *is* the party
+who pays BSV on redemption; the `solBSV`-side staker *is* the party who fronts `solBSV`
+on a peg-in before maturity. There is no separate passive staker class needing its own
+accounting system — and that supplies the liquidity on both sides with the same
+participants bearing the risk.
 
-**The question.** Somebody has to hold the BSV reserve keys, watch for deposits, and
-send payouts. **That party can steal the reserve.** Nothing currently says who they
-are or what stops them.
+## O2 — There is no operator, and that was the point
 
-This is the naked-spend risk the bond was introduced for, but staking sharpens it:
-**the reserve is now the stakers' money**, so an operator who leaves steals directly
-from them rather than from passive holders.
+**Corrected.** An earlier draft proposed "a single bonded operator with a cold multisig
+reserve". That *contradicts* [`05-relayers.md`](05-relayers.md) and
+[`04-trust-model.md`](04-trust-model.md), which describe a relayer as a **role anyone can
+run**, bonded in seizable `solBSV`, with a stated roadmap to a signerless reserve. This
+document should not have invented a privileged operator. The fix is to restate what those
+documents already say rather than to add a new role.
 
-**BSV removes one obvious mitigation.** Timelocked withdrawals are unavailable —
-`OP_CLTV` and `OP_CSV` are no-ops on BSV — so "the key holder cannot move funds for N
-hours" cannot be enforced natively.
+**Minting has no trusted party at all.** Advancing headers is permissionless, and after
+the audit fix (A1) the proof-of-work check actually binds, so a forged header costs real
+work rather than one hash.
 
-| Option | Pros | Cons |
-|---|---|---|
-| **Single bonded operator; cold reserve behind a multisig; small hot float** ✅ | Bounds theft to the float, which the bond covers; the bulk needs several keys | The cold signer set is the system's trusted set, and refilling the float is manual and slow |
-| Multiple bonded operators, each with their own float | Any may fulfil a redemption, so one operator cannot block or censor | Shared reserve accounting; more bonds; coordination on who pays |
-| Operator is simply the largest staker | No separate role; incentives aligned | Stakers still must agree who holds the keys, and a large staker can still leave |
+**Redemption's trust is bounded, and already specified elsewhere:** the bond is `solBSV`
+held by the program and therefore seizable; the naked-spend residual is answered by
+holding no idle float and by a veto-only cosigner; and the covenant track removes the hot
+key outright. See docs 04 and 05 — this document should not restate them.
 
-**Three things must be decided regardless of which option:**
+### How maturity stops a reorg mint, with no oracle and nobody to trust
 
-- **Who signs the cold reserve multisig, and at what threshold.** This is the trusted
-  set of the entire system; it should be named rather than implied.
-- **What the operator earns.** The 10 bp is specified as going to stakers, which
-  leaves the operator with nothing. Either they are a staker earning on their own
-  stake, or they take a slice of the same 10 bp, or they charge separately. **As
-  written, the fee has no line for them.**
-- **How a permissionless fallback actually pays.** `O2` option 2 assumes any bonded
-  party may fund a payout, which needs more than one party holding BSV and keys — a
-  single cold address with one operator cannot offer that.
+This is the part worth stating precisely, because it is where the design succeeds:
 
-## Audit findings
+1. Minted `solBSV` goes to a **program-owned vault**, not the depositor.
+2. The vault releases only once the deposit's block is **still canonical N blocks later**
+   — read from headers the program already stores.
+3. If BSV reorgs, the program follows the heavier branch through the permissionless
+   `commit_fork` path and **burns the still-staged tokens**. The fraud never becomes
+   liquid.
 
-An adversarial review ran this document against the implemented program. Severities
-are the reviewer's. **Fixed** means addressed in code in the same commit as this
-section, with a test where one was possible.
+No external data is consulted at any step and no person decides anything. The only
+requirement is that **honest headers are pushed within the maturity window** — a liveness
+condition anyone can satisfy rather than a trust assumption, and one with a built-in
+incentive: a fraud that goes undetected eats the staking buffer, so the people with the
+most to lose have the most reason to advance the honest chain and notice an orphan.
 
-| ID | Finding | Severity | Status |
-|---|---|---|---|
-| **A1** | **The difficulty target was read from the header being checked.** `bits` came from the submitted header and `check_daa` returned `true` unconditionally, so the target was attacker-chosen and the proof-of-work check vacuous — anyone could append headers and mint with no hashpower. Every "forging `C` blocks must out-mine the chain" claim in this document was false against the code. **Regtest masked it**: `0x207fffff` is already the largest encodable target, so no easier one exists there. On testnet or mainnet the target varies and declaring the easiest permitted one is cheap | critical | **Fixed** — the target is taken from the chain at `initialize` and validated *before* it is used. Test added |
-| **A2** | `set_checkpoint` and `set_paused` were **unauthenticated**: `authority` was a bare `Signer` compared to nothing, so any key could rewrite the trusted root or halt minting indefinitely | critical | **Fixed** — `LightClient` stores an authority and `SetCheckpoint` uses `has_one`. The deploy-time race on `initialize` remains open |
-| **A3** | `verify_deposit` never constrained `mint`. Anyone can create a mint whose authority is this program's PDA, submit a valid public deposit against it, and burn the replay slot — stranding the real deposit permanently for ~0.002 SOL | critical | **Fixed** — pinned to the `[b"mint"]` PDA |
-| **A7** | **The replay key included `height`**, so a deposit re-included at a different height after a reorg got a fresh key and minted twice — an unbacked mint from a legitimate deposit. Introduced by this document's own pruning change | serious | **Fixed** — identity is `(txid, vout)`; height is stored only for pruning |
-| **A4** | The staking buffer is off-chain BSV, so `S ≥ M` is unenforceable and unseizable by the program | critical | **Open** — the claim above corrected; the gap is structural |
-| **A5** | Program **upgrade authority is an unconditional mint voucher.** Safety parameters are Rust `const`s, so "loosening requires shipping a new program" and "ship a new program" are the same power; "increase-only" has no on-chain representation | critical | **Open** — the real trusted root, and it is unnamed |
-| **A6** | The peg-in destination is a **P2PKH key, not a covenant**. The entry point for the entire reserve is a raw key, and no document names its holder | critical | **Open** |
-| **A8** | The staging escrow is **not implemented**, and `UsedDeposits` stores no recipient or amount, so reversing N credited mints needs an off-chain indexer plus one paid transaction per depositor | serious | **Open** — proposed only |
-| **A9** | `MAX_USED = 200 < WINDOW = 288` is a cheap peg-in shutdown; `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented, so 200 one-satoshi self-deposits block all later peg-ins | serious | **Open** |
-| **A10** | The aggregate cap is not tied to the buffer, so `S ≥ M` cannot hold by construction | serious | **Open** |
-| **A11** | `commit_fork` never re-anchors the staged branch: linkage is checked at push time but not at commit, so an intervening commit can splice the window from two chains with broken linkage | serious | **Open** |
-| **A12** | `commit_fork` only emits an event — no depth recorded, no pause, no bounty — so the documented gate is triggered off-chain, and is itself griefable given A1 | serious | **Open** |
-| **A13** | "No oracles, by construction" is false for the quantities that gate funds: `bond ≥ k × (hot float)` and capacity limits need the hot float, which is off-chain BSV | serious | **Open** — corrected by A4 |
-| **A14** | The committed confirmation depth is not parsed by the program, and **would not bind an attacker anyway** — the fraud's depositor *is* the attacker, so they commit exactly `FLOOR`. It protects an honest user from a relayer undercutting, which is a market property, not a safety one | serious | **Open** |
-| **A15** | Return-to-sender is not an on-chain path: there is no refund instruction, `parse_outputs` reads only outputs, and spending the deposit needs the P2PKH key | serious | **Open** |
-| **A16** | The bond asset contradicts across documents, and only the Solana leg is seizable | serious | **Open** |
-| **A18** | Pausing freezes `push_header` too, so the tip stalls and unpausing needs the missed headers replayed one transaction at a time | minor | **Open** |
-| **A19** | Minor mismatches — `used_deposits` has no `seeds` constraint, `bits_to_target_be` masks the sign bit, and the adversary playbook expects an error that does not exist | minor | **Open** |
-
-**The lesson worth keeping.** A1 and A2 were both invisible to a green test suite: the
-tests asserted that bad proof of work was rejected, and it *was* — against the target
-the test itself supplied. A2 had no test at all. Passing tests demonstrated that the
-code did what the tests did, not that the client was secure. Regtest masked A1 further,
-because its convenience target happens to be the safest possible value.
+**What maturity does not fix:** if nobody pushes the honest branch for the whole window,
+the staged tokens release and the attacker leaves. That is why `FLOOR` remains — it makes
+the reorg expensive whether or not anyone notices — and why the buffer remains, to cover
+the case where notice arrives too late.
 
 ## Deliberately deferred
 
