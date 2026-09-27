@@ -176,14 +176,24 @@ pub mod solbeam {
     /// and that is a flag on this comparison rather than a rewrite, in the same
     /// way DAA is. It cannot be exercised on regtest, where the target never
     /// changes, so implementing it here would be untested code.
+    /// The branch arrives as ONE flat byte vector rather than a `Vec<[u8; 80]>`,
+    /// because nested fixed-size arrays do not survive borsh's layout on the
+    /// client side ("Out of range" from writeUIntLE, several frames from
+    /// anything to do with headers). A flat slice of 80-byte chunks serialises
+    /// without drama and is chunked here.
     pub fn push_fork(
         ctx: Context<PushHeader>,
         from_height: u64,
-        headers: Vec<[u8; HEADER_LEN]>,
+        branch_bytes: Vec<u8>,
     ) -> Result<()> {
         let lc = &mut ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
-        require!(!headers.is_empty(), SolbeamError::EmptyFork);
+        require!(!branch_bytes.is_empty(), SolbeamError::EmptyFork);
+        require!(
+            branch_bytes.len() % HEADER_LEN == 0,
+            SolbeamError::MalformedTx
+        );
+        let headers: Vec<&[u8]> = branch_bytes.chunks(HEADER_LEN).collect();
 
         // The fork point must be a header we still hold. Deeper than the window
         // needs a checkpoint reset, which is a governance action.
@@ -200,7 +210,7 @@ pub mod solbeam {
         for (i, raw) in headers.iter().enumerate() {
             require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
             let bits = read_u32_le(raw, 72);
-            require!(meets_target(raw, bits), SolbeamError::BadPow);
+            require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
             require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
 
             let hash = header_hash(raw);
@@ -500,6 +510,13 @@ pub fn header_hash(header: &[u8; HEADER_LEN]) -> [u8; 32] {
 /// big-endian target, and reversing the digest gives the same number. This is
 /// the identical convention `bsvlib.hash_as_int` uses (it reads the digest
 /// little-endian, which is the same thing).
+pub fn meets_target_slice(header: &[u8], bits: u32) -> bool {
+    let digest = header_hash_of_bytes(header);
+    let mut hash_be = digest;
+    hash_be.reverse();
+    hash_be <= bits_to_target_be(bits)
+}
+
 pub fn meets_target(header: &[u8; HEADER_LEN], bits: u32) -> bool {
     let digest = header_hash(header);
     let mut hash_be = digest;

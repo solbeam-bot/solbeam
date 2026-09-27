@@ -427,7 +427,10 @@ describe("solbeam — following a reorg", () => {
 
   it("follows a strictly heavier competing branch", async () => {
     const fork = fixture.fork;
-    const branch = fork.headers.map((h: any) => Array.from(Buffer.from(h.raw, "hex")));
+    // One flat Buffer of 80-byte headers. A nested array (Vec<[u8; 80]>)
+    // does not survive borsh serialisation on the client.
+    const branch = Buffer.concat(
+      fork.headers.map((h: any) => Buffer.from(h.raw, "hex")));
 
     const before = await program.account.lightClient.fetch(lightClient);
     expect(before.tipHeight.toNumber()).to.equal(fixture.tip_height);
@@ -453,7 +456,7 @@ describe("solbeam — following a reorg", () => {
     try {
       await program.methods
         .pushFork(new anchor.BN(fork.from_height),
-                  fork.headers.map((h: any) => Array.from(Buffer.from(h.raw, "hex"))))
+                  Buffer.concat(fork.headers.map((h: any) => Buffer.from(h.raw, "hex"))))
         .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
       expect.fail("should have refused a branch that is not heavier");
     } catch (e: any) {
