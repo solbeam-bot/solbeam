@@ -121,13 +121,15 @@
         <span class="phase__state">In progress</span>
       </div>
       <ul>
-        <li><strong>Done: the light client on-chain.</strong> A checkpoint, a rolling <strong>48-hour window of headers</strong> (288 blocks — sized by time, not by an arbitrary count, and storing a bare block hash per header), and the two checks that make a header chain mean anything — linkage and proof of work. <strong>16 tests passing</strong> against the Phase&nbsp;1A fixture, including a full mint and a hostile-advancer suite.</li>
+        <li><strong>Done: the light client on-chain.</strong> A checkpoint, a rolling <strong>48-hour window</strong> (288 blocks, sized by time rather than picked), storing a bare block hash per header, with linkage and proof of work. <strong>17 tests passing</strong> against the Phase&nbsp;1A fixture, including a full mint and a hostile-advancer suite.</li>
         <li><strong>Done: the two implementations agree.</strong> The on-chain client derives the same header hash as the Phase&nbsp;1A Python reference, from the same fixture, unmodified.</li>
-        <li><strong>Done: a hostile advancer cannot forge, reorder, replay or rewind.</strong> The worst it can do is stall, which is what the design claims.</li>
+        <li><strong>Done: a hostile advancer cannot reorder, replay or rewind.</strong> The worst it can do is stall, which is what the design claims.</li>
+        <li><strong>Done: the client follows a legitimate reorg.</strong> A competing branch is staged and committed only if it is <em>strictly</em> heavier, so a tie keeps the incumbent. Already-minted deposits are not reversed — the twelve-confirmation depth is the protection, and the token has no freeze authority, so a reversal is impossible by design rather than merely unimplemented.</li>
+        <li><strong>An adversarial review found four critical defects, now fixed.</strong> The most serious: the difficulty target was read from the header being checked, so proof of work was <em>vacuous</em> — anyone could append headers and mint with no hashpower. Also fixed: an unauthenticated path that let any key rewrite the trusted checkpoint or halt minting; a counterfeit mint that could strand a user's deposit permanently; and a replay key that double-minted a deposit after a reorg. Each has a test. <strong>Three critical issues remain open and are documented rather than hidden:</strong> the staking buffer is not verifiable on-chain, the program upgrade authority can override every parameter, and the reserve address is a plain key rather than a covenant.</li>
         <li><strong>Done: the deposit verifier.</strong> It consumes the fixture's 202-byte instruction — Merkle fold, on-chain transaction parsing, exact output script, confirmation depth, and replay refusal. It accepts the real deposit and refuses four tampered versions of it.</li>
         <li><strong>Done: the mint.</strong> A verified deposit mints <code>solBSV</code> to the address named in the OP_RETURN. The test asserts the recipient's balance equals the deposit exactly — eight decimals, one base unit per satoshi, no scaling. The token has no freeze authority and its mint authority is a program PDA, so no operator key can create supply.</li>
         <li>Left: <code>solBSV</code> as a classic SPL token — 8 decimals, no freeze authority.</li>
-        <li><strong>Done: the client follows a legitimate reorg.</strong> A competing branch is staged one header at a time — a Solana transaction caps at 1232 bytes, so a 72-header branch cannot arrive whole — then committed only if it is <em>strictly</em> heavier, so a tie keeps the incumbent. Staging is per-submitter, which removes the griefing problem structurally rather than pricing it, and the account closes on commit, returning the rent. Already-minted deposits are not reversed: the twelve-confirmation depth is the protection, and the token has no freeze authority, so a reversal is impossible by design rather than merely unimplemented.</li>
+        <li><strong>Left, and it is a real gap:</strong> the client is safe against a hostile advancer but cannot <em>follow</em> a legitimate reorg — it stalls on the abandoned branch. Closing it is a design decision as much as code, so it is deliberately not guessed at.</li>
       </ul>
     </div>
 
@@ -138,9 +140,10 @@
         <span class="phase__state">Not started</span>
       </div>
       <ul>
-        <li>Burn &rarr; a bonded relayer pays BSV &rarr; the payout is proved on-chain &rarr; settled.</li>
-        <li>Deadline, automatic refund, bond slashing, and an unbonding period that outlasts both.</li>
-        <li>13 adversarial plays already run against the Phase 1A verifier; 12 more are specified for this phase.</li>
+        <li><strong>Designed, not built.</strong> Burn &rarr; a bonded relayer pays BSV &rarr; the payout is proved on-chain &rarr; settled.</li>
+        <li><strong>Two gates each way.</strong> Minted <code>solBSV</code> lands in a program-owned vault and is released only once its deposit is still canonical after a maturity window — and burned if a reorg is followed first. That makes a reorg reversible without a freeze authority and without trusting anyone.</li>
+        <li><strong>Stakers on both sides, paid in what they stake</strong> — earn BSV for BSV, <code>solBSV</code> for <code>solBSV</code>. They underwrite the system, so a fraudulent mint lands on volunteers rather than diluting every holder.</li>
+        <li><strong>No oracles.</strong> Reorg depth and block time come from the BSV headers; deadlines come from Solana slots.</li>
       </ul>
     </div>
 
@@ -152,24 +155,24 @@
       </div>
       <ul>
         <li>The absolute cost to rewrite the BSV chain, and how much SHA-256 is actually available to rent.</li>
-        <li>Reserve against supply, published as a check anyone can run for themselves.</li>
+        <li>Reserve against supply. <strong>The protocol cannot check this</strong> — the reserve is off-chain BSV — so it is published instead, as a number anyone can verify for themselves.</li>
+        <li>Observed block spacing, so a chain mining far faster than its target is visible to everyone.</li>
       </ul>
     </div>
 
     <h2>What is proven so far</h2>
     <div class="tally">
-      <span><b>156</b> checks offline</span>
-      <span><b>157</b> with a live node</span>
       <span><b>13</b> adversarial plays</span>
-      <span><b>13</b> on-chain tests</span>
+      <span><b>17</b> on-chain tests</span>
+      <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>
     </div>
 
     <h2>What is not proven</h2>
     <ul class="points">
-      <li><strong>Nothing has run on Solana yet.</strong> The light client and the token are designed and specified, not built.</li>
+      <li><strong>Nothing has run on a public network.</strong> The light client and the token are built and tested against a local Solana validator — Solana's regtest — and nothing more. Testnet is a later step, done with a team.</li>
       <li><strong>Redemption is not built.</strong> It is the trust-minimised half, and the hardest part — see the trust model in the documentation.</li>
-      <li><strong>Nothing is audited.</strong> This is a proof of concept on a throwaway chain, and it is not safe to use with real money.</li>
+      <li><strong>Nothing is independently audited.</strong> The four critical defects above were found by an adversarial review run against our own code, which is not the same thing as an audit by someone with no stake in the answer.</li>
     </ul>
 
     <p class="note" style="margin-top:22px">
