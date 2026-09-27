@@ -122,14 +122,43 @@ closes it must close **both ways** — and the secondary market is then free to
 price the risk, which is the honest outcome and the reason the pause is not
 patronising. We stop the protocol, not the market.
 
-### The fee is a yield on locked capital, and competition sets it
+### The fee is whatever the market clears at
 
-Capital is tied up for roughly half a day per cycle, so about two cycles a day can
-be run. That makes even a small fee a large annualised yield on deployed capital —
-a 10 bp fee is on the order of 70% annualised — which is exactly what the bidding
-process is for. **The fee should compete down to the cost of capital for half a
-day plus the reorg risk carried.** Anyone may peg back in and compete for the whole
-flow, at the price of having capital locked for that period.
+The fee is **not a parameter to be chosen** — it is discovered by the bidding, and
+it can settle well above any cost floor. Anchoring on a figure like 10 bp is a
+mistake: there is no reason bidders would stop at 50 bp if that is where demand
+against scarce capacity puts it.
+
+What the bidding prices is a **risk-adjusted return on bond capital**, and the
+arithmetic is why the range is wide. Capital is committed for roughly half a day
+per cycle, so about two cycles a day. Because the bond is a multiple `k` of the
+float, the return falls on total committed capital rather than on volume moved:
+
+| Fee per cycle | Annualised on committed capital (`k` = 1) |
+|---|---|
+| 5 bp | ~18% |
+| 10 bp | ~37% |
+| 25 bp | ~91% |
+| 50 bp | ~183% |
+| 100 bp | ~365% |
+
+Those are large numbers for a half-day lockup, and they cut both ways. They attract
+capital, which compresses the fee — but three things stop it collapsing to cost:
+
+- **Capacity is the scarce good, not capital.** The hot float caps how much can be
+  paid out per cycle, so fee pressure comes from the ratio of demand to *bonded
+  capacity*, not from the number of willing bidders.
+- **The risk is real and hard to price.** Custody of the reserve, BSV reorgs during
+  the lockup, and Solana downtime all sit on the relayer.
+- **Exclusivity is a trade, not a free win.** A single relayer per epoch can be held
+  to one bond and a clear SLA, but holds pricing power between auctions. Open entry
+  to any bonded relayer is what actually compresses the fee, at the cost of
+  coordination on who pays.
+
+So the protocol does not set the fee. What it sets is **who may bid, how much
+capacity the limits permit, and how exclusive the slot is** — and those levers are
+what decide where the fee lands. A cost-of-capital figure is the floor beneath the
+auction, not the outcome of it.
 
 An exchange cross is a natural pressure valve: an exchange with a balance sheet on
 both sides can quote tighter than the peg. That is healthy and it caps the fee.
