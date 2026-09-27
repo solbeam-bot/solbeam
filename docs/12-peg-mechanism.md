@@ -340,13 +340,18 @@ something that is *still fully backed*, and an exchange never has to book a loss
 is what fixes the hole: the loss is socialised onto volunteers instead of landing on
 people who never chose it.
 
-**The safety condition becomes checkable without an oracle:**
+**The safety condition to aim at is:**
 
 > `staked buffer  ≥  maximum mintable within one reorg window`
 
-Both are protocol quantities — no price feed, no hashpower estimate, no judgement
-beyond the cap itself. That is firmer footing than sizing `FLOOR` against an attack
-cost nobody can measure.
+**But this is not checkable on-chain, and an earlier draft of this section wrongly
+said it was.** The buffer is BSV under a BSV key: the program can count stake deposits
+it has verified, but it cannot read the reserve, spend it, or slash it. The buffer's
+integrity rests on the custodian honouring it — exactly like the rest of the reserve.
+So it is *tracked*, not *verified*, and `S` is an attestation rather than a chain
+fact. The design is not wrong for that, but the buffer is **not** the oracle-free
+guarantee this section previously implied, and "stakers bear the fraud loss" reduces
+in the worst case to "the custodian chooses to honour it".
 
 **Three tiers, in order:**
 
@@ -700,6 +705,39 @@ hours" cannot be enforced natively.
 - **How a permissionless fallback actually pays.** `O2` option 2 assumes any bonded
   party may fund a payout, which needs more than one party holding BSV and keys — a
   single cold address with one operator cannot offer that.
+
+## Audit findings
+
+An adversarial review ran this document against the implemented program. Severities
+are the reviewer's. **Fixed** means addressed in code in the same commit as this
+section, with a test where one was possible.
+
+| ID | Finding | Severity | Status |
+|---|---|---|---|
+| **A1** | **The difficulty target was read from the header being checked.** `bits` came from the submitted header and `check_daa` returned `true` unconditionally, so the target was attacker-chosen and the proof-of-work check vacuous — anyone could append headers and mint with no hashpower. Every "forging `C` blocks must out-mine the chain" claim in this document was false against the code. **Regtest masked it**: `0x207fffff` is already the largest encodable target, so no easier one exists there. On testnet or mainnet the target varies and declaring the easiest permitted one is cheap | critical | **Fixed** — the target is taken from the chain at `initialize` and validated *before* it is used. Test added |
+| **A2** | `set_checkpoint` and `set_paused` were **unauthenticated**: `authority` was a bare `Signer` compared to nothing, so any key could rewrite the trusted root or halt minting indefinitely | critical | **Fixed** — `LightClient` stores an authority and `SetCheckpoint` uses `has_one`. The deploy-time race on `initialize` remains open |
+| **A3** | `verify_deposit` never constrained `mint`. Anyone can create a mint whose authority is this program's PDA, submit a valid public deposit against it, and burn the replay slot — stranding the real deposit permanently for ~0.002 SOL | critical | **Fixed** — pinned to the `[b"mint"]` PDA |
+| **A7** | **The replay key included `height`**, so a deposit re-included at a different height after a reorg got a fresh key and minted twice — an unbacked mint from a legitimate deposit. Introduced by this document's own pruning change | serious | **Fixed** — identity is `(txid, vout)`; height is stored only for pruning |
+| **A4** | The staking buffer is off-chain BSV, so `S ≥ M` is unenforceable and unseizable by the program | critical | **Open** — the claim above corrected; the gap is structural |
+| **A5** | Program **upgrade authority is an unconditional mint voucher.** Safety parameters are Rust `const`s, so "loosening requires shipping a new program" and "ship a new program" are the same power; "increase-only" has no on-chain representation | critical | **Open** — the real trusted root, and it is unnamed |
+| **A6** | The peg-in destination is a **P2PKH key, not a covenant**. The entry point for the entire reserve is a raw key, and no document names its holder | critical | **Open** |
+| **A8** | The staging escrow is **not implemented**, and `UsedDeposits` stores no recipient or amount, so reversing N credited mints needs an off-chain indexer plus one paid transaction per depositor | serious | **Open** — proposed only |
+| **A9** | `MAX_USED = 200 < WINDOW = 288` is a cheap peg-in shutdown; `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented, so 200 one-satoshi self-deposits block all later peg-ins | serious | **Open** |
+| **A10** | The aggregate cap is not tied to the buffer, so `S ≥ M` cannot hold by construction | serious | **Open** |
+| **A11** | `commit_fork` never re-anchors the staged branch: linkage is checked at push time but not at commit, so an intervening commit can splice the window from two chains with broken linkage | serious | **Open** |
+| **A12** | `commit_fork` only emits an event — no depth recorded, no pause, no bounty — so the documented gate is triggered off-chain, and is itself griefable given A1 | serious | **Open** |
+| **A13** | "No oracles, by construction" is false for the quantities that gate funds: `bond ≥ k × (hot float)` and capacity limits need the hot float, which is off-chain BSV | serious | **Open** — corrected by A4 |
+| **A14** | The committed confirmation depth is not parsed by the program, and **would not bind an attacker anyway** — the fraud's depositor *is* the attacker, so they commit exactly `FLOOR`. It protects an honest user from a relayer undercutting, which is a market property, not a safety one | serious | **Open** |
+| **A15** | Return-to-sender is not an on-chain path: there is no refund instruction, `parse_outputs` reads only outputs, and spending the deposit needs the P2PKH key | serious | **Open** |
+| **A16** | The bond asset contradicts across documents, and only the Solana leg is seizable | serious | **Open** |
+| **A18** | Pausing freezes `push_header` too, so the tip stalls and unpausing needs the missed headers replayed one transaction at a time | minor | **Open** |
+| **A19** | Minor mismatches — `used_deposits` has no `seeds` constraint, `bits_to_target_be` masks the sign bit, and the adversary playbook expects an error that does not exist | minor | **Open** |
+
+**The lesson worth keeping.** A1 and A2 were both invisible to a green test suite: the
+tests asserted that bad proof of work was rejected, and it *was* — against the target
+the test itself supplied. A2 had no test at all. Passing tests demonstrated that the
+code did what the tests did, not that the client was secure. Regtest masked A1 further,
+because its convenience target happens to be the safest possible value.
 
 ## Deliberately deferred
 

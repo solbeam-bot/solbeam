@@ -169,6 +169,10 @@ pub mod solbeam {
         lc.tip_hash = header_hash(&header);
         lc.headers = Vec::new();
         lc.window_start = checkpoint_height;
+        lc.authority = ctx.accounts.payer.key();
+        // Taken from the checkpoint header, which is the one piece of data the
+        // client trusts — every later header must match it.
+        lc.expected_bits = read_u32_le(&header, 72);
         lc.paused = false;
         lc.bump = ctx.bumps.light_client;
 
@@ -193,14 +197,18 @@ pub mod solbeam {
         //    valid block from anywhere.
         require!(prev == lc.tip_hash, SolbeamError::BrokenLinkage);
 
-        // 2. It must be real work. Linkage is not evidence on its own: anyone
+        // 2. The declared target must be the chain's target, and this is checked
+        //    BEFORE the target is used. Order matters: `meets_target` takes the
+        //    target from the header, so validating only afterwards means an
+        //    attacker chooses their own difficulty. Regtest masks this, because
+        //    0x207fffff is already the largest encodable target and no easier one
+        //    exists — but on testnet or mainnet the target varies, so declaring
+        //    the easiest permitted one is cheap and the check would pass.
+        require!(bits == lc.expected_bits, SolbeamError::UnexpectedRetarget);
+
+        // 3. It must be real work. Linkage is not evidence on its own: anyone
         //    can build an arbitrarily long chain of easy headers.
         require!(meets_target(&header, bits), SolbeamError::BadPow);
-
-        // 3. Regtest fixes the target. On testnet this must verify the retarget
-        //    instead — a flag, not an omission, so the testnet run is a config
-        //    change rather than a rewrite.
-        require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
 
         let height = lc
             .tip_height
@@ -343,8 +351,9 @@ pub mod solbeam {
         for raw in branch_bytes.chunks(HEADER_LEN) {
             require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
             let bits = read_u32_le(raw, 72);
+            // Target before work, for the reason given in `push_header`.
+            require!(bits == lc.expected_bits, SolbeamError::UnexpectedRetarget);
             require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
-            require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
 
             let hash = header_hash_of_bytes(raw);
             checked.push(hash);
@@ -554,7 +563,18 @@ pub mod solbeam {
             vout: claim.vout,
             height: claim.height,
         };
-        require!(!used.keys.contains(&key), SolbeamError::AlreadyMinted);
+        // Identity is (txid, vout) and deliberately NOT the height. A reorg
+        // re-includes the same transaction at a different height, so comparing
+        // the stored height would hand the deposit a fresh key and mint it a
+        // second time — an unbacked mint from a legitimate deposit. The height is
+        // stored only so stale entries can be pruned.
+        require!(
+            !used
+                .keys
+                .iter()
+                .any(|k| k.txid == key.txid && k.vout == key.vout),
+            SolbeamError::AlreadyMinted
+        );
         require!(used.keys.len() < MAX_USED, SolbeamError::NoRoomForMoreDeposits);
         used.keys.push(key);
 
@@ -638,6 +658,19 @@ pub struct LightClient {
     pub window_start: u64,
     /// The rolling window, oldest first.
     pub headers: Vec<HeaderRecord>,
+    /// Who may set the checkpoint or pause the client. **Without this, `authority`
+    /// in `SetCheckpoint` was a bare `Signer` compared to nothing, so any key could
+    /// rewrite the trusted root — the whole client's security — at will.** Set to
+    /// the initialising payer; production wants a governance multisig, and the
+    /// deploy-time race noted in TEST_PLAN remains.
+    pub authority: Pubkey,
+    /// The target every header must carry. **Read from the chain, never from the
+    /// header being checked.** The target previously came from the submitted
+    /// header's own `bits` field, so an attacker simply declared an easy target,
+    /// ground one hash, and the proof-of-work check passed — which made the
+    /// client forgeable by anyone with a laptop and made every "forging blocks
+    /// must out-mine the chain" claim false.
+    pub expected_bits: u32,
     pub paused: bool,
     pub bump: u8,
 }
@@ -648,6 +681,8 @@ impl LightClient {
         + 8                                    // tip_height
         + 32                                   // tip_hash
         + 8                                    // window_start
+        + 32                                   // authority
+        + 4                                    // expected_bits
         + 4 + (WINDOW * HEADER_RECORD_SIZE)    // headers: Vec length + records
         + 1                                    // paused
         + 1;                                   // bump
@@ -763,7 +798,12 @@ pub struct CommitFork<'info> {
 
 #[derive(Accounts)]
 pub struct SetCheckpoint<'info> {
-    #[account(mut, seeds = [b"light_client"], bump = light_client.bump)]
+    #[account(
+        mut,
+        seeds = [b"light_client"],
+        bump = light_client.bump,
+        has_one = authority @ SolbeamError::Unauthorized,
+    )]
     pub light_client: Account<'info, LightClient>,
     /// Timelocked governance multisig in production.
     pub authority: Signer<'info>,
@@ -961,7 +1001,12 @@ pub struct VerifyDeposit<'info> {
     pub used_deposits: Account<'info, UsedDeposits>,
     #[account(seeds = [b"deposit_script"], bump = deposit_script.bump)]
     pub deposit_script: Account<'info, DepositScript>,
-    #[account(mut)]
+    /// Pinned to the program's own mint PDA. Without this the caller supplies any
+    /// `Mint` whose authority happens to be this program's light-client PDA —
+    /// which anyone can create, since `InitializeMint` needs no authority
+    /// signature — and a valid public deposit is then consumed against a
+    /// counterfeit mint, stranding the real deposit permanently.
+    #[account(mut, seeds = [b"mint"], bump)]
     pub mint: Account<'info, Mint>,
     /// Created on the recipient's behalf if they have never held solBSV, so a
     /// first-time user needs no SOL to receive.
@@ -1175,4 +1220,6 @@ pub enum SolbeamError {
     ForkTooLong,
     #[msg("more headers in one batch than a transaction can carry")]
     BatchTooLarge,
+    #[msg("the signer is not the light client's authority")]
+    Unauthorized,
 }

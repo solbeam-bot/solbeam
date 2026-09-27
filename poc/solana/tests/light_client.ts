@@ -108,17 +108,27 @@ describe("solbeam — BSV light client", () => {
   });
 
   it("rejects a header whose proof of work misses its target", async () => {
-    // Constructed so linkage PASSES and the proof of work is the sole failure:
-    // parent set to the current tip, everything else arbitrary, and a target
-    // from mainnet difficulty, which no regtest nonce will meet.
+    // Linkage passes AND the target is the chain's own, so proof of work is the
+    // sole failure. This used to declare a mainnet target and rely on the
+    // resulting hash missing it; that is now caught earlier as
+    // UnexpectedRetarget, because the target is validated before it is used.
+    // So grind a nonce that genuinely misses the real target: its first
+    // big-endian byte is 0x7f, so a digest whose last byte (which becomes the
+    // first when reversed) is >= 0x80 sits above it.
     const lc = await program.account.lightClient.fetch(lightClient);
     const bad = Buffer.alloc(80);
     bad.writeUInt32LE(1, 0);
     Buffer.from(lc.tipHash).copy(bad, 4);
     Buffer.alloc(32, 0xab).copy(bad, 36);
     bad.writeUInt32LE(0, 68);
-    bad.writeUInt32LE(0x1d00ffff, 72);
-    bad.writeUInt32LE(0, 76);
+    bad.writeUInt32LE(0x207fffff, 72);
+
+    let nonce = 0;
+    for (;;) {
+      bad.writeUInt32LE(nonce, 76);
+      if (doubleSha256(bad)[31] >= 0x80) break; // above the target
+      nonce++;
+    }
 
     try {
       await program.methods
@@ -417,6 +427,19 @@ describe("solbeam — a hostile advancer", () => {
     const before = await tipHash();
     await attempt(raws[1]);
     expect((await tipHash()).toString("hex")).to.equal(before.toString("hex"));
+  });
+
+  it("rejects a header that declares its own target", async () => {
+    // The vulnerability this closes: the difficulty target used to be read from
+    // the submitted header's own `bits` field, so an attacker declared an easy
+    // target, ground a single hash, and the proof-of-work check passed. Twelve
+    // such headers and a fabricated deposit would mint. The target now comes
+    // from the chain, established at `initialize`.
+    const forged = Buffer.alloc(80, 0x33);
+    forged.writeUInt32LE(0x20000000, 0);              // version
+    doubleSha256(raws[raws.length - 1]).copy(forged, 4); // links to the real tip
+    forged.writeUInt32LE(0x2100ffff, 72);             // easier than regtest's target
+    expect(await attempt(forged)).to.equal("UnexpectedRetarget");
   });
 
   it("cannot smuggle a fork through push_header", async () => {
