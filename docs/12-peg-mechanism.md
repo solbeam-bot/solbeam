@@ -8,6 +8,22 @@
 
 ---
 
+### Vocabulary
+
+Four things are easy to conflate, so this document names them apart:
+
+| Term | Means |
+|---|---|
+| **The program** | The on-chain Solana program. Consensus. Consults nothing external |
+| **The peg** (or the bridge) | The whole mechanism — program, relayers, deposits, redemptions |
+| **The website** | `solbeam.me`. Order entry, the depth recommendation, relayer adverts, the status page. **Nothing here is consensus** |
+| **Monitoring** | The published surface: parameters, external metrics, Solana liveness |
+
+The distinction does real work. A recommendation or an advertised preference on the
+website can change as often as we like and carries no trust assumption; the same
+value influencing a mint decision in the program would be an oracle. "The system"
+is not used in this document, because it could mean any of the four.
+
 ## Recommended state
 
 ### Peg-in — BSV → solBSV
@@ -95,16 +111,16 @@ downstream.
 | **`FLOOR`** | Consensus — voted, increase-only | The hard protection. Binds every mint regardless of who asks |
 | **Committed depth** | The deposit's `OP_RETURN` | The depositor's own risk choice, enforced by the program |
 | **Relayer preferences** | Off-protocol advert | Preferred depth and size for their best rate |
-| **Recommendation** | UI and monitoring | An adaptive suggestion with no consensus role |
+| **Recommendation** | The website | An adaptive suggestion with no consensus role |
 
 **Why a depositor would ever choose above the floor.** A longer wait is less risky for
-whoever fronts the mint, so it buys a better rate — and it is better for the system,
+whoever fronts the mint, so it buys a better rate — and it is better for the peg,
 because fewer mints sit close to the tip where a reorg can reach them. The incentive
 has to come through the fee; a depositor has no reason to wait longer for nothing.
 
 **Why relayers advertise.** A relayer publishes the depth and size at which it offers
-its lowest rate. That is a **public schema rather than a contract** — published by the
-system, consumable by any front-end, changing nothing on-chain. It lets a depositor
+its lowest rate. That is a **public schema rather than a contract** — published on the
+website, consumable by any other front-end, changing nothing on-chain. It lets a depositor
 see what is on offer before choosing, and lets competing venues quote against the same
 terms.
 
@@ -243,7 +259,7 @@ Three things make this expensive, and **none of them is detection**:
 
 Detection — the gates above — is the *fourth* layer. It reduces the window of
 opportunity and it protects honest users from being caught mid-flight. It is not
-what makes the system safe, and it should not be sold as such: **a gate that
+what makes the peg safe, and it should not be sold as such: **a gate that
 depends on someone submitting a competing branch is a liveness assumption, not a
 guarantee.**
 
@@ -483,7 +499,7 @@ row is listed first.
    The reason it is rejected is **not** that those quantities are unknowable — they
    are entirely knowable and worth showing. It is that they must stay **outside the
    protocol**. Tuning the cap inside consensus would mean consulting an external
-   market from the program itself, and this system consults nothing external: by
+   market from the program itself, and the program consults nothing external: by
    construction `1 BSV = 1 solBSV`. Importing oracles to derive one integer would
    trade away the property the whole design rests on, in exchange for a number that
    would still be a guess dressed as a calculation.
@@ -558,7 +574,7 @@ would be.
 **One qualification on *votable*.** It should not mean freely *loosenable*. Whoever
 can vote `C` down toward zero holds a mint voucher, and no amount of deliberation
 makes that safe. The reconciling rule is **increase-only under governance**: a vote
-can make the system more conservative at any time, while making it *less*
+can make the protocol more conservative at any time, while making it *less*
 conservative means shipping a new program. That gives the change mechanism the
 review asked for without turning the vote itself into the attack path — and it is
 the one place where the two positions in this document genuinely differ, so it is
