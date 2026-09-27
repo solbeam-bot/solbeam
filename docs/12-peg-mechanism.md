@@ -764,6 +764,88 @@ The covenant track in [`04-trust-model.md`](04-trust-model.md#the-roadmap-to-a-s
 in-script verification — removes the spending key entirely. That is the destination;
 per-relayer deposits are the path that does not depend on it landing.
 
+## Is the buffer a protocol input? — yes, and it can be checked
+
+Review asked whether the buffer must be a protocol input, and whether mint and redeem
+should be gated on it per transaction. **Yes to both, but only once two things are true**,
+and the gap is in the second.
+
+### The bond is checkable; the BSV is not. Use the bond.
+
+Per-relayer (see §A6), the program knows two quantities without an oracle:
+
+- **`owed_R`** — what relayer `R` has been credited, accumulated from proofs the program
+  verified itself;
+- **`bond_R`** — `solBSV` the program holds and can seize.
+
+So the gate is a per-transaction check, and it is enforceable today:
+
+> A mint naming relayer `R` is refused unless `bond_R ≥ k × (owed_R + this mint)`.
+> A redemption is refused unless some relayer with sufficient bond accepts it.
+
+If the buffer is meant as a protocol input, **this is the input.** The off-chain BSV is
+not, and does not need to be — the bond is the thing that can actually be seized, so it is
+the thing worth gating on.
+
+### The missing piece: the relayer must consent
+
+Without consent the gate is unfair in a way that breaks it. A fraudulent mint names *some*
+relayer's script, and if the program credits `owed_R` on the strength of the proof alone,
+an innocent relayer's bond is slashed for an attack it never agreed to and could not have
+detected.
+
+So a mint against `R` needs **`R`'s signature accepting the liability**. That converts the
+reorg risk from an externality into a priced term — `R` knows what it is underwriting and
+charges for it — and it is what makes slashing `R` for a shortfall defensible rather than
+arbitrary. Consent is also what makes the per-transaction gate meaningful: you cannot
+check a relayer's capacity if you never asked it whether it was willing.
+
+### The bootstrap path
+
+The gate has a chicken-and-egg problem: nothing can mint until a bond exists, and the bond
+is funded by staking, which in turn has nothing to earn from until mints happen. So there
+must be an explicit **initialisation path** that is not a normal peg-in — a genesis stake
+that seats the first relayer and its bond, after which the ordinary path takes over. It
+needs to be a separate instruction with its own rules and its own test, not a special case
+buried in the mint. **Owed a design pass; recorded here rather than invented in passing.**
+
+### On the reserve: do not pool it, rather than securing a pool
+
+Review asked whether the reserve should be a second smart contract, with funds aggregated
+and the two-gate lock preventing fraud. The two halves of that need separating, because
+they defend against different things and only one of them is a reserve question.
+
+**The two-gate lock does not protect the reserve.** It protects against a **fraudulent
+mint** — staged tokens are burned when a reorg is followed, so a fake deposit never becomes
+liquid. That is a Solana-side defence and it works without any BSV contract. What it does
+*not* do is stop a relayer spending funds it already holds; nothing on the Solana side can
+observe that.
+
+**Aggregation is what creates the reserve problem.** One pot means one key worth stealing,
+and a key that can be stolen needs either a covenant or a committee. A BSV Script cannot
+constrain where a key sends funds, so "the reserve is a contract that only releases against
+a valid burn proof" is the covenant track — `OP_CAT`, `OP_MUL`, in-script proof
+verification — which is pre-mainnet and unaudited.
+
+| Shape | Reserve key | Needs |
+|---|---|---|
+| **Pooled** | One key, or a covenant | A committee, or the covenant track |
+| **Distributed per relayer** ✅ | Each relayer's own, spent by its own key | Nothing beyond the seizable bond |
+
+**So the recommendation is to not have a pooled reserve at all.** With deposits paying
+individual relayers, there is no aggregated pot and therefore no reserve contract to
+write, audit or trust — each relayer's exposure is `owed_R`, individually bonded and
+seizable on Solana. Aggregation is the thing that creates the problem; removing it is
+cheaper than securing it.
+
+The UX does not have to suffer: the website can present one address and rotate it, while
+custody stays distributed. What the depositor sees and who holds the key are separate
+questions.
+
+**If a pooled reserve is ever wanted anyway**, the covenant is the only non-custodial way
+to do it, and it is the reason docs 04 and this document keep the redemption authority
+replaceable. That is a destination, not a prerequisite.
+
 ## Audit findings
 
 An adversarial review ran this document against the implemented program. Severities are
