@@ -33,7 +33,7 @@ The Python checker suite passes **156/156** offline, and **157/157** with a live
 
 ### 1.3 Not started
 
-- **Phase 2 — in progress.** The light client is built and verified on-chain (checkpoint, 64-header window, linkage, proof of work; 4 tests against the fixture). Outstanding: chainwork, the Merkle fold and mint, `solBSV`, and the hostile advancer.
+- **Phase 2 — nearly complete.** The light client, the deposit verifier and the `solBSV` mint are built and verified on-chain — **13 tests** against the fixture, including a hostile-advancer suite. Outstanding: **reorg handling**, which is a design decision as much as a coding one, and the chainwork that goes with it. See §4.5.
 - **Phase 3** — the off-chain services (advancer / watcher / relayer); bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
 - **Phase 5** — monitoring. Plan only; see §11.
@@ -261,6 +261,22 @@ Regtest has a fixed target, so DAA can be skipped for the PoC. **But it must be 
 **Phase 2 is done when** a deposit fixture produced by Phase 1 mints `solBSV` on a clean local validator, and a hostile advancer cannot forge one.
 
 ---
+
+### 4.5 Known gap: reorg handling
+
+**Found by the hostile-advancer tests, not by inspection.** `push_header` requires a header to extend the current tip. That is what makes the client safe against a hostile advancer — it cannot reorder, replay, rewind or substitute a branch — but it has a second consequence:
+
+**the client cannot follow a legitimate reorg either.** A real reorg presents headers built on an older block. They are rejected, correctly, and the client stays on the abandoned branch. It stalls permanently rather than switching.
+
+That is a correctness gap, not a security one: no false proof becomes acceptable, but the header chain stops advancing and minting stops with it. It must be closed before testnet, where reorgs are real.
+
+**The shape of the fix, and the decision it needs:**
+
+1. **accumulated chainwork** — `work = 2^256 / (target + 1)` per header, summed. On regtest every header has the same target, so work is proportional to *length* and the whole mechanism is untestable there; getting it right wants 256-bit arithmetic, most cleanly the `uint` crate. This is the same category as DAA: a flag on a mechanism that regtest cannot exercise.
+2. **a way to submit a competing branch** — some form of `push_fork(from_height, headers[])`, validating linkage and proof of work across the branch before considering it.
+3. **the replacement policy**, which is the actual decision: does a heavier branch replace the window unconditionally, how far back may it fork, and what happens to redemptions already settled against a header that is later orphaned? That last question is a *design* question with real consequences, and it belongs with the peg-out discussion rather than being settled by whoever is typing.
+
+Deliberately not guessed at. Recorded so the next person starts from the gap rather than rediscovering it.
 
 ## 5. Phase 3 — peg out
 
