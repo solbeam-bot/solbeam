@@ -908,6 +908,89 @@ reasonable choice for a user who understands it, but "at the sender's risk" unde
 — the tail lands on holders. That is precisely the gap a buffer closes, and precisely why
 the buffer's size is the number worth watching.
 
+## Flows at a glance
+
+```
+PEG IN — BSV to solBSV
+  1  CHOOSE    depositor takes terms from the book, or accepts no backing
+  2  SEND      BSV to a relayer's script; OP_RETURN carries the Solana address
+  3  DEPTH     wait the depth the bid named, measured in block time
+  4  MINT      solBSV issued into the program's vault, not to the depositor
+  5  MATURE    if no reorg is followed, the vault releases; fee to the stakers
+               if a reorg IS followed, the staged tokens are burned. No loss
+
+PEG OUT — solBSV to BSV
+  1  ESCROW    solBSV moves into the program's vault; a BSV destination is named
+  2  ACCEPT    a relayer with bond to cover it takes the request
+  3  DEADLINE  slots, not wall-clock, so a Solana halt freezes the clock
+  4  PAY       the relayer pays BSV and proves it against the light client
+  5  CHALLENGE a reorged payout is caught here
+  6  SETTLE    burn the escrowed solBSV, pay the fee
+               or on failure, return the escrow to the user. Supply never changes
+```
+
+Both gates are the same shape: **enter the vault, then leave it either to the counterparty
+or back to the sender.** Every failure path is a return rather than a mint.
+
+---
+
+## Decision points for review
+
+Ordered by how much they block. `D1` onwards are the live ones; everything else in this
+document is either settled or a consequence.
+
+### D1 — Who may stake: specialists, or delegated retail?
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Specialists only, with a minimum stake either side** | Sophisticated parties who can price reorg and custody risk; simpler to reason about | Thin liquidity at launch; excludes everyone else |
+| **Delegated staking — retail pledges to a specialist operator** | Deep liquidity; a familiar model; a real product for exchanges and miners to offer, with rewards for retail | Retail cannot assess operator risk, so slashing lands on people who could not evaluate it; needs an operator-selection story |
+
+Not mutually exclusive: specialists first, delegation once the mechanics are proven.
+
+### D2 — Can a staker's bid fill automatically?
+
+**No, as it stands.** A bid that always fills is farmed by a miner who deposits and then
+reorgs their own block away. The options are a **last-look window** (firm, but refusable
+briefly), explicit approval per request, or auto-approval with the risk priced in — and the
+third does not survive a mining attacker. This is the open question most likely to change
+the shape of the book.
+
+### D3 — How does the system start?
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Compile-time test mint** (`#[cfg(feature = "poc")]`) | Cannot leak to production, which a runtime flag can | Test-only; does not solve genesis |
+| **First stake is the genesis** | No privileged mint at all; the book simply starts empty and fills | The very first staker takes unhedged risk with no fee history to price it |
+| **Slot-bounded seeding authority** | A named key may seed until a slot, then is permanently dead. The bound is chain-native, so no oracle | A privileged window, however short |
+
+The observation worth carrying into tomorrow: **the bootstrap problem is about staking
+first, not minting.** Once a stake exists, ordinary peg-ins work. So genesis is a *stake*,
+and an initialisation mint may not be needed at all.
+
+### D4 — Is `FLOOR` still needed?
+
+Once depth is a term of each bid, `FLOOR` is a backstop rather than a price. Keeping it low
+enough never to bind, but high enough to catch a bid nobody should accept, is the current
+recommendation. Dropping it entirely is defensible if the book is the only way in.
+
+### D5 — The bond multiple `k`
+
+`bond ≥ k × owed`. `k = 1` covers the principal; anything above covers the case where the
+bond is worth less exactly when it is needed. Unsettled.
+
+### D6 — Does the unbacked path exist at all?
+
+An unseeded book is safe against accident but **not** against attack: the attacker in a
+self-reorg is the depositor, so a detection failure dilutes every holder. Either exclude
+the path until the book is seeded, or accept the tail explicitly.
+
+### Still open from earlier
+
+- **Votable or increase-only** for safety parameters (the one place the two positions in
+  this document genuinely differ).
+- **The reserve invariant** — hard assertion or target with an explicit failure mode.
+
 ## Audit findings
 
 An adversarial review ran this document against the implemented program. Severities are

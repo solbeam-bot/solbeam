@@ -145,6 +145,8 @@
         <li><strong>Underwriting as an order book.</strong> Stakers post sell orders — so much liquidity at 10&nbsp;bp, more at 50&nbsp;bp — matched by price then time, partially filled, with unused stake returned. The fee is discovered rather than chosen, and the depositor can see the liquidity and its price before committing.</li>
         <li><strong>Stakers are paid in what they stake</strong> — BSV for BSV, <code>solBSV</code> for <code>solBSV</code>. They underwrite the system, so a fraudulent mint lands on volunteers rather than diluting every holder.</li>
         <li><strong>Open question: a staker cannot simply auto-approve.</strong> A bid that always fills is picked off by a miner who deposits and then reorgs their own block away. Bids need a short last-look window or explicit approval, and neither is built or settled yet.</li>
+        <li><strong>Open question: who may stake.</strong> Specialists with a minimum stake either side is the simple start; delegated staking — retail pledging to a specialist operator, as a product for exchanges and miners — would deepen liquidity but lands slashing risk on people who cannot assess it.</li>
+        <li><strong>Open question: how the system starts.</strong> The bootstrap is about staking first, not minting, so genesis may be a stake rather than a special mint. A compile-time test mint covers the PoC; a slot-bounded seeding authority covers a named seeder without an oracle.</li>
         <li><strong>No oracles.</strong> Reorg depth and block time come from the BSV headers; deadlines come from Solana slots.</li>
       </ul>
     </div>
