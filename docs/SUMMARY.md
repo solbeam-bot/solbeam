@@ -12,3 +12,4 @@
 * [9. Glossary](09-glossary.md)
 * [10. Brand & visual language](10-brand.md)
 * [11. Markets & liquidity](11-markets-and-liquidity.md)
+* [12. Peg-in and peg-out: the mechanism](12-peg-mechanism.md)

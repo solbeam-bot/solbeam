@@ -331,6 +331,13 @@ Two latent bugs on the reorg path were fixed while the fields were being reshape
 
 ## 5. Phase 3 — peg out
 
+> **The mechanism these tests must implement is specified in
+> [`docs/12-peg-mechanism.md`](../docs/12-peg-mechanism.md)** — the peg-in and
+> peg-out flows, the reorg gates, the relayer and bond model, and the parameter
+> classes. That document is the source of truth; where it and this plan disagree,
+> it wins and this plan is updated. The tests below predate it and have not yet
+> been aligned with the gates it specifies.
+
 **Goal: the enforcement path works — burn, pay, prove, settle — and cheating is bounded, punished, or both.**
 
 This is where the trust-minimised machinery lives, and where the recent trust-model corrections ([`docs/04-trust-model.md`](../docs/04-trust-model.md#the-naked-option-attack)) turn into tests. The bond is **denominated in `solBSV`**, and the two invariants that matter are `bond ≥ k × (hot float + releasable tranche)` and `custodied BSV ≥ outstanding solBSV` at every step.
