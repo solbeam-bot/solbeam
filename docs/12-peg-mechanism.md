@@ -73,6 +73,74 @@ can leak to mainnet, a compile-time one cannot.
 
 ---
 
+## Who this is for, and why the delays are acceptable
+
+The peg is **wholesale infrastructure, not a retail product.** It is built for
+market makers, larger LPs and exchanges who move the coin back and forth to earn
+a yield and to rebalance inventory on both sides of the fence. Retail is expected
+to reach `solBSV` through an exchange or through Raydium, not through the peg
+directly. That framing resolves most of the apparent tension in the gates above.
+
+### The security is economic, and it is Bitcoin's own
+
+Bitcoin's double-spend resistance is an *economic* argument, not a cryptographic
+one: confirmations are secure when out-mining them costs more than the value they
+protect. Nothing here invents a new assumption. The peg extends the same logic one
+layer up, deliberately goes **beyond** the whitepaper's six confirmations, and adds
+a revert path on top. What is added is not a new trust model — it is a larger
+margin on the existing one.
+
+Two calibration warnings, both load-bearing:
+
+- **BSV's hashpower is not Bitcoin's.** The whitepaper's table is parameterised by
+  `q`, the attacker's *share* of hashpower. On a chain with less total hashpower,
+  reaching a given `q` costs less in absolute terms, so six confirmations do not
+  carry the same meaning here. `C` must be calibrated to **BSV**, not inherited.
+- **`C` must move with the value it secures.** A depth adequate for 10 BSV is not
+  adequate for 10,000.
+
+### The gates protect the backing, not the depositor
+
+This is what makes them not paternalism. A fraudulent mint does not merely
+inconvenience the depositor — **it dilutes everyone holding `solBSV`.** The gates
+protect the token's backing, which is the market makers' own inventory. They are a
+collective protection that the professionals benefit from most, not a judgement
+about a user's ability to assess risk.
+
+### Loops must be open to anyone
+
+For the peg to hold, **both directions must be permissionless and open to
+anyone** — the loop is what lets the market arbitrage `solBSV` back to BSV. This
+has a hard consequence that is easy to miss:
+
+> **Gate symmetry is a peg-integrity requirement, not a fairness one.**
+
+Pausing peg-in while leaving peg-out open pushes the price up; pausing peg-out
+while leaving peg-in open pushes it down **and leaves open exactly the exit the
+gate existed to close**. Either way the token trades at a basis. When a gate
+closes it must close **both ways** — and the secondary market is then free to
+price the risk, which is the honest outcome and the reason the pause is not
+patronising. We stop the protocol, not the market.
+
+### The fee is a yield on locked capital, and competition sets it
+
+Capital is tied up for roughly half a day per cycle, so about two cycles a day can
+be run. That makes even a small fee a large annualised yield on deployed capital —
+a 10 bp fee is on the order of 70% annualised — which is exactly what the bidding
+process is for. **The fee should compete down to the cost of capital for half a
+day plus the reorg risk carried.** Anyone may peg back in and compete for the whole
+flow, at the price of having capital locked for that period.
+
+An exchange cross is a natural pressure valve: an exchange with a balance sheet on
+both sides can quote tighter than the peg. That is healthy and it caps the fee.
+It is worth being clear about what it does *not* do — a cross is a **centralised**
+substitute, and it works only because it can fall back on the trustless peg to
+rebalance. If the peg breaks, the exchange's `solBSV` is unbacked too. That is why
+the peg being wholesale and boring does not make it unimportant: **it is the
+settlement layer everything else derives from.**
+
+---
+
 ## The attack this defends against
 
 A reorg is not interesting because it moves blocks. It is interesting because of
@@ -264,6 +332,17 @@ row is listed first.
    the depth rule and the block-time signals are in place?
 6. **Reserve invariant.** Does `custodied BSV ≥ outstanding solBSV` hold
    *continuously*, or only after settlement? Re-mints make it transiently false.
+7. **Is `MAX_PEG_IN` a safety parameter at all?** The real bound on a theft is the
+   **hot float cap**, not the deposit size — a fraudulent mint can only be cashed
+   out up to what a relayer can actually pay. If `MAX_PEG_IN` is only operational,
+   it can be set for reserve management. If it is meant as a safety bound, it must
+   sit *below* the cost of reorging `C` BSV blocks. A 10,000 BSV maximum is roughly
+   $300k at writing against a 12-block reorg costing orders of magnitude less, so
+   as it stands the number is not doing safety work — the float cap is.
+8. **Calibrating `C` to BSV.** What is the actual cost of acquiring enough BSV
+   hashpower to out-mine `C` blocks for the required duration, and how often must
+   that be re-measured as BSV's hashrate moves? This is the input the whole
+   economic argument rests on and nothing in the PoC measures it.
 
 ---
 
