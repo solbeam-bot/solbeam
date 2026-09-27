@@ -24,6 +24,38 @@ website can change as often as we like and carries no trust assumption; the same
 value influencing a mint decision in the program would be an oracle. "The system"
 is not used in this document, because it could mean any of the four.
 
+### No oracles, by construction
+
+The mechanism needs none. It is worth being explicit about where each would
+otherwise have appeared and what replaced it:
+
+| Would have needed | Replaced by |
+|---|---|
+| A hashpower or price feed to compute a "safe" confirmation depth | A voted `FLOOR`, plus a depth the depositor chooses and relayers price |
+| A feed to price reorg risk | Relayers pricing it into the fee; the website publishing the metrics |
+| A price feed to value the bond | `1 BSV = 1 solBSV` by construction. A deviation is an arbitrage, not an input |
+| An external source for *has BSV reorged, and how deep?* | **The BSV headers themselves.** Chain data, not external data |
+| Wall-clock to expire a redemption deadline | **Solana slots.** A halt freezes the clock instead of burning the relayer |
+| A price oracle to size the mint cap | A conservative policy value, published, with the metrics shown beside it |
+
+Two rules cover every row:
+
+- **Chain-native.** Anything the program must *react* to is read from a chain —
+  reorg depth and block time from BSV headers, deadlines from Solana slots.
+- **Market-native.** Anything that would need external data becomes a term of
+  trade, discovered off-chain and published on the website.
+
+**The market layer is not merely advisory**, and this is the part that makes the
+substitution work. The depositor commits their chosen depth in the deposit's
+`OP_RETURN`, so the program **enforces** a market-negotiated term while never
+knowing an external price. It does not need to understand *why* the depth is what
+it is — only that the commitment is honoured and sits at or above `FLOOR`.
+
+**The one residual judgement is `FLOOR` itself.** It is a voted policy value rather
+than a measurement: governance, not an oracle. The design has no oracles; it does
+have a parameter somebody has to choose, and *that* is the thing worth arguing
+about.
+
 ## Recommended state
 
 ### Peg-in — BSV → solBSV
