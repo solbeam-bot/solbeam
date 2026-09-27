@@ -39,12 +39,11 @@ clear and is then minted normally. The funds stay with the bridge throughout.
   7. SETTLE        fee to relayer — or, on failure, RE-MINT and slash the bond
 ```
 
-**Peg-out is gated even though the burn is final.** This is the correction from
-review: a reorg cannot invalidate a Solana burn, so the naive reading is that
-peg-out needs no reorg protection. That reading is wrong, and the reason is
-§The attack, not the mechanism — **peg-out is the exit**. If a fraudulent mint
-succeeds, peg-out is how the attacker turns it into real BSV. Gating the exit
-is therefore the defence that matters most.
+**Peg-out is gated even though the burn is final.** A reorg cannot invalidate a
+Solana burn, so the naive reading is that peg-out needs no reorg protection. It
+does — but for a smaller reason than it first appears. Peg-out is one exit among
+several, and **gating it is a speed bump rather than the defence.** See
+§Where the loss actually lands.
 
 ### Parameters
 
@@ -209,6 +208,72 @@ guarantee.**
 
 ---
 
+## Where the loss actually lands
+
+### The invariant, stated the right way round
+
+What is at risk is **unbacked `solBSV`** — more `solBSV` outstanding than BSV
+custodied. The invariant is
+
+> `custodied BSV ≥ outstanding solBSV`
+
+and a successful reorg attack violates it by creating supply with nothing behind it.
+The reverse (more BSV than supply) is the *safe* direction, merely inefficient.
+
+### A fraudulent mint has more than one exit
+
+The attacker's difficulty is not obtaining `solBSV` — it is turning it into something
+else. There are three routes, and **the protocol controls exactly one**:
+
+| Exit | Who absorbs the loss | Gateable? |
+|---|---|---|
+| **Peg-out** via the protocol | The relayer's hot float, up to the float cap | Yes — gated, and the residual risk is priced into the fee |
+| **DEX** (Raydium / Orca) | The **LPs** in the pool, who bought `solBSV` that is not backed | **No.** A permissionless AMM cannot be frozen |
+| **CEX** | The exchange, and its users if it cannot cover | **No.** Off-chain entirely |
+
+So gating peg-out closes one door and leaves two open. It is still worth doing — it
+removes the deepest, fastest exit and forces the attacker through market slippage,
+which costs them real money — but it is **not** what makes the peg safe, and this
+document previously came close to saying that it was.
+
+### What actually protects
+
+Only one mechanism attacks the fraud itself rather than its exit:
+
+- **`C`, the confirmation depth.** It is what makes out-mining the honest chain cost
+  more than the fraud is worth. Every other control silently assumes the fraudulent
+  mint has already happened.
+- **The hot float cap** bounds what the *protocol* can lose once it has.
+- **The bond** covers the protocol's loss, and guarantees the relayer honours
+  redemptions at all.
+
+The honest consequence, which belongs in the document rather than in a footnote:
+**if `C` is too low, the loss lands on DEX LPs and exchanges, and the protocol cannot
+compensate them.** They are not identifiable from on-chain state, they never
+interacted with the bridge, and there is nothing to re-mint them with. That is a
+stronger argument for setting `C` conservatively than anything about the exit gate.
+
+### Who gets slashed, and who gets paid
+
+The bond is a **performance bond**. It guarantees the relayer pays valid redemptions.
+It is *not* reorg insurance: a relayer paying out against a fraudulent mint has done
+nothing wrong, because they cannot tell it from a real one.
+
+When a redemption fails, the **supply-conserving** settlement is:
+
+1. **slash the bond and transfer that `solBSV` to the redeemer**, and
+2. only if the bond is short, **mint the remainder**.
+
+This makes the redeemer whole while **leaving total supply unchanged** wherever the
+bond covers it. Re-minting alone would inflate supply and dilute every holder;
+slashing and transferring moves existing tokens instead. Where the bond is short, the
+shortfall *is* dilution — which is exactly what `k` exists to bound.
+
+**Return-to-sender is a different mechanism and does not apply here.** RTS is for a
+*real* deposit the bridge declines to mint: the funds go back to the address that
+funded the deposit transaction. In a fraudulent mint there is no aggrieved sender —
+the victims are whoever ends up holding the unbacked tokens, which is the market.
+
 ## Reorg detection
 
 ### Rule 1 — depth, not wall-clock
@@ -358,9 +423,12 @@ row is listed first.
    having to absorb a standing discount. The consequence of that assumption is
    recorded in decision 3, because it is what makes the compensation rule coherent.
 
-3. **Slashing destination — the victims, in `solBSV`.** The BSV never reached the
-   end user, so compensating them in BSV is not available; the slashed `solBSV`
-   returns to them instead, and they hold the same *amount* on the wrong chain.
+3. **Slashing destination — the redeemer, in `solBSV`, supply-conservingly.** The BSV
+   never reached the end user, so compensating them in BSV is not available; the
+   slashed `solBSV` transfers to them instead and they hold the same *amount* on the
+   wrong chain. Because the bond's tokens move rather than new ones being minted,
+   **total supply is unchanged wherever the bond covers the redemption** — see
+   §Who gets slashed, and who gets paid for the settlement order and the shortfall.
    This is the honest consequence of refusing a freeze authority: **holders keep
    their balance through a default and absorb any shortfall as a discount rather
    than a confiscation.** The bond protects against the relayer absconding — it
