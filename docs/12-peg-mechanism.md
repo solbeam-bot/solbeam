@@ -368,12 +368,23 @@ row is listed first.
    described as if it does.
 
 4. **`C` is a policy parameter, not a derived one.** Sizing it from the cost of
-   reorging `C` blocks looks rigorous and is not. It needs a **BSV price oracle** to
-   value what is at risk and a **hashpower-rental oracle** to price the attack, and
-   this system deliberately has neither: by construction `1 BSV = 1 solBSV`, and
-   nothing consults an external market. Importing two oracles to tune one integer
-   would trade away the property the whole design rests on, in exchange for a number
-   that would still be a guess dressed as a calculation.
+   reorging `C` blocks needs a **BSV price feed** to value what is at risk and a
+   **hashpower-rental feed** to price the attack.
+
+   The reason it is rejected is **not** that those quantities are unknowable — they
+   are entirely knowable and worth showing. It is that they must stay **outside the
+   protocol**. Tuning the cap inside consensus would mean consulting an external
+   market from the program itself, and this system consults nothing external: by
+   construction `1 BSV = 1 solBSV`. Importing oracles to derive one integer would
+   trade away the property the whole design rests on, in exchange for a number that
+   would still be a guess dressed as a calculation.
+
+   > **A metric is not an oracle.** BSV price, estimated reorg cost, hashrate and the
+   > observed block rate are all fair game as *published information* — they help a
+   > user judge the risk they are taking, and they can shape how relayers price. What
+   > they must never do is change what the program *does*.
+   >
+   > **Display anything; decide on nothing external.**
 
    So `C` is set **high and conservatively as a policy choice**, changed by vote, and
    **disclosed before someone transacts**. It does not need to be dynamic. What
@@ -426,7 +437,14 @@ bounds that need no oracle at all:
 
 All of these are **votable and disclosed**. The disclosure matters more than the
 value: a user should be able to see `C`, the cap and the float limit before they
-transact, and monitoring is what makes that possible.
+transact.
+
+Monitoring is also where the **external metrics** belong — the ones that must never
+enter consensus. A user deciding whether to peg in is better served by seeing the
+BSV price, an estimated cost to reorg `C` blocks, the current hashrate and the
+observed block rate alongside the parameters than by seeing the parameters alone.
+Published, none of it is a trust assumption; consulted by the program, all of it
+would be.
 
 **One qualification on *votable*.** It should not mean freely *loosenable*. Whoever
 can vote `C` down toward zero holds a mint voucher, and no amount of deliberation
