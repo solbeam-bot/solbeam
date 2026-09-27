@@ -315,3 +315,88 @@ describe("solbeam — verify a deposit against the window", () => {
     }
   });
 });
+
+/**
+ * The advancer is permissionless and untrusted. This is where that claim is
+ * tested rather than asserted: the worst it should be able to do is waste its
+ * own fees, never forge, reorder, or rewind its way to a false proof.
+ */
+describe("solbeam — a hostile advancer", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as Program<Solbeam>;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const raws: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+
+  const tipHash = async (): Promise<Buffer> => {
+    const lc = await program.account.lightClient.fetch(lightClient);
+    return Buffer.from(lc.tipHash);
+  };
+
+  /** Attempt a push, and report the error code the program chose. */
+  const attempt = async (header: Buffer): Promise<string> => {
+    try {
+      await program.methods.pushHeader(Array.from(header))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      return "ACCEPTED";
+    } catch (e: any) {
+      const m = String(e).match(/Error Code: (\w+)/);
+      return m ? m[1] : String(e).slice(0, 60);
+    }
+  };
+
+  before(async () => {
+    if (!(await provider.connection.getAccountInfo(lightClient))) {
+      const cp = raws[0];
+      await program.methods
+        .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
+        .accounts({ lightClient, payer: provider.wallet.publicKey })
+        .rpc();
+      for (const raw of raws.slice(1)) {
+        await program.methods.pushHeader(Array.from(raw))
+          .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      }
+    }
+  });
+
+  it("cannot push a fabricated header", async () => {
+    // Random 80 bytes with a plausible target. Its parent is nothing, so it
+    // cannot pass the linkage check however good its proof of work looks —
+    // which is the point: a valid hash alone proves nothing.
+    const fabricated = Buffer.alloc(80, 0x5a);
+    fabricated.writeUInt32LE(0x207fffff, 72);
+    expect(await attempt(fabricated)).to.equal("BrokenLinkage");
+  });
+
+  it("cannot replay or reorder an accepted header", async () => {
+    // A real header, real proof of work, already in the window. Its parent is
+    // the block before it, not the tip.
+    expect(await attempt(raws[5])).to.equal("BrokenLinkage");
+    expect(await attempt(raws[raws.length - 1])).to.equal("BrokenLinkage");
+  });
+
+  it("cannot rewind the tip", async () => {
+    const before = await tipHash();
+    await attempt(raws[1]);
+    expect((await tipHash()).toString("hex")).to.equal(before.toString("hex"));
+  });
+
+  it("cannot follow a fork, which is the gap this test exists to expose", async () => {
+    // A header built on an *older* block: exactly what a legitimate reorg
+    // presents. It is rejected, correctly, because it does not extend the tip —
+    // but the consequence is that the client cannot FOLLOW a reorg either. It
+    // stalls and stays on the abandoned branch.
+    //
+    // That is the honest state: safe against a hostile advancer, but blind to a
+    // real reorg. Recorded in TEST_PLAN.md as a known gap with a plan.
+    const forked = Buffer.alloc(80, 0x33);
+    forked.writeUInt32LE(0x20000000, 0);          // version
+    raws[3].copy(forked, 4, 4, 36);               // parent = an OLD header
+    forked.writeUInt32LE(0x207fffff, 72);
+    expect(await attempt(forked)).to.equal("BrokenLinkage");
+  });
+});
