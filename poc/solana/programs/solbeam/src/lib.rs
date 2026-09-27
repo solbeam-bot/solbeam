@@ -213,7 +213,8 @@ pub mod solbeam {
             require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
             require!(check_daa(bits), SolbeamError::UnexpectedRetarget);
 
-            let hash = header_hash(raw);
+            // header_hash_of_bytes takes a slice; the chunks are slices.
+            let hash = header_hash_of_bytes(raw);
             branch.push(HeaderRecord {
                 height: from_height + 1 + i as u64,
                 hash,
