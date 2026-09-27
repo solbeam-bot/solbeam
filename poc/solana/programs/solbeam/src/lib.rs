@@ -39,10 +39,26 @@ declare_id!("EYsckW3596zBL1pxfxGev44z6LH4hEpoHff7tSisvjCW");
 /// BSV headers are always exactly 80 bytes.
 pub const HEADER_LEN: usize = 80;
 
-/// How many headers the window keeps. Must comfortably exceed the confirmation
-/// depth (12), because a mint has to prove inclusion in a block that is still
-/// inside the window. 64 leaves a wide margin and bounds the rent.
-pub const WINDOW: usize = 64;
+/// How long a reorg the client can follow, expressed in TIME rather than a
+/// block count — the earlier "64" was arbitrary and nothing justified it.
+///
+/// BSV targets a ten-minute block, so 24 hours is 144 blocks. A day is the
+/// right scale because a reorg deeper than that does not mean "we should have
+/// kept more headers", it means BSV is broken and the peg has far larger
+/// problems than its header window.
+///
+/// Two constraints set what is affordable, and both are hard:
+///
+///   * **Account creation caps at 10,240 bytes.** A window of 144 headers must
+///     therefore keep its per-header record small. `HeaderRecord` stores only
+///     hash + Merkle root (64 bytes); with the old 116-byte record this would
+///     be 16,766 bytes and `initialize` would simply fail.
+///   * **The whole account is deserialised on every instruction**, so a bigger
+///     window is also more compute on the mint path. 9,216 bytes of records is
+///     comfortable against the 200,000 CU budget.
+pub const WINDOW_HOURS: u64 = 24;
+pub const SECONDS_PER_BLOCK: u64 = 600;
+pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; // 144
 
 /// How deep a deposit must be buried before it can be minted. Twelve blocks is
 /// roughly two hours on BSV. The test matrix compresses time, not depth, so this
@@ -58,14 +74,23 @@ pub const TOKEN_DECIMALS: u8 = 8;
 /// growable so the account can be sized up front and never needs reallocating.
 pub const MAX_USED: usize = 256;
 
-/// Worst-case size of one `HeaderRecord` in the account.
-pub const HEADER_RECORD_SIZE: usize = 8   // height
-    + 32                                   // hash
-    + 32                                   // prev
-    + 32                                   // merkle_root
-    + 4                                    // time
-    + 4                                    // bits
-    + 4;                                   // nonce
+/// Size of one `HeaderRecord`: the hash for linkage, the Merkle root for deposit
+/// proofs, and nothing else. Height is derived from the window's start, and
+/// `prev`, `time`, `bits` and `nonce` are used once when a header is pushed and
+/// are dead weight thereafter.
+pub const HEADER_RECORD_SIZE: usize = 32 + 32; // 64
+
+/// Solana refuses to grow an account by more than this in one instruction, and
+/// `init` allocates the whole `LightClient` in one go. Exceeding it is not a
+/// graceful failure — `initialize` simply reverts — so it is asserted at compile
+/// time rather than discovered on testnet. This cap is the reason the window is
+/// sized against a 64-byte record rather than the 116-byte one it started with.
+pub const MAX_ACCOUNT_CREATE: usize = 10_240;
+
+const _: () = assert!(
+    LightClient::SPACE <= MAX_ACCOUNT_CREATE,
+    "LightClient::SPACE exceeds Solana's account-creation cap: shrink HeaderRecord or WINDOW"
+);
 
 #[program]
 pub mod solbeam {
@@ -96,6 +121,7 @@ pub mod solbeam {
         lc.tip_height = checkpoint_height;
         lc.tip_hash = header_hash(&header);
         lc.headers = Vec::new();
+        lc.window_start = checkpoint_height;
         lc.paused = false;
         lc.bump = ctx.bumps.light_client;
 
@@ -134,27 +160,23 @@ pub mod solbeam {
             .checked_add(1)
             .ok_or(SolbeamError::Overflow)?;
 
-        let record = HeaderRecord {
-            height,
-            hash: header_hash(&header),
-            prev,
-            merkle_root: read32(&header, 36),
-            time: read_u32_le(&header, 68),
-            bits,
-            nonce: read_u32_le(&header, 76),
-        };
-
-        // The window keeps the most recent WINDOW headers, so prune the oldest
-        // first. A mint can only prove a block still inside it.
+        let record_hash = header_hash(&header);
         if lc.headers.len() >= WINDOW {
             lc.headers.remove(0);
+            lc.window_start += 1;
         }
-        lc.headers.push(record.clone());
+        if lc.headers.is_empty() {
+            lc.window_start = height;
+        }
+        lc.headers.push(HeaderRecord {
+            hash: record_hash,
+            merkle_root: read32(&header, 36),
+        });
 
         lc.tip_height = height;
-        lc.tip_hash = record.hash;
+        lc.tip_hash = record_hash;
 
-        msg!("SOLBEAM header {} {}", height, display_hex(&record.hash));
+        msg!("SOLBEAM header {} {}", height, display_hex(&record_hash));
         Ok(())
     }
 
@@ -206,16 +228,19 @@ pub mod solbeam {
         // The fork point must be a header we still hold. Deeper than the window
         // needs a checkpoint reset, which is a governance action.
         let fork_idx = lc
-            .headers
-            .iter()
-            .position(|h| h.height == from_height)
+            .index_of(from_height)
             .ok_or(SolbeamError::ForkPointNotInWindow)?;
 
         // Validate the entire branch first. Nothing is written until all of it
-        // checks out.
-        let mut prev = lc.headers[fork_idx].hash;
+        // checks out. `get` rather than indexing: an empty window is a real
+        // state (immediately after `initialize`), not a panic.
+        let mut prev = lc
+            .headers
+            .get(fork_idx)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?
+            .hash;
         let mut branch: Vec<HeaderRecord> = Vec::with_capacity(headers.len());
-        for (i, raw) in headers.iter().enumerate() {
+        for raw in headers.iter() {
             require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
             let bits = read_u32_le(raw, 72);
             require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
@@ -224,13 +249,8 @@ pub mod solbeam {
             // header_hash_of_bytes takes a slice; the chunks are slices.
             let hash = header_hash_of_bytes(raw);
             branch.push(HeaderRecord {
-                height: from_height + 1 + i as u64,
                 hash,
-                prev,
                 merkle_root: read32(raw, 36),
-                time: read_u32_le(raw, 68),
-                bits,
-                nonce: read_u32_le(raw, 76),
             });
             prev = hash;
         }
@@ -239,12 +259,17 @@ pub mod solbeam {
         require!(new_tip_height > lc.tip_height, SolbeamError::ForkNotHeavier);
 
         // Keep the prefix up to and including the fork point, append the branch,
-        // then prune to the window.
+        // then prune to the window. The prefix always begins at headers[0], so
+        // window_start is only moved by whatever the prune discards.
         let mut rebuilt: Vec<HeaderRecord> = lc.headers[..=fork_idx].to_vec();
         rebuilt.extend(branch);
         if rebuilt.len() > WINDOW {
             let excess = rebuilt.len() - WINDOW;
             rebuilt.drain(0..excess);
+            lc.window_start += excess as u64;
+        }
+        if rebuilt.is_empty() {
+            lc.window_start = new_tip_height;
         }
 
         lc.headers = rebuilt;
@@ -309,10 +334,12 @@ pub mod solbeam {
 
         // 1. The header must still be inside the window. A proof against a
         //    header we no longer hold cannot be checked at all.
+        let index = lc
+            .index_of(claim.height)
+            .ok_or(SolbeamError::HeaderNotInWindow)?;
         let record = lc
             .headers
-            .iter()
-            .find(|h| h.height == claim.height)
+            .get(index)
             .ok_or(SolbeamError::HeaderNotInWindow)?;
 
         // 2. The transaction must be the one the proof names. Without this the
@@ -419,6 +446,7 @@ pub mod solbeam {
         lc.tip_height = height;
         lc.tip_hash = tip_hash;
         lc.headers = Vec::new();
+        lc.window_start = height;
         Ok(())
     }
 
@@ -443,6 +471,10 @@ pub struct LightClient {
     /// Internal byte order — the same order the Python reference uses, so a
     /// fixture can be compared without a conversion step that could hide a bug.
     pub tip_hash: [u8; 32],
+    /// Height of `headers[0]`. The window is contiguous, so every other height
+    /// is derived from this — storing a height per record would cost eight
+    /// bytes times WINDOW for information that is already implied.
+    pub window_start: u64,
     /// The rolling window, oldest first.
     pub headers: Vec<HeaderRecord>,
     pub paused: bool,
@@ -454,20 +486,31 @@ impl LightClient {
         + 8                                    // checkpoint_height
         + 8                                    // tip_height
         + 32                                   // tip_hash
+        + 8                                    // window_start
         + 4 + (WINDOW * HEADER_RECORD_SIZE)    // headers: Vec length + records
         + 1                                    // paused
         + 1;                                   // bump
+
+    /// Index of a height inside the window, if it is still held.
+    pub fn index_of(&self, height: u64) -> Option<usize> {
+        if height < self.window_start || height > self.tip_height {
+            return None;
+        }
+        Some((height - self.window_start) as usize)
+    }
+
+    /// Height of the record at `index`.
+    pub fn height_at(&self, index: usize) -> u64 {
+        self.window_start + index as u64
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default, PartialEq, Eq, Debug)]
 pub struct HeaderRecord {
-    pub height: u64,
+    /// Internal byte order, matching the Python reference.
     pub hash: [u8; 32],
-    pub prev: [u8; 32],
+    /// The root a deposit's Merkle branch must fold to.
     pub merkle_root: [u8; 32],
-    pub time: u32,
-    pub bits: u32,
-    pub nonce: u32,
 }
 
 #[derive(Accounts)]
