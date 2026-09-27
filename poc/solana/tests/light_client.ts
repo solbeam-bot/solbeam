@@ -176,6 +176,12 @@ describe("solbeam — verify a deposit against the window", () => {
     index: fixture.proof.index,
     // branch elements are already internal order in the fixture
     branch: fixture.proof.branch.map((h: string) => Array.from(Buffer.from(h, "hex"))),
+    // The window stores block hashes only. The claim supplies the raw 80-byte
+    // header of the block at `height`; the program hashes it and checks that
+    // against the stored hash, then reads the Merkle root out of it. That check
+    // is what makes storing the root separately redundant.
+    header: Array.from(Buffer.from(
+      fixture.headers.find((h: any) => h.height === fixture.proof.height)!.raw, "hex")),
     // Vec<u8>, so a Buffer rather than an Array — see above.
     tx: Buffer.from(fixture.deposit_tx_raw, "hex"),
   });
@@ -276,6 +282,30 @@ describe("solbeam — verify a deposit against the window", () => {
       expect.fail("should have refused a bad branch");
     } catch (e: any) {
       expect(String(e)).to.contain("BadMerkleProof");
+    }
+  });
+
+  it("refuses a claim whose header is not the canonical block", async () => {
+    // The window stores hashes only, so the claim supplies the header and the
+    // program checks it against the stored hash. This is the check that makes
+    // storing the Merkle root unnecessary — without it, a claimant could supply
+    // a header of its own choosing and prove anything it liked.
+    const bad = proof();
+    const h = Buffer.from(bad.header);
+    h[36] ^= 0xff; // perturb the Merkle root inside the header
+    bad.header = Array.from(h);
+    try {
+      await program.methods
+        .verifyDeposit(bad)
+        .accounts({
+        lightClient, usedDeposits, depositScript, mint,
+        recipientTokenAccount: recipientAta, recipientOwner,
+        submitter: provider.wallet.publicKey,
+      })
+        .rpc();
+      expect.fail("should have refused a substituted header");
+    } catch (e: any) {
+      expect(String(e)).to.contain("HeaderMismatch");
     }
   });
 
@@ -451,9 +481,9 @@ describe("solbeam — following a reorg", () => {
     expect(after.tipHeight.toNumber()).to.equal(fork.tip_height);
     expect(Buffer.from(after.tipHash).toString("hex"))
       .to.equal(doubleSha256(last).toString("hex"));
-    // The window is bounded, so the deepest headers fall out of it. 144 is the
-    // 24-hour window, sized by time rather than picked — see TEST_PLAN 4.7.
-    expect(after.headers.length).to.be.at.most(144);
+    // The window is bounded, so the deepest headers fall out of it. 288 is the
+    // 48-hour window, sized by time rather than picked — see TEST_PLAN 4.7.
+    expect(after.headers.length).to.be.at.most(288);
   });
 
   it.skip("refuses a branch that is not heavier", async () => {

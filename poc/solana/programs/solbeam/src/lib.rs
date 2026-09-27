@@ -42,23 +42,22 @@ pub const HEADER_LEN: usize = 80;
 /// How long a reorg the client can follow, expressed in TIME rather than a
 /// block count — the earlier "64" was arbitrary and nothing justified it.
 ///
-/// BSV targets a ten-minute block, so 24 hours is 144 blocks. A day is the
-/// right scale because a reorg deeper than that does not mean "we should have
-/// kept more headers", it means BSV is broken and the peg has far larger
-/// problems than its header window.
+/// BSV targets a ten-minute block, so 48 hours is 288 blocks. A day of margin
+/// sits on top of the rule of thumb that a reorg deeper than a day means BSV is
+/// broken and the peg has far larger problems than its header window.
 ///
 /// Two constraints set what is affordable, and both are hard:
 ///
-///   * **Account creation caps at 10,240 bytes.** A window of 144 headers must
-///     therefore keep its per-header record small. `HeaderRecord` stores only
-///     hash + Merkle root (64 bytes); with the old 116-byte record this would
-///     be 16,766 bytes and `initialize` would simply fail.
+///   * **Account creation caps at 10,240 bytes.** The window must keep its
+///     per-header record small. `HeaderRecord` stores a bare hash (32 bytes):
+///     288 x 32 + overhead = 9,286 bytes, the same account size a 144-header
+///     window needed when records also carried a Merkle root.
 ///   * **The whole account is deserialised on every instruction**, so a bigger
 ///     window is also more compute on the mint path. 9,216 bytes of records is
 ///     comfortable against the 200,000 CU budget.
-pub const WINDOW_HOURS: u64 = 24;
+pub const WINDOW_HOURS: u64 = 48;
 pub const SECONDS_PER_BLOCK: u64 = 600;
-pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; // 144
+pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; // 288
 
 /// How deep a deposit must be buried before it can be minted. Twelve blocks is
 /// roughly two hours on BSV. The test matrix compresses time, not depth, so this
@@ -74,11 +73,11 @@ pub const TOKEN_DECIMALS: u8 = 8;
 /// growable so the account can be sized up front and never needs reallocating.
 pub const MAX_USED: usize = 256;
 
-/// Size of one `HeaderRecord`: the hash for linkage, the Merkle root for deposit
-/// proofs, and nothing else. Height is derived from the window's start, and
-/// `prev`, `time`, `bits` and `nonce` are used once when a header is pushed and
-/// are dead weight thereafter.
-pub const HEADER_RECORD_SIZE: usize = 32 + 32; // 64
+/// Size of one `HeaderRecord`: a bare block hash, and nothing else. Height is
+/// derived from the window's start; `prev`, `time`, `bits` and `nonce` are used
+/// once when a header is pushed; and the Merkle root is a field *inside* the
+/// header, already committed to by this hash, so a claim can simply supply it.
+pub const HEADER_RECORD_SIZE: usize = 32;
 
 /// Solana refuses to grow an account by more than this in one instruction, and
 /// `init` allocates the whole `LightClient` in one go. Exceeding it is not a
@@ -168,10 +167,7 @@ pub mod solbeam {
         if lc.headers.is_empty() {
             lc.window_start = height;
         }
-        lc.headers.push(HeaderRecord {
-            hash: record_hash,
-            merkle_root: read32(&header, 36),
-        });
+        lc.headers.push(HeaderRecord { hash: record_hash });
 
         lc.tip_height = height;
         lc.tip_hash = record_hash;
@@ -248,10 +244,7 @@ pub mod solbeam {
 
             // header_hash_of_bytes takes a slice; the chunks are slices.
             let hash = header_hash_of_bytes(raw);
-            branch.push(HeaderRecord {
-                hash,
-                merkle_root: read32(raw, 36),
-            });
+            branch.push(HeaderRecord { hash });
             prev = hash;
         }
 
@@ -342,6 +335,16 @@ pub mod solbeam {
             .get(index)
             .ok_or(SolbeamError::HeaderNotInWindow)?;
 
+        // The supplied header must be the canonical block at this height. This
+        // is the check that lets the window store nothing but hashes: the
+        // Merkle root is a field inside this header, so the hash already
+        // commits to it and it never has to be kept separately.
+        require!(
+            header_hash(&claim.header) == record.hash,
+            SolbeamError::HeaderMismatch
+        );
+        let merkle_root = read32(&claim.header, 36);
+
         // 2. The transaction must be the one the proof names. Without this the
         //    branch could be valid for a *different* transaction.
         let txid = header_hash_of_bytes(&claim.tx);
@@ -349,7 +352,7 @@ pub mod solbeam {
 
         // 3. And it must be *in* the block, which is what the branch proves.
         require!(
-            fold_branch(claim.txid, claim.index, &claim.branch) == record.merkle_root,
+            fold_branch(claim.txid, claim.index, &claim.branch) == merkle_root,
             SolbeamError::BadMerkleProof
         );
 
@@ -507,10 +510,9 @@ impl LightClient {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default, PartialEq, Eq, Debug)]
 pub struct HeaderRecord {
-    /// Internal byte order, matching the Python reference.
+    /// Internal byte order, matching the Python reference. Everything else a
+    /// deposit proof needs is derived from, or supplied alongside, this.
     pub hash: [u8; 32],
-    /// The root a deposit's Merkle branch must fold to.
-    pub merkle_root: [u8; 32],
 }
 
 #[derive(Accounts)]
@@ -647,6 +649,11 @@ pub struct DepositClaim {
     pub recipient: [u8; 32],
     pub index: u32,
     pub branch: Vec<[u8; 32]>,
+    /// The raw 80-byte header of the block at `height`. Stored records hold
+    /// only a hash, so the claim must supply the header — and the hash check in
+    /// `verify_deposit` is what proves it is the canonical one. The Merkle root
+    /// is read out of it rather than stored.
+    pub header: [u8; HEADER_LEN],
     /// The raw deposit transaction, so the claimed output can be re-derived
     /// rather than trusted.
     pub tx: Vec<u8>,
@@ -905,6 +912,8 @@ pub enum SolbeamError {
     TxidMismatch,
     #[msg("the Merkle branch does not fold to the block's root")]
     BadMerkleProof,
+    #[msg("the supplied header is not the canonical block at that height")]
+    HeaderMismatch,
     #[msg("the transaction is not valid legacy format")]
     MalformedTx,
     #[msg("no such output in that transaction")]

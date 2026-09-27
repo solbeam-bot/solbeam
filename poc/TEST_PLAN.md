@@ -300,29 +300,29 @@ Deliberately not guessed at. Recorded so the next person starts from the gap rat
 
 ### 4.7 How large the rolling window should be
 
-The window was **64 headers** because 64 was a number that worked. Nothing justified it, and 64 headers is only about ten hours — a duration nobody chose. **The window should be sized by time, not by an arbitrary count**, and it is now **24 hours** (144 headers at BSV's ten-minute target).
+The window was **64 headers** because 64 was a number that worked. Nothing justified it, and 64 headers is only about ten hours — a duration nobody chose. **The window should be sized by time, not by an arbitrary count**, and it is now **48 hours** (288 headers at BSV's ten-minute target).
 
-A day is the right scale because of what a deeper reorg would mean. If BSV reorganises by more than a day, the problem is not that the window should have been larger — it is that BSV is broken, and the peg has far larger problems than its header history. Sizing the window against that case is defending the wrong thing.
+A day is the right scale because of what a deeper reorg would mean. If BSV reorganises by more than a day, the problem is not that the window should have been larger — it is that BSV is broken, and the peg has far larger problems than its header history. Sizing the window against that case is defending the wrong thing. Forty-eight hours leaves a full day of margin over that line.
 
-**The change was nearly a trap, and the reason is worth recording.** Solana caps account creation at **10,240 bytes**: `init` allocates the whole `LightClient` in one instruction, and exceeding the cap makes `initialize` revert. It does not degrade, truncate or warn. With the existing 116-byte `HeaderRecord`, a 144-header window is **16,766 bytes**, so the obvious one-line change would have failed outright.
+**The change was nearly a trap, and the reason is worth recording.** Solana caps account creation at **10,240 bytes**: `init` allocates the whole `LightClient` in one instruction, and exceeding the cap makes `initialize` revert. It does not degrade, truncate or warn. With the original 116-byte `HeaderRecord`, a window of this length is **33,478 bytes**, so the obvious change would have failed outright. The window is only affordable because the record was cut twice — first by storing what verification uses and deriving the rest, then by dropping the one field that was derivable from data already present:
 
-The window is only affordable because the record shrank to **64 bytes** — storing what verification actually uses, and deriving the rest:
-
-| Field | Before | Now | Why |
+| Field | Original | Now | Why |
 |---|---|---|---|
 | `height` | 8 | — | Derived from a single `window_start`; the window is contiguous, so a per-record height is implied |
-| `hash` | 32 | 32 | Linkage, and the tip |
+| `hash` | 32 | 32 | Linkage, and the tip. The only thing that has to be stored |
 | `prev` | 32 | — | Linkage already uses the stored `tip_hash`; records link by position |
-| `merkle_root` | 32 | 32 | The root a deposit proof must fold to |
+| `merkle_root` | 32 | — | **Redundant**: the root is a field inside the header, so the header's hash already commits to it. The claim supplies the header and the program reads the root out of it |
 | `time` | 4 | — | Read once on push, dead afterwards |
 | `bits` | 4 | — | Read once on push, dead afterwards |
 | `nonce` | 4 | — | Never used after the proof-of-work check |
 
-`144 × 64 + overhead = 9,286 bytes`, which fits with room. A **const assertion now fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
+`288 × 32 + overhead = 9,286 bytes` — the same account size the earlier 144-header layout needed, now covering twice the time. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
+
+Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it, and the suite is 14 passing.
 
 Two latent bugs on the reorg path were fixed while the fields were being reshaped: `push_fork` never advanced `window_start` when it pruned the rebuilt window, and it indexed `headers[fork_idx]` directly — which would **panic** in the one state that is genuinely empty, immediately after `initialize`.
 
-**The trade-off this leaves open.** A larger window also survives longer advancer outages: a stalled client is safe but stops minting, so more history means more slack before a checkpoint reset is needed. The cost is rent (linear in the window) and compute on the mint path, because **the whole account is deserialised on every instruction**. At 9,286 bytes that is comfortable against the 200,000 CU budget, but it is the constraint that will bind first if the window grows much further — not rent.
+**The trade-off this leaves open.** A larger window also survives longer advancer outages: a stalled client is safe but stops minting, so more history means more slack before a checkpoint reset is needed. The cost is rent (linear in the window) and compute on the mint path, because **the whole account is deserialised on every instruction**. At 9,286 bytes that is comfortable against the 200,000 CU budget, but it is the constraint that will bind first if the window grows much further — not rent. The running cost is analysed in [`docs/02-how-it-works.md`](../docs/02-how-it-works.md#what-it-costs-to-run).
 
 ## 5. Phase 3 — peg out
 
