@@ -712,6 +712,37 @@ the staged tokens release and the attacker leaves. That is why `FLOOR` remains �
 the reorg expensive whether or not anyone notices — and why the buffer remains, to cover
 the case where notice arrives too late.
 
+## Audit findings
+
+An adversarial review ran this document against the implemented program. Severities are
+the reviewer's. **Fixed** means addressed in code with a test where one was possible.
+
+| ID | Finding | Severity | Status |
+|---|---|---|---|
+| **A1** | **The difficulty target was read from the header being checked.** `bits` came from the submitted header and `check_daa` returned `true` unconditionally, so the target was attacker-chosen and proof of work was vacuous — anyone could append headers and mint with no hashpower. Every "forging `C` blocks must out-mine the chain" claim here was false against the code. **Regtest masked it**: `0x207fffff` is already the largest encodable target, so no easier one exists there. On testnet the target varies and declaring the easiest permitted one is cheap | critical | **Fixed** — target taken from the chain at `initialize`, validated before use. Test added |
+| **A2** | `set_checkpoint` and `set_paused` were **unauthenticated**: `authority` was a bare `Signer` compared to nothing, so any key could rewrite the trusted root or halt minting | critical | **Fixed** — authority stored, `has_one` enforced. The deploy-time race on `initialize` remains |
+| **A3** | `verify_deposit` never constrained `mint`, so anyone could submit a valid public deposit against a counterfeit mint and burn the replay slot — stranding the real deposit for ~0.002 SOL | critical | **Fixed** — pinned to the `[b"mint"]` PDA |
+| **A7** | **The replay key included `height`**, so a deposit re-included at a different height after a reorg minted twice. Introduced by this document's own pruning change | serious | **Fixed** — identity is `(txid, vout)`; height stored only for pruning |
+| **A4** | The staking buffer is off-chain BSV — unverifiable and unseizable, so `S ≥ M` was unenforceable as written | critical | **Partly fixed by A6.** Per-relayer, `owed_R` comes from verified proofs and `bond_R` is seizable, so the constraint is checkable on-chain |
+| **A5** | The **program upgrade authority is an unconditional mint voucher.** Safety parameters are Rust `const`s, so "loosening needs a new program" and "ship a new program" are the same power | critical | **Out of scope for the PoC** — accepted and recorded. The fix is governance: a vote, or the stakers, possibly holding additional tokens granting that right. **Must not be silently forgotten** |
+| **A6** | The peg-in destination is a **P2PKH key, not a covenant** — the entry point for the whole reserve is a raw key | critical | **Proposed** — remove the pooled reserve rather than secure it. See the section above |
+| **A8** | The staging escrow is **not implemented**, and `UsedDeposits` stores no recipient or amount, so reversing N credited mints needs an off-chain indexer and one paid transaction per depositor | serious | **Open** — proposed only |
+| **A9** | `MAX_USED = 200 < WINDOW = 288` is a cheap peg-in shutdown; `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented, so 200 one-satoshi deposits block all later peg-ins | serious | **Open** |
+| **A10** | The aggregate cap is not tied to the buffer, so `S ≥ M` cannot hold by construction | serious | **Open** |
+| **A11** | `commit_fork` never re-anchors the staged branch, so an intervening commit can splice the window from two chains with broken linkage | serious | **Open** |
+| **A12** | `commit_fork` only emits an event — no depth recorded, no pause, no bounty — so the gate is triggered off-chain and is itself griefable given A1 | serious | **Open** |
+| **A13** | "No oracles, by construction" is false for quantities that gate funds: the hot float is off-chain BSV | serious | **Open** — see A4 |
+| **A14** | The committed confirmation depth is not parsed, and **would not bind an attacker anyway** — the fraud's depositor *is* the attacker, so they commit exactly `FLOOR`. It is a market term, not a safety one | serious | **Open** |
+| **A15** | Return-to-sender is not an on-chain path: no refund instruction, `parse_outputs` reads only outputs, and spending the deposit needs the P2PKH key | serious | **Open** |
+| **A16** | The bond asset contradicts across documents, and only the Solana leg is seizable | serious | **Open** |
+| **A18** | Pausing freezes `push_header` too, so the tip stalls and unpausing needs the missed headers replayed one transaction at a time | minor | **Open** |
+| **A19** | Minor mismatches — `used_deposits` has no `seeds` constraint, `bits_to_target_be` masks the sign bit, the adversary playbook expects an error that does not exist | minor | **Open** |
+
+**The lesson worth keeping.** A1 and A2 were invisible to a green suite: the tests asserted
+that bad proof of work was rejected, and it *was* — against the target the test itself
+supplied. A2 had no test at all. Passing tests demonstrated that the code did what the
+tests did, not that the client was secure.
+
 ## Deliberately deferred
 
 Recorded so these are not later relitigated as oversights. Each is a known
