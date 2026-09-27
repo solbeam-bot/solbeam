@@ -846,6 +846,68 @@ questions.
 to do it, and it is the reason docs 04 and this document keep the redemption authority
 replaceable. That is a destination, not a prerequisite.
 
+## The book: staked bids as an order book
+
+Review proposed replacing the fixed fee and the `FLOOR` debate with **an order book of
+underwriting**. Stakers post sell orders — "I will underwrite up to X at 10 bp", "…at
+50 bp" — matched against incoming requests by price then time, partially filled, with
+unused stake returned to the staker's own address.
+
+This is better than what it replaces, for three reasons:
+
+- **The fee is discovered rather than chosen.** No parameter to argue about, and the
+  10 bp figure stops being load-bearing.
+- **The confirmation depth can be a term of the bid**, not a protocol constant. A staker
+  who wants 24 blocks says so; the book quotes it. `FLOOR` becomes a backstop rather than
+  a price, which is exactly where the earlier discussion wanted it.
+- **The depositor can see the liquidity and the price before committing**, which is the
+  disclosure the website was already going to have to provide.
+
+It also dissolves the bootstrap problem: a book with no bids is a coherent state, not a
+broken one.
+
+### Can a staker auto-approve? No — that is the sitting-duck problem
+
+**This is the sharpest question in the proposal and the answer is no.** A passive bid that
+fills automatically is a limit order facing informed flow, and the informed flow here is a
+**miner** — someone who can deposit, have it underwritten, and then reorg their own block
+away. The staker cannot tell that deposit from an honest one, so it is picked off
+systematically. A book of auto-filling bids is a book of sitting ducks.
+
+Three ways out, and they are not equivalent:
+
+| Option | Consequence |
+|---|---|
+| **Firm bid with a last-look window** ✅ | The bid is firm, but the staker may decline within a short window (in slots) before it binds. Standard practice for exactly this adverse selection. Firm enough to be useful, escapable enough not to be farmed |
+| Explicit approval per request (RFQ) | Safest for the staker, but adds latency to every peg-in and gives the staker a censorship point |
+| Auto-approve, risk priced in | Not viable. The only price that survives a mining attacker is the worst case, which prices out every honest depositor too |
+
+**Two bounds make the last look sufficient rather than merely polite.** The loss per fill is
+capped by the bid size, so a staker can only be picked off for what it chose to offer; and
+an attacker must actually out-mine the honest chain to profit, which is the cost `FLOOR` and
+depth terms exist to raise. Neither removes the need for the last look — with unlimited
+auto-fill and no escape, no bid size is small enough to be safe.
+
+### The no-staker path: safe against accident, not against attack
+
+Review proposed a second UX where a transfer proceeds with no staker behind it, on the
+basis that the risk is the sender's own. **Half of that holds and half does not.**
+
+It holds for the **deposit**: a reorg takes the sender's BSV back to them, and the two-gate
+vault burns the staged tokens, so the sender ends up where they started. Nobody is out of
+pocket, and an unseeded book is a perfectly reasonable place to start.
+
+It does **not** hold for the **system**. The attacker in a self-reorg *is* the depositor, so
+"the sender bears the risk" describes the attacker bearing the cost of their own attack.
+If detection fails and the vault releases, the unbacked `solBSV` dilutes **every** holder,
+not just the sender. There is no staker to absorb it because there is no staker.
+
+So the honest framing is: **an unseeded book is safe against accident but not against
+attack, and the difference is whether detection works.** It is a reasonable bootstrap and a
+reasonable choice for a user who understands it, but "at the sender's risk" understates it
+— the tail lands on holders. That is precisely the gap a buffer closes, and precisely why
+the buffer's size is the number worth watching.
+
 ## Audit findings
 
 An adversarial review ran this document against the implemented program. Severities are
