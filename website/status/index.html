@@ -146,7 +146,7 @@
         <li><strong>Stakers are paid in what they stake</strong> — BSV for BSV, <code>solBSV</code> for <code>solBSV</code>. They underwrite the system, so a fraudulent mint lands on volunteers rather than diluting every holder.</li>
         <li><strong>Open question: a staker cannot simply auto-approve.</strong> A bid that always fills is picked off by a miner who deposits and then reorgs their own block away. Bids need a short last-look window or explicit approval, and neither is built or settled yet.</li>
         <li><strong>Open question: who may stake.</strong> Specialists with a minimum stake either side is the simple start; delegated staking — retail pledging to a specialist operator, as a product for exchanges and miners — would deepen liquidity but lands slashing risk on people who cannot assess it.</li>
-        <li><strong>Open question: how the system starts.</strong> The bootstrap is about staking first, not minting, so genesis may be a stake rather than a special mint. A compile-time test mint covers the PoC; a slot-bounded seeding authority covers a named seeder without an oracle.</li>
+        <li><strong>Open question: how the system starts.</strong> There is a circularity — a seizable bond must be <code>solBSV</code>, <code>solBSV</code> exists only once minted, and a mint is only safe once a bond exists. Six ways out are set out in the documentation; the strongest mints into the program vault and releases only once the matching BSV has been verified, so there is no unbacked window to attack at any point.</li>
         <li><strong>No oracles.</strong> Reorg depth and block time come from the BSV headers; deadlines come from Solana slots.</li>
       </ul>
     </div>

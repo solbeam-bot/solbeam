@@ -956,17 +956,42 @@ briefly), explicit approval per request, or auto-approval with the risk priced i
 third does not survive a mining attacker. This is the open question most likely to change
 the shape of the book.
 
-### D3 — How does the system start?
+### D3 — How does the system start? The circularity, and six ways out
 
-| Option | Pros | Cons |
-|---|---|---|
-| **Compile-time test mint** (`#[cfg(feature = "poc")]`) | Cannot leak to production, which a runtime flag can | Test-only; does not solve genesis |
-| **First stake is the genesis** | No privileged mint at all; the book simply starts empty and fills | The very first staker takes unhedged risk with no fee history to price it |
-| **Slot-bounded seeding authority** | A named key may seed until a slot, then is permanently dead. The bound is chain-native, so no oracle | A privileged window, however short |
+**An earlier draft of this section said "genesis is a stake, and an initialisation mint may
+not be needed at all". That was wrong, and review caught it.** Staking has a circular
+dependency:
 
-The observation worth carrying into tomorrow: **the bootstrap problem is about staking
-first, not minting.** Once a stake exists, ordinary peg-ins work. So genesis is a *stake*,
-and an initialisation mint may not be needed at all.
+```
+a seizable bond must be solBSV   (docs 04: a stablecoin bond is a written call option)
+solBSV exists only if someone minted it
+a mint is only safe if a bond already exists
+```
+
+So genesis cannot simply be a stake. Something has to break the loop, and every option
+below is a different choice about *what* breaks it and *what is assumed* while it is broken.
+
+| # | Option | What breaks the loop | Assumption it carries |
+|---|---|---|---|
+| **G1** | **Self-underwritten genesis.** The team is the first relayer, deposits its own BSV, and mints against it. Depositor and underwriter are the same party, so no bond is needed for that one transaction | The team is honest | The same assumption `initialize` already makes when it sets the checkpoint — no *new* trust |
+| **G2** | **Vault-gated genesis mint.** A genesis mint goes straight to the program vault and is released **only when a matching BSV deposit has been verified**. Supply exists but is never liquid until backed | Nothing — the vault means there is no unbacked window to attack | Strongest of the six. A staged token is not stealable, so it does not matter who knows |
+| **G3** | **Genesis bond in SOL, migrated to `solBSV` later.** The first bond is posted in SOL precisely to escape the circularity, then replaced once `solBSV` exists | A non-`solBSV` asset | A price mismatch, which docs 04 argues against — acceptable only for a bounded, short genesis |
+| **G4** | **Capped unbacked genesis.** The first `X` BSV of peg-ins need no underwriting at all, because the amount at risk is bounded and small | A hard cap, nothing else | The cap is genuinely below what anyone would bother attacking. Explicit, visible risk acceptance |
+| **G5** | **Slot-expiring genesis authority.** A named key may seed a bounded amount until a slot, then is permanently dead. Chain-native expiry, so no oracle | A privileged window | The window is short and bounded, and the authority is provably dead afterwards |
+| **G6** | **Compile-time test mint** (`#[cfg(feature = "poc")]`) | Nothing — test only | Deliberately not a runtime flag: a runtime flag can leak to mainnet, a compiled-out one cannot |
+
+**On review's suggestion — mint first, announce later, back it afterwards.** The instinct is
+right that an empty system is not worth attacking, but security by obscurity is the weakest
+form of the argument and it is unnecessary here: **G2 gets the same benefit without relying
+on nobody noticing.** A mint into the vault is not liquid, so there is nothing to take even
+if the whole world knows. And it composes with G1 — the team self-underwrites, the vault
+holds the result until the BSV verifies — which requires no new instruction beyond the ones
+already specified for ordinary peg-ins.
+
+**Recommendation: G2, optionally with G1.** G1 alone is defensible because it adds no trust
+assumption beyond the checkpoint. G2 removes even the timing question, at no cost, since the
+vault is already part of the design. G3 and G4 are fallbacks if the vault is not built first.
+G6 is for the PoC regardless.
 
 ### D4 — Is `FLOOR` still needed?
 
