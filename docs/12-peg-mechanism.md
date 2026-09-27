@@ -210,53 +210,32 @@ closes it must close **both ways** — and the secondary market is then free to
 price the risk, which is the honest outcome and the reason the pause is not
 patronising. We stop the protocol, not the market.
 
-### The fee is whatever the market clears at
+### Staking, and a fixed fee
 
-The fee is **not a parameter to be chosen** — it is discovered by the bidding, and
-it can settle well above any cost floor. Anchoring on a figure like 10 bp is a
-mistake: there is no reason bidders would stop at 50 bp if that is where demand
-against scarce capacity puts it.
+**The model is deliberately simple, and the simplicity is the point.** Anyone may
+stake BSV on either side of the fence and earns a share of transfer fees, fixed at
+**10 bp in and 10 bp out**. If it works at that level, price discovery and
+risk-pricing can be layered on afterwards. Building them first would mean tuning a
+market that has not yet been shown to function.
 
-What the bidding prices is a **risk-adjusted return on bond capital**, and the
-arithmetic is why the range is wide. Capital is committed for roughly half a day
-per cycle, so about two cycles a day. Because the bond is a multiple `k` of the
-float, the return falls on total committed capital rather than on volume moved:
+Stakers underwrite the system, so a fraudulent mint lands on **people who chose to
+bear that risk** rather than diluting every holder as a discount.
 
-| Fee per cycle | Annualised on committed capital (`k` = 1) |
-|---|---|
-| 5 bp | ~18% |
-| 10 bp | ~37% |
-| 25 bp | ~91% |
-| 50 bp | ~183% |
-| 100 bp | ~365% |
+**What a fixed fee makes clear.** With the fee pinned, the *yield* is the clearing
+variable: stakers enter while it beats their cost of capital and leave when it does
+not, so the amount staked settles where the two meet.
 
-Those are large numbers for a half-day lockup, and they cut both ways. They attract
-capital, which compresses the fee — but three things stop it collapsing to cost:
+> Daily fees = 0.002 × daily volume, so annual fees = 0.73 × daily volume.
+> At a 10% cost of capital, equilibrium staked capital ≈ **7.3 × daily volume**.
 
-- **Capacity is the scarce good, not capital.** The hot float caps how much can be
-  paid out per cycle, so fee pressure comes from the ratio of demand to *bonded
-  capacity*, not from the number of willing bidders.
-- **The risk is real and hard to price.** Custody of the reserve, BSV reorgs during
-  the lockup, and Solana downtime all sit on the relayer.
-- **Exclusivity is a trade, not a free win.** A single relayer per epoch can be held
-  to one bond and a clear SLA, but holds pricing power between auctions. Open entry
-  to any bonded relayer is what actually compresses the fee, at the cost of
-  coordination on who pays.
+That is the number that decides whether the model is practical, and it is worth
+measuring rather than arguing about.
 
-So the protocol does not set the fee. What it sets is **who may bid, how much
-capacity the limits permit, and how exclusive the slot is** — and those levers are
-what decide where the fee lands. A cost-of-capital figure is the floor beneath the
-auction, not the outcome of it.
-
-An exchange cross is a natural pressure valve: an exchange with a balance sheet on
-both sides can quote tighter than the peg. That is healthy and it caps the fee.
-It is worth being clear about what it does *not* do — a cross is a **centralised**
-substitute, and it works only because it can fall back on the trustless peg to
-rebalance. If the peg breaks, the exchange's `solBSV` is unbacked too. That is why
-the peg being wholesale and boring does not make it unimportant: **it is the
-settlement layer everything else derives from.**
-
----
+**What 10 bp cannot do is price risk.** The round trip costs the same whether BSV is
+calm or mid-reorg. So when risk rises, stakers want more than the fee can pay and
+they leave — precisely when the most backing is wanted. That is the accepted price
+of simplicity here rather than an oversight, and it is the first thing to revisit
+once the loop works end to end.
 
 ## The attack this defends against
 
@@ -459,7 +438,7 @@ row is listed first.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Bonded set — auction sets the reference fee, any bonded relayer may pay** ✅ | One bad relayer cannot block the peg; competition still sets the price | More bonds to track; the auction remains an off-chain trust point for the benchmark |
+| **Staking pool: anyone stakes BSV on either side and shares a fixed 10 bp in / 10 bp out fee** ✅ | Simple; permissionless; losses land on volunteers rather than on every holder; nothing to attest | A fixed fee cannot price risk, so capacity is procyclical; operator incentives inside a passive pool are unresolved |
 | Single nominated relayer | Simplest | No fee competition; nomination is a trusted choice |
 | Bonded set, open entry | Better liveness | Capital fragmented across bonds; coordination on who pays |
 | Fully permissionless | Best liveness | Anyone can attempt payout; no bond means no recourse |
@@ -611,6 +590,19 @@ conservative means shipping a new program. That gives the change mechanism the
 review asked for without turning the vote itself into the attack path — and it is
 the one place where the two positions in this document genuinely differ, so it is
 flagged rather than quietly settled.
+
+## Deliberately deferred
+
+Recorded so these are not later relitigated as oversights. Each is a known
+simplification of the current model, to be revisited once the loop works end to end.
+
+| Deferred | Why it matters | Revisit when |
+|---|---|---|
+| Market-cleared fees | A fixed fee cannot price risk, so staking capacity is procyclical | The loop works and the fixed fee has been measured against real flow |
+| Risk-priced confirmation depth | Depth is a term users and stakers negotiate, but nothing yet proves it gets priced | Adverts show whether longer waits actually earn lower rates |
+| Differential yields per side | BSV-side staking carries custody risk; Solana-side carries reorg-fraud risk. Paying both 10 bp likely misprices one | Stakers reveal which side is short of capital |
+| Operator incentives inside a passive pool | An operator can drain a pool of passive stakers, who then eat the loss | Before any pool holds meaningful value |
+| Fee realisation mechanics | Whether stakers withdraw from the reserve or accrue a claim is unresolved | Before staking is live |
 
 ## What this changes downstream
 
