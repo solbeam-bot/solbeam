@@ -175,3 +175,83 @@ receipt; everyone else has the incentive.
 5. **Nothing verifies the vault's balance equals the sum of its items.** Each instruction moves
    exactly what its record says, but the invariant wants a test that opens and closes many items
    and asserts the balance returns to zero.
+
+---
+
+## Closing the remaining gaps — proposed
+
+Five items were left open. Four of them turn out not to need new machinery.
+
+### R1 — Detection needs no bounty, because V5 already motivates it
+
+The worry was that nobody is paid to advance the chain or to stage a fork. **V5 removes the need
+for a bounty**, because it made release *depend* on the tip advancing:
+
+> If the tip stalls, **nothing releases** — including the depositor's own mint.
+
+So anyone waiting on a mint has a direct reason to push headers. And a bot that tries to push and
+gets `BrokenLinkage` **knows a reorg has happened** — the same bot stages and commits the fork.
+
+**No new mechanism. No bounty. No operator.** The advancer is a permissionless bot that anyone may
+run, and it cannot lie: the program verifies every header it submits. The website will run one as a
+convenience, exactly as it runs the front end — a service, not a trust party.
+
+*Worth noting for later:* if advancing ever turns out to lag in practice, a bounty is the obvious
+addition. It is not needed to make the design work.
+
+### R2 — `MATURITY_BLOCKS = 144` (about 24 hours)
+
+The constraint is `confirmations + MATURITY ≤ WINDOW`, with `FLOOR = 12` and `WINDOW = 288`, so the
+ceiling is 276. **144 leaves a wide margin** (12 + 144 = 156 of 288) and a total user wait of about
+26 hours. It is a round number, comfortably inside the window, and it is a parameter — raise it for
+more detection time, lower it for faster mints.
+
+### R3 — Bond custody: the ordinary shape, nothing clever
+
+```
+Bond PDA      [b"bond", relayer]        holds solBSV, its own rent paid by the relayer
+stake(amount)                           increase the bond
+announce_unbond()                       starts UNBOND_SLOTS
+withdraw_bond()   after UNBOND_SLOTS    requires bond_R >= k * owed_R still holds,
+                                        so a relayer with outstanding liability cannot leave
+```
+
+**`UNBOND_SLOTS` must exceed the redemption deadline plus the challenge window**, or a relayer could
+take a job and withdraw before anyone could act. Standard, and the same rule docs 05 already states.
+
+### R4 — The unbacked path: one flag, in the deposit
+
+A depositor who wants no underwriter says so **in the `OP_RETURN`**, and `PendingMint` records it.
+
+```
+OP_RETURN = version || cluster_id || program_hash || flags || recipient
+flags bit 0: UNBACKED — no relayer consent required, no bond behind it
+```
+
+Why a flag rather than a global switch: it makes the risk **the depositor's explicit choice**, it is
+**visible on-chain** in the mint record, and it needs no governance to turn on. The unbacked path is
+then exactly what it was always meant to be — the initial seeding — rather than a default nobody
+chose.
+
+### R5 — The vault invariant is a test, not a mechanism
+
+Solana cannot enumerate PDAs, so nothing can check "balance equals the sum of items" on-chain, and
+nothing needs to: **every instruction moves exactly the amount its own record says**, and every unit
+in the vault arrived through one of those paths.
+
+What is required is the test: **open and close many items of both kinds, interleaved, and assert the
+vault balance returns to exactly zero.** That is the only place the invariant can be checked, and it
+should exist before the vault is used.
+
+---
+
+## The resulting system, in one paragraph
+
+A depositor names terms, sends BSV to a relayer's own script, and after the agreed depth `solBSV` is
+minted **into a program-owned vault** rather than to them. It is released once the chain has
+advanced `MATURITY_BLOCKS` beyond their deposit **and** the program's own record of that block still
+matches; if it does not, the staged tokens are burned and the depositor keeps the BSV that the reorg
+returned to them. Redemptions escrow into the same vault, a bonded relayer pays BSV and proves it,
+and failure returns the escrow without minting. **Nothing is trusted, nobody's permission is
+required, and the only thing anybody must do is keep the Solana copy of the BSV chain current —
+which they are motivated to do because nothing releases until they do.**
