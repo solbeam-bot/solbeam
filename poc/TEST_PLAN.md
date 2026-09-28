@@ -556,7 +556,7 @@ Phase 0 ──┬─► 1A  (synthetic chain, no node)  ──┐
 ```
 
 - **Phases 0, 1A, 1B and 2 are built.** The critical path is no longer Phase 2; it is the ordered list in §0.4 — **F7 first** (the client halts at the first retarget), then F6, then the vault, then per-relayer deposits / `owed_R` / consent, then peg-out.
-- **Real chainwork is not built** — `commit_fork` compares branch length, correct on regtest only.
+- **Chainwork is built** (W1.7) — `commit_fork` compares accumulated chainwork, stored per header. **On regtest it cannot be distinguished from height**, since every block shares one target, so the chainwork path is exercised by the fixture replay (324/324 real mainnet headers) rather than by the on-chain suite.
 - **Phase 1B is done** — every byte format is pinned against a live SV Node, so the on-chain verifier has a measured target rather than an assumed one. It cost four corrections, all to one RPC's wire format; see [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts).
 - **Phase 3 depends on the vault and on the relayer**, but its negative tests can be specified now.
 

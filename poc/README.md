@@ -269,7 +269,7 @@ That script is the artefact to share for feedback — it makes the trust model c
 | Phase | Duration |
 |---|---|
 | P0 environment | 2–3 days |
-| P1 light client (**built**; real chainwork outstanding) | 1–2 weeks |
+| P1 light client (**built**; cw-144 verified 324/324 on real headers) | 1–2 weeks |
 | P2 mint | ~1 week |
 | P3 peg-out | ~1 week |
 | P4 negative tests | 2–3 days |

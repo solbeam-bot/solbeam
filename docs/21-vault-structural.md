@@ -202,7 +202,7 @@ headers in `difficulty-vectors/`, and the comparison against them is not.
 ### The rule
 
 ```
-chainwork(H)  =  Σ  work(bits_at(h))   for h <= H
+chainwork(H)  =  Σ  work(bits(h))   for h <= H     // cw-144; see W1
 work(b)       =  2^256 / (target(b) + 1)
 ```
 
@@ -213,9 +213,10 @@ work(b)       =  2^256 / (target(b) + 1)
 The naive fix is to store each header's work in the window — 16 bytes per record, taking
 288 × 48 = 13,824 bytes, well past the 10,240-byte account cap.
 
-**But retargets are every 2016 blocks and the window holds 288.** So **at most one difficulty
-boundary can ever sit inside the window.** Two stored `bits` values and the height they changed at
-are therefore enough to derive any in-window header's difficulty:
+> ⚠️ **This paragraph is wrong and was disproved by measurement — see W1.** It asserts that
+> retargets happen every 2016 blocks. BSV adjusts difficulty **every block**, so up to 192 distinct
+> `bits` values sit in the window. The implementation stores **per-header chainwork and time**
+> instead, and the window is 192 records, not 288.
 
 ```
 LightClient { ..., expected_bits, prev_bits, retarget_height, chainwork: u128, last_push_slot }

@@ -18,7 +18,7 @@ code written) or *open* (needs a decision). The code is unchanged from the A1/A2
 | | Item | Status | What it needs |
 |---|---|---|---|
 | **P1** | Checkpoint race + self-declared difficulty | **Decided** — race accepted | Deploy privately; address-link later if wanted. No code |
-| **P2** | `commit_fork` does not re-anchor | **Specified** | Store `fork_parent_hash` at init; link from it; re-check at commit |
+| **P2** | `commit_fork` does not re-anchor | ✅ **Fixed** (W1.7) | `fork_parent_hash` stored at init, linked from, re-checked at commit → `ForkPointMoved`. Commit now also compares **chainwork**, not heightt commit |
 | **P3** | Deposits have a hard ~32 h life | **Decided** — 48 h accepted, but **the window cannot hold it** | W1 measured the real limit at **32 h** (192 records). The app automates the mint; deadline disclosed; unproven receipts published off-chain. **The 48 is now wrong and needs re-deciding** |
 | **P4** | Retarget halts the client (F7) | **Specified** | Store the difficulty-period anchor; compute and check the new target. Testable on regtest |
 | **P5** | Replay-list shutdown and hard ceiling | **Decided** | `MIN_PEG_IN = 1 BSV`, **and the fixed list replaced by a nullifier PDA per minted deposit** |
@@ -98,7 +98,7 @@ The checkpoint being trusted is inherent to the design. **The race is not.** Opt
 initialize atomically; gate `initialize` on a known key; or accept it and document that the
 deploy transaction must be private. *Decision needed.*
 
-### P2 — `commit_fork` does not re-anchor the staged branch · **critical, unfixed**
+### P2 — `commit_fork` does not re-anchor the staged branch · ✅ **fixed in W1.7**
 Linkage is validated when each branch header is *pushed*. At *commit* it only checks that the
 fork height is still in the window, then splices `headers[..=fork_idx] ++ staging.hashes`
 **without re-checking that `headers[fork_idx].hash` is still the block the branch links to.**
