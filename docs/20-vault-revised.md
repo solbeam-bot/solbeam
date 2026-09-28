@@ -3,7 +3,7 @@
 Supersedes [`19-vault.md`](19-vault.md), whose first draft was audited and found broken. Every
 finding V1–V10 is addressed below, with the decision that settled it where one was needed.
 
-> ⚠️ **SECOND AUDIT: NOT SOUND TO BUILD.** This revision was audited and the fixes do not hold.
+> ⚠️ **SUPERSEDED BY [`21-vault-structural.md`](21-vault-structural.md). SECOND AUDIT: NOT SOUND TO BUILD.** This revision was audited and the fixes do not hold.
 > Four of the claimed corrections are inert or reintroduce the defect. See §Second audit at the end.
 
 **Status: designed, not built.** The shipped program still mints straight to the depositor.

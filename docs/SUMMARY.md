@@ -21,3 +21,4 @@
 * [18. Before we code — the critical list](18-pre-code-checklist.md)
 * [19. The vault — instruction set](19-vault.md)
 * [20. The vault — revised](20-vault-revised.md) — **current**
+* [21. The vault — structural redesign](21-vault-structural.md) — **current**
