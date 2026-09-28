@@ -25,6 +25,29 @@ hours is acceptable, and why the interesting questions are economic rather than 
 > is staged yet and the protections described below are, at this moment, a specification
 > rather than a property of the code.
 
+## What exists, exactly
+
+A re-audit found readers could believe several things exist that do not, because the documents
+describe them in the present tense. This is the canonical answer.
+
+| Capability | Built? | Evidence |
+|---|---|---|
+| Light client: checkpoint, 288-block hash window, linkage, proof of work | **Yes** | 17 passing tests |
+| `solBSV` — classic SPL, 8 decimals, no freeze authority | **Yes** | 17 passing tests |
+| The mint, against a verified deposit | **Yes** | 17 passing tests |
+| Fork staging and strictly-heavier commit | **Yes** | 17 passing tests |
+| **Difficulty retarget (DAA)** | **No — and actively rejected.** `check_daa` is a stub with **no caller**; `push_header` requires `bits == expected_bits`, which is set once and never refreshed. **The client halts permanently at the first retarget** (F7) | `lib.rs:207`, `:869` |
+| **Committed confirmation depth** | **No.** The built mint uses a fixed `MIN_CONFIRMATIONS = 12`. No depth is parsed from the `OP_RETURN` | `lib.rs:65`, `:524` |
+| **Per-relayer deposit scripts / a relayer registry** | **No.** One bridge-wide P2PKH `DepositScript` PDA | `lib.rs:449` |
+| **The vault, the two gates, maturity, release, burn** | **No** | nothing in code |
+| **The order book, staking, bonds, `owed_R`, consent** | **No** | nothing in code |
+| **All of peg-out** | **No** | nothing in code |
+| **`FLOOR` as a parameter** | **No.** Only the `MIN_CONFIRMATIONS` constant exists | `lib.rs:65` |
+| **That the four critical fixes are all tested** | **No.** A1 and A7 have tests; **A2 (authority) and A3 (mint pin) do not** | `tests/light_client.ts` |
+
+**The shipped program is exactly: light client + token + mint to the depositor + fork staging.**
+Everything else in this document is a specification.
+
 ## The parts
 
 | | |
