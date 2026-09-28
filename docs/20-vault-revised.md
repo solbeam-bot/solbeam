@@ -3,6 +3,9 @@
 Supersedes [`19-vault.md`](19-vault.md), whose first draft was audited and found broken. Every
 finding V1–V10 is addressed below, with the decision that settled it where one was needed.
 
+> ⚠️ **SECOND AUDIT: NOT SOUND TO BUILD.** This revision was audited and the fixes do not hold.
+> Four of the claimed corrections are inert or reintroduce the defect. See §Second audit at the end.
+
 **Status: designed, not built.** The shipped program still mints straight to the depositor.
 
 ---
@@ -255,3 +258,119 @@ returned to them. Redemptions escrow into the same vault, a bonded relayer pays 
 and failure returns the escrow without minting. **Nothing is trusted, nobody's permission is
 required, and the only thing anybody must do is keep the Solana copy of the BSV chain current —
 which they are motivated to do because nothing releases until they do.**
+
+---
+
+## Second audit — the revision does not hold
+
+The revision was audited adversarially and **four of its claimed fixes are wrong.** Recorded in
+full, because the pattern matters: each fix addressed the *stated* defect without addressing the
+*mechanism* behind it.
+
+### W1 — The prune is a replay oracle · **critical, inherent**
+
+V1 said the nullifier must be separate and pruned once its height leaves the window. But I specified
+that it holds *"nothing but its own existence"* — so `prune` must take the height **as an argument**,
+and the program has no stored field to check it against. It can only verify
+`height < window_start`, never that the height belongs to *this* nullifier.
+
+So: deposit, release, call `prune(nullifier, window_start - 1)` with a fabricated height, and the
+nullifier is gone while the deposit is still in the window. **Re-mint. Repeat every ~24 hours.**
+Cost about $0.001 per cycle; unbacked supply accumulates.
+
+**The fix is one field: store `deposit_height` in the nullifier and check it.** With that, the prune
+is sound — and the re-inclusion path is *not* independently exploitable, because `window_start` is
+monotonic, so re-including a deposit at a later in-window height would require orphaning its original
+block, which is a reorg deeper than the window itself.
+
+### W2 — V5 is inert in the branch it was written for · **critical, inherent**
+
+V5's whole point was to stop a stalled advancer causing a vacuous release. **It does not.**
+
+In branch 3 — the height has left the window — there is no hash to check and cannot be, because the
+record is gone. And by then `tip >= window_start + 287 >= deposit_height + 288`, so *"the tip has
+advanced past it"* is **automatically true**. V5 adds nothing there. The in-window branch already had
+the hash check.
+
+**The actual defect was never "did the tip advance" but "is the client's view current".** A stalled
+advancer *freezes* the window, so the height stays in it, and the hash check compares the window to
+itself.
+
+**The right fix is staleness, not advancement:** record the Solana slot of the last accepted header
+and require it to be recent before releasing. Then a stalled advancer blocks release outright — the
+safe failure.
+
+### W3 — `slash` has no on-chain predicate · **critical**
+
+"Proves the relayer spent BSV it held against outstanding obligations" is not program-checkable. A
+theft-spend cannot be distinguished from a legitimate payout, "outstanding" is undefined, and the
+proceeds are said to go to an off-chain reserve. **As written the bond still does nothing** — the
+same defect V8 was supposed to fix.
+
+Making it checkable means storing, per relayer, the deposit outpoints it is accountable for, and
+letting a challenger submit a spending transaction that is *not* a registered payout. That is the
+naked-spend challenger docs 04 already describes — real work, not a sentence.
+
+### W4 — R1's no-bounty argument is unsound · **critical**
+
+V5 makes release depend on **a** tip advancing, not *the honest* tip. The attacker is the miner and
+is the most motivated pusher. A bot that receives `BrokenLinkage` cannot "stage and commit the fork"
+unless its branch is longer than the attacker's — precisely the hashpower it lacks.
+
+And **`commit_fork` compares height, not chainwork** (`lib.rs:401`), so a longer but lower-work
+branch wins. On the unbacked path the only party with a pending mint is the attacker, so the
+incentive is inverted. Adding C3 and F7, "the program verifies every header" is also not currently
+true.
+
+### W5 — Payout proofs are replayable · **high**
+
+Binding value and script is necessary but **not sufficient**. One BSV payout of `amount − fee` to a
+given destination settles **every** `PendingRedeem` with the same amount and destination. Two
+redemptions to the same exchange deposit address are ordinary traffic — one payment settles both,
+the second holder's escrow burns, and no BSV is sent.
+
+**Fix: the payout transaction must carry the redemption's identifier** in an `OP_RETURN`, checked by
+`settle_redeem`. The fee sink is also still unnamed.
+
+### W6 — `claimed` is a one-way latch with no resolver · **high**
+
+Submit a proof, `claimed` is set, cancel is blocked — and **nothing clears it.** If the payout is
+later reorged away, `settle` can no longer verify, `cancel` is refused, and no listed instruction
+resolves the item: **the escrow is frozen forever.** A relayer can do this deliberately.
+
+### W7 — Consent destroys the permissionless remedy · **high**
+
+Requiring the relayer's signature at `verify_deposit` means a depositor **cannot mint without the
+relayer** — which destroys P3's remedy, that minting is permissionless and is itself the enforcement.
+The deposit then sits in a key-controlled script with no timelock, so a relayer that declines costs
+the depositor the whole deposit: exactly the loss doc 18 decided was solved.
+
+**The reconciliation:** consent should be the relayer **registering a script**, not signing each
+deposit. A registered script *is* standing consent to be liable for deposits that pay it. That keeps
+the bond meaningful, keeps slashing defensible, and leaves minting permissionless.
+
+Also: **nothing decrements `owed`**, so it is monotone and `withdraw_bond` becomes unsatisfiable.
+
+### Also
+
+| | |
+|---|---|
+| **W8** | The vault-invariant claim is false while the fee sink and the shared payout are undefined |
+| **W9** | The `UNBACKED` flag labels an unbacked mint without bounding it — the loss still lands on holders who never saw the flag |
+| **W10** | The instruction set does not compose: `claimed` has no resolver, settlement is described as two-phase but specified as one, the `OP_RETURN` layout contradicts R4, `D ≥ W + C_payout` mixes Solana slots with BSV blocks, `nonce` is in the seeds but not the record, `owed` has no decrement, and `verify_deposit`'s two inits are not stated to be atomic |
+| **W11** | The closing paragraph is false: the checkpoint *is* trusted, the upgrade authority can override every parameter, a relayer signature was required, and F7 means the client halts at the first retarget so its view cannot be kept current on testnet |
+
+### What the revision did genuinely fix
+
+The separate nullifier closes the original V1 *until the prune is called*; minting the net amount is
+correct; `D ≥ W + C_payout` names the right ordering constraint; value-and-script binding is a real
+improvement; and the length-prefixed separator is right. **None of it survives the holes above.**
+
+### Minimum changes before it is buildable
+
+1. Store `deposit_height` in the nullifier; check it in `prune`.
+2. Replace "tip advanced" with **staleness** — the last accepted header's slot must be recent.
+3. Give the reorged-payout state an **unclaim/refund** path.
+4. Add a **payout identifier binding** to `settle_redeem`.
+5. Make `slash`'s predicate explicit, or drop the claim that the bond is enforced.
+6. Make consent the **script registration**, and define `owed`'s decrement.
