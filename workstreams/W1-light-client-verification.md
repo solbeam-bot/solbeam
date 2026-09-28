@@ -177,6 +177,17 @@ cw-144: 324 of 324 mainnet headers predicted exactly, heights 968377..968700
    makes both bounds 144 times too big, so every real timespan looks short and every target pins to
    the lower clamp. The replay catches it because no header matches.
 
+**What was verified, and where.** The rule is replayed against real mainnet headers on the host
+(`cargo test` in `difficulty-vectors/`, 6/6 green, 324/324 exact). The program itself was compiled for
+the **real on-chain target** with the aarch64 SBF platform tools —
+`cargo build --target sbpf-solana-solana --release` produces an SBF ELF (e_machine 263).
+
+**What was not.** The on-chain suite was **not run**: Agave publishes no `solana-test-validator` for
+aarch64 Linux (only x86_64 and aarch64-apple-darwin), so there is no validator on this box. The
+TypeScript tests type-check (`tsc --noEmit` clean), and the client changes are simple enough to
+reason about, but **20/20 green is an expectation here, not an observation.** It must be run on the
+x86_64 build box before this workstream is treated as closed.
+
 **The window is 192 records, and it is fixed by arithmetic rather than chosen.**
 
 ```
