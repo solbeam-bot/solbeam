@@ -15,9 +15,9 @@ code written) or *open* (needs a decision). The code is unchanged from the A1/A2
 |---|---|---|---|
 | **P1** | Checkpoint race + self-declared difficulty | **Decided** — race accepted | Deploy privately; address-link later if wanted. No code |
 | **P2** | `commit_fork` does not re-anchor | **Specified** | Store `fork_parent_hash` at init; link from it; re-check at commit |
-| **P3** | Deposits have a hard ~48 h life | **Open** — needs a decision | See the breakdown below |
+| **P3** | Deposits have a hard ~48 h life | **Decided** — 48 h accepted | App automates the mint; deadline disclosed; unproven receipts published off-chain |
 | **P4** | Retarget halts the client (F7) | **Specified** | Store the difficulty-period anchor; compute and check the new target. Testable on regtest |
-| **P5** | Replay-list shutdown and hard ceiling | **Open** | Enforce `MIN_PEG_IN`; size or replace the list |
+| **P5** | Replay-list shutdown and hard ceiling | **Half-decided** | `MIN_PEG_IN = 1 BSV` decided. **The 200-per-window ceiling is not fixed by it** — see below |
 | **P6–P10** | Vault-era items | **Design-in** | Depend on the vault, which is unbuilt |
 
 Only **P1** is closed by a decision rather than by work. Everything else is work still to do.
@@ -104,6 +104,42 @@ we store 288.
 `MAX_USED = 200` with `MIN_PEG_IN` unimplemented. Two hundred dust deposits block every peg-in for
 the rest of the window, repeatably. Independently, it caps the protocol at **200 peg-ins per
 48 hours** with no attacker at all.
+
+---
+
+## P5 — a minimum fixes the dust, not the ceiling
+
+Two different problems were filed together, and only one is answered by a minimum deposit.
+
+**(a) Dust griefing — decided.** `MIN_PEG_IN = 1 BSV` is enforced on-chain. Two hundred one-satoshi
+self-deposits previously cost dust; they now cost 200 BSV. That is a real deterrent.
+
+**But it is not a full one, and it is worth seeing why:** the attacker *receives tokens* for every
+deposit. So this is **a capital-lockup attack, not a fee attack** — the cost is the opportunity
+cost of 200 BSV tied up for up to 48 hours, plus fees and slippage if they sell on a DEX rather
+than waiting to redeem. Real, but not prohibitive.
+
+**(b) The 200-per-window ceiling — NOT fixed.** `MAX_USED = 200` with a 288-block window means the
+protocol can process **at most 200 peg-ins per 48 hours, with no attacker at all.** A minimum
+deposit does nothing about this; it bounds the *cost* of filling the list, not the *size* of it.
+
+And it cannot simply be raised. The account is `8 + 4 + (MAX_USED × 44) + 1` bytes against a
+10,240-byte cap, so one account holds at most **232** entries — ~100 mints a day. That is a
+capacity limit, not a safety one, and it would bite in ordinary use.
+
+| Option | Ceiling | Cost | Verdict |
+|---|---|---|---|
+| Keep the fixed list at 200 | 200 per 48 h | — | Fine for a PoC; not for production |
+| Shrink `DepositKey` (u32 height) | ~255 | trivial | Marginal |
+| **A nullifier PDA per minted deposit** ✅ | **none** | ~0.002 SOL rent per mint, refundable when closed | **The structural fix.** Solana cannot enumerate PDAs, but it does not need to — replay is checked by looking up a derived address |
+| Multiple list accounts | 200 × n | n × rent | Works, more moving parts |
+
+**The nullifier is the right answer**, and it also removes the pruning logic entirely: a deposit
+is "used" if its PDA exists. Closing those accounts after the window returns the rent.
+
+**Separately, the aggregate mint cap is still unimplemented.** `MAX_MINT_PER_WINDOW` was designed
+as the safety parameter; the replay list is a *different* thing that has been accidentally
+doubling as a capacity cap. They should not be conflated any longer.
 
 ---
 
