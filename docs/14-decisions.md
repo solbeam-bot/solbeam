@@ -164,6 +164,6 @@ the finished system.
 
 ## Where to read more
 
-- [`12-peg-mechanism.md`](12-peg-mechanism.md) — full reasoning, scenarios, audit findings A1–A16 and A18–A19 (the numbering skips A17, and A7 is listed ahead of A4)
+- [`12-peg-mechanism.md`](12-peg-mechanism.md) — full reasoning, scenarios, audit findings A1–A18
 - [`04-trust-model.md`](04-trust-model.md) — what is trusted, and the roadmap to a signerless reserve
 - [`05-relayers.md`](05-relayers.md) — the relayer role and bond custody
