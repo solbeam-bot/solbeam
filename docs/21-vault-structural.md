@@ -4,6 +4,10 @@ Two reviews of the previous vault failed on the same four classes of defect. Thi
 against those classes rather than a third patch. It supersedes [`20-vault-revised.md`](20-vault-revised.md)
 and [`19-vault.md`](19-vault.md).
 
+> 🛑 **THIRD AUDIT: NOT SOUND TO BUILD, AND THE CHAINWORK PREMISE IS FACTUALLY WRONG.**
+> BSV does not retarget every 2016 blocks — its difficulty adjusts **every block**. The foundation
+> this document was written on does not exist. See §Third audit.
+
 **Status: designed, not built.**
 
 ---
@@ -231,3 +235,64 @@ start height and time — is the same kind of stored scalar.
 `work(b) = 2^256 / (target + 1)` fits a `u128` for BSV's real difficulty range (per-block work is
 roughly `2^69`, and a full chain about `2^89`). It would not fit for an absurdly high difficulty, and
 the arithmetic should **saturate** rather than wrap. Worth a test at the boundary.
+
+---
+
+## Third audit — not sound, and one error is factual
+
+### The foundational error: BSV's difficulty changes **every block**
+
+This document asserted: *"retargets are every 2016 blocks and the window holds 288, so at most one
+difficulty boundary can ever sit inside the window."* **That is false, and I stated it as fact
+without checking.**
+
+BSV does not use Bitcoin's 2016-block interval. Its difficulty adjustment is a moving-average
+algorithm applied **per block** — per BSV's own documentation, *"the current difficulty adjustment
+algorithm changes the rate every block"* ([BSV wiki](https://wiki.bitcoinsv.io/index.php/Target),
+[BSV Hub](https://hub.bsvblockchain.org/higher-learning/bsv-academy/bsv-theory/proof-of-work/controlling-the-block-discovery-rate.md)).
+ASERT derives the target from an **anchor block** and the incoming block's own timestamp.
+
+**Everything built on that premise falls:**
+
+| | |
+|---|---|
+| **Two `bits` values derive in-window difficulty** | False. Up to 288 distinct values can sit in a 288-header window |
+| **~36 bytes, window stays 288** | False. `hash + bits` is 36 B × 288 = 10,368, plus 106 B overhead = **10,474 > the 10,240 cap** |
+| **`push_header` works on a real chain** | **It does not.** It requires `bits == expected_bits`, so it rejects every header after a per-block adjustment — F7 is not "halts at the next retarget", it is **"halts almost immediately on any real chain"** |
+| **Chainwork can be computed from two scalars** | Cannot. `bits_at(height)` is wrong for nearly every header |
+
+**This also means the shipped light client has never been tested against a real difficulty.** Regtest
+uses the maximum target and never adjusts, so the constant-difficulty assumption has held for the
+entire PoC — and would have failed on contact with testnet.
+
+**What the fix now looks like, and why it is research rather than design:** if BSV uses **ASERT**,
+then the expected target is computable from **one stored anchor** (height, time, bits) plus the
+incoming header's own timestamp — which the header already carries, so **no per-header storage is
+needed at all**, and the window can stay 288. If it is the older 144-block moving average, the client
+needs 144 timestamps and the window must shrink to about 253 records at 40 bytes each.
+
+**Which one it is has to be established from BSV's specification and checked against real headers.
+It cannot be assumed.** This is the correction that matters most in the whole document set.
+
+### The other findings, briefly
+
+| | | |
+|---|---|---|
+| **T1** | `slash` is **forgeable** — nothing requires the spending transaction to be in a block (no header or Merkle proof), so anyone can craft bytes consuming a public outpoint and **burn any relayer's entire bond**. The predicate is also a universal quantifier over a set Solana cannot enumerate | critical |
+| **T2** | **The redesign violates its own class-4 rule.** `slash` pays into *"the holders' reserve account"* — one program-owned account funded by many bonds, unverifiable, exactly the pooled account the redesign claims to have removed. It is also self-contradictory: burning the bond leaves nothing to transfer | critical |
+| **T3** | **The peg-in fee has no home.** The `OP_RETURN` layout has no amount or fee field, so "mints NET amount" is undefined — and if the relayer declares the fee, the program trusts the party with the incentive to overstate it | critical |
+| **T4** | **Recorded P2 is still unanswered.** `commit_fork` still splices without re-checking the fork point, and this document's "still required" list omits it entirely — the one defect doc 18 called *"the one genuine forgery vector"* | critical |
+| **T5** | **`owed_R` double-counts.** Incrementing at both mint and accept, with only settlement decrementing, means a mint redeemed through the same relayer goes 100 → 200 → 100 and the mint line is never discharged. Monotone growth makes `bond_R ≥ k · owed_R` unsatisfiable, so the bond locks | high |
+| **T6** | **The settle/cancel race is still live** — `deadline_slot` is caller-supplied with no `>= now + D` requirement, so a holder can choose a past deadline, keep the BSV the relayer paid, and reclaim the escrow | high |
+| **T7** | **Post-settle reorg leaves the holder with nothing.** The escrow is burned and the item closed, so neither instruction can resolve it — contradicted by docs 13/14 | high |
+| **T8** | **Freshness is satisfied by the attacker** — `last_push_slot` advances on *any* accepted header, so it measures update recency, not honesty. And a mint staged on a branch that later loses becomes releasable once its height leaves the window: **the honest chain advancing destroys the only evidence** | critical |
+| **T9** | `Marker` is again three things at once (replay record, slash evidence, closeable object) with contradictory field lists — **class 1 and class 2 were obeyed per instance, not per class** | high |
+| **T10** | Chainwork arithmetic underspecified: 256-bit division, the baseline at `initialize` (cumulative from genesis — not derivable from a checkpoint header, and never listed as a trusted scalar), and `commit_fork` never specified to *write* the new state | high |
+| **T11** | Rent now ~$0.11 extra per item, and no `stake`/`announce_unbond`/`withdraw_bond` instruction exists though the table says `Bond` is closed by one | medium |
+| **T12** | **Silent decision reversals:** requiring a registered relayer script reverses D6/P8, and "genesis is the ordinary bonded path" reverses D3/G2, with no change recorded in doc 14. Doc 13:39 and doc 03:53 still claim *"strictly-heavier commit — yes, 17 passing tests"* while `commit_fork` compares **height** (`lib.rs:401`) | medium |
+
+### Verdict
+
+**Not sound to build.** Three designs, three audits, and the holes have moved rather than closed: the
+pooled reserve violates the redesign's own rule, `slash` is forgeable, `owed_R` does not balance, the
+settle/cancel race is live, and the chainwork rule rests on a false statement about the chain.
