@@ -147,6 +147,22 @@ doubling as a capacity cap. They should not be conflated any longer.
 
 ## 2. Live the moment the vault is built — design them in, not after
 
+### P6 — Closed by the nullifier decision · **was F1**
+
+**Superseded by P5.** P6 said a burn must release the replay entry so a re-mined deposit can be
+minted again. With a nullifier PDA, burning the staged mint **closes the PDA**, so the entry is
+released as a side effect. No separate work.
+
+*On the suggestion of pinning a transaction to a specific block:* BSV has `nLockTime`, but it
+sets a **lower bound only** — "not valid before height H". A transaction with `nLockTime = H` can
+still be mined in any later block, so it cannot be pinned to one block, and there is no native
+"expires after" either (`OP_CLTV`/`OP_CSV` are no-ops). The underlying problem is the height
+changing on re-inclusion, and the fix is to key replay on `(txid, vout)` — which is already done
+— plus the nullifier. The accepted posture, "even if mints fail sometimes it is safer", is
+right, and it is what keying on identity rather than height already gives us.
+
+<details><summary>Original entry, kept for the record</summary>
+
 ### P6 — The vault must release the replay entry when it burns · **F1**
 Pruning is by height, and a natural reorg does not remove a transaction — it returns it to the
 mempool to be mined again. So the ordinary case is: block orphaned, vault correctly burns the
@@ -154,7 +170,33 @@ staged mint, transaction re-mined, **and the depositor can never mint again.** T
 reserve and their tokens are gone. This is the most likely honest-user loss in the *designed*
 system and it needs no attacker.
 
+</details>
+
 ### P7 — Detection has no reward · **F3**
+
+**Context: this is a Solana-side job.** The light client lives on Solana and stores BSV block
+hashes in its account. For it to know a new BSV block exists, **someone must submit a Solana
+transaction calling `push_header`.** That is what "pushing headers" means — one Solana
+transaction per BSV block, ~$0.0004 each, about **$0.39 a week** in total.
+
+Two separate roles, neither paid:
+
+1. **Advancing** — one `push_header` per BSV block. Permissionless, cheap, unstaked.
+2. **Fork staging** — when BSV reorganises, building and committing the competing branch. More
+   work, and *this* is the act of detection.
+
+**The incentive that does exist**, and it is probably enough: anyone whose deposit is affected
+wants the honest chain followed. A depositor whose mint was orphaned cannot re-mint until the
+client switches to the honest branch — so **they** are motivated to stage the fork. Stakers are
+too, since an undetected fraud eats their buffer. On the D6 unbacked path there are no stakers,
+which is where the incentive runs thinnest.
+
+**So the question is narrower than "should detection be paid":** is the affected-depositor
+incentive sufficient, or is an explicit bounty wanted? A formal reward is optional, not
+obviously necessary.
+
+<details><summary>Original entry</summary>
+
 Pushing headers is permissionless, unpaid and unstaked. Staging a competing branch — the actual
 detection act — has no bounty, while payout challenging does. On the unbacked path (D6) there is
 no staker whose buffer is at risk either, so **there is no incentive at all.** If detection is the
@@ -216,3 +258,5 @@ code:
 3. **P7** — is detection paid for, or is it assumed to happen?
 
 Everything else here is either fixed, scheduled, or explicitly accepted.
+
+</details>
