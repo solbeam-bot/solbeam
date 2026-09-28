@@ -466,12 +466,18 @@ fn single_header_trace_matches_the_reference() {
     //   work   = 19,799,344,252,901,577,219,061 * 600 / 90,211
     //          = 131,686,895,741,549,770,332
     //   target = (2^256 - work) / work
-    //          = 0x23dc4d << 192
-    let mut expected_be = [0u8; 32];
-    expected_be[29..32].copy_from_slice(&[0x23, 0xdc, 0x4d]);
+    //          = 0x23dc4dfcb18f11d7f88141b87fbda4cb55cf6d4670de87ee
+    // The whole 32-byte value, not only its compact mantissa: this asserts the
+    // number, and `target_to_compact` asserts what the header declares, so a
+    // mistake in either half is visible.
+    let expected_be: [u8; 32] = [
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23, 0xdc, 0x4d, 0xfc, 0xb1, 0x8f, 0x11,
+        0xd7, 0xf8, 0x81, 0x41, 0xb8, 0x7f, 0xbd, 0xa4, 0xcb, 0x55, 0xcf, 0x6d, 0x46, 0x70, 0xde,
+        0x87, 0xee,
+    ];
     assert_eq!(
         target,
-        U256::from_big_endian(&expected_be) << 192,
+        U256::from_big_endian(&expected_be),
         "the target computed for height 968,377 must be the reference target"
     );
     assert_eq!(target_to_compact(target), 0x1823_dc4d);
