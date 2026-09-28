@@ -16,7 +16,7 @@
  │  ─ a P2PKH script per   │       │                                  │
  │    relayer, no pooled   │       │  Light client                    │
  │    reserve              │       │  ─ checkpoint + 288-block window │
- │  ─ the relayer pays     │       │  ─ PoW / DAA / Merkle checks     │
+ │  ─ the relayer pays     │       │  ─ PoW / Merkle checks (DAA is **not** implemented — see below)     │
  │    redemptions from its │       │                                  │
  │    own float            │       │  Vault (program-owned account)   │
  └───────────┬─────────────┘       │  ─ every mint lands here first   │
@@ -37,7 +37,7 @@
 
 | Component | What it does |
 |---|---|
-| **BSV light client (Solana program)** | Holds a checkpoint plus a rolling window of BSV headers. It answers one question — *is this transaction in this block, and is that block still canonical?* — by verifying proof-of-work, difficulty adjustment and Merkle inclusion. This is the trustless half of the system, and it is what makes minting permissionless |
+| **BSV light client (Solana program)** | Holds a checkpoint plus a rolling window of BSV headers. It answers one question — *is this transaction in this block, and is that block still canonical?* — by verifying proof-of-work and Merkle inclusion. **Difficulty adjustment is not implemented: `check_daa` has no caller and the target is frozen at `initialize`, so the client halts at the first retarget (F7)**. This is the trustless half of the system, and it is what makes minting permissionless |
 | **The vault (program-owned token account)** — *designed, not built* | **Every mint lands here first, never with the depositor.** The program releases the staged `solBSV` once a maturity window passes with the deposit still canonical, or **burns** it if a reorg is followed. Because the account is program-owned, releasing or burning is disposing of what the program holds — that is what makes a transfer reversible without a freeze authority, and it removes the window in which a fraudulent mint could be sold |
 | **The order book** — *designed, not built* | Underwriting, discovered rather than set by a committee. Stakers post sell orders — so much liquidity, at such a fee, at such a confirmation depth — matched by price then time, partially filled. Because depth is a term of the trade, the market prices reorg risk instead of an operator guessing at it |
 | **Relayers** — *bonding and per-relayer deposits designed, not built* | A role, not a company. Anybody may run one. A relayer holds BSV, pays redemptions, and lodges a bond in `solBSV`, sized `bond_R ≥ k × owed_R`, that the program can seize. Each relayer has its own deposit script; there is no pooled reserve to hold, audit or steal |

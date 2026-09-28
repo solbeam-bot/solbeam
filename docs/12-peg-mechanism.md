@@ -466,7 +466,7 @@ open item here — see Decision 5.
 ### Rule 2 — read the time from the headers
 
 The 80-byte header carries a 4-byte little-endian Unix timestamp at **offset 68**,
-which `push_header` already parses. So the client can derive chain-relative time
+which the program does **not** yet parse — `push_header` reads only offsets 4 and 72, and `HeaderRecord` stores a 32-byte hash only. So the client can derive chain-relative time
 from the chain itself, with no external clock:
 
 | Signal | Definition | Reads as |
@@ -1161,7 +1161,7 @@ The design implies these changes to the implemented program:
   liveness gap in the built code, not a designed feature still to be written.
 - **`commit_fork`** must record reorg depth and block time when it fires, feeding
   the depth rule and the pause.
-- **`push_header`** must start using the header timestamp it already parses, to
+- **`push_header`** must start using the header timestamp it would need to start parsing, to
   expose the regression, catch-up and staleness signals.
 - **The mint path** gains the gate checks, and mints into the vault rather than to the
   depositor; **the redemption path** gains both the gate and the capacity check.

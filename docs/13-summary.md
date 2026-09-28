@@ -113,7 +113,7 @@ nobody should accept. `FLOOR` is not a parameter in code; the shipped mint uses 
 `MIN_CONFIRMATIONS = 12` and parses no depth from the deposit.
 
 **Detection comes from the chain itself.** As designed, a reorg is visible in the BSV headers the
-client already stores: depth from the headers, timing from the timestamps at offset 68 of each
+client already stores: depth from the headers, timing *intended* to come from the timestamps at offset 68, which are not yet read of each
 header. Nothing external is consulted.
 
 **Detection requires someone to advance the honest chain** — which is permissionless, cheap,

@@ -1,5 +1,9 @@
 # 17. What it costs to run, and who pays
 
+> **The 10 bp used throughout is illustrative, not a parameter.** The fee is **discovered on the
+> order book**, so the figures below answer "would any plausible fee cover this?" rather than
+> assuming a rate. The point stands for any fee at all.
+
 Figures use the measured constants: **5,000 lamports** per signature on Solana, **5,080
 lamports per byte** of account rent (measured from `solana rent` on the droplet), **144 BSV
 blocks a day**, and a reference price of **$77/SOL** and **$30/BSV**. BSV relay is taken at the
