@@ -168,8 +168,7 @@ close.
 
 ## Still required, and not this document's to fix
 
-1. **`commit_fork` compares height, not chainwork** (`lib.rs:401`), so a longer lower-work branch
-   wins. This is a light-client defect, not a vault one, and it undermines V5's replacement too.
+1. ~~`commit_fork` compares height, not chainwork~~ — **fixed below.**
 2. **F7 — the client halts at the first retarget.** Until fixed, none of this runs on testnet.
 3. **`MAX_STALENESS_SLOTS`, `MATURITY_BLOCKS`, `D`, `W` are unset.** `D >= C_payout + W` and
    `confirmations + MATURITY <= WINDOW` constrain them; the values are a separate decision.
@@ -179,3 +178,56 @@ close.
 5. **The `slash` predicate and the reserve account it pays into** need review.
 6. **Nothing has verified that `verify_deposit`'s account creations are atomic.** Two inits in one
    instruction; if the second fails the first should roll back, and that should be a test.
+
+---
+
+## Chainwork — required, and nearly free
+
+**The defect:** `commit_fork` compares **height** (`lib.rs:401`), so a longer but lower-work branch
+replaces a heavier one. While the difficulty is constant these are the same thing — which is why it
+has never bitten on regtest — but **the moment DAA is enabled they diverge, and the whole reorg rule
+becomes "whoever mines the most blocks wins"**, regardless of the work in them. A vault whose release
+predicate rests on canonicity cannot be built on a client that compares length.
+
+### The rule
+
+```
+chainwork(H)  =  Σ  work(bits_at(h))   for h <= H
+work(b)       =  2^256 / (target(b) + 1)
+```
+
+**`commit_fork` and any tip replacement must require strictly greater `chainwork`, never height.**
+
+### Why this needs no extra per-header storage
+
+The naive fix is to store each header's work in the window — 16 bytes per record, taking
+288 × 48 = 13,824 bytes, well past the 10,240-byte account cap.
+
+**But retargets are every 2016 blocks and the window holds 288.** So **at most one difficulty
+boundary can ever sit inside the window.** Two stored `bits` values and the height they changed at
+are therefore enough to derive any in-window header's difficulty:
+
+```
+LightClient { ..., expected_bits, prev_bits, retarget_height, chainwork: u128, last_push_slot }
+
+bits_at(h) =  if h >= retarget_height  { expected_bits }  else  { prev_bits }
+```
+
+- **`push_header`** validates `bits == bits_at(height)`, adds `work` to `chainwork`, and records
+  `last_push_slot` — which is also the freshness check the release predicate needs.
+- **`commit_fork`** derives the fork point's work by subtracting the in-window work, adds the staged
+  branch's, and requires the total to be **strictly greater** than the current tip's.
+
+**Cost: 16 bytes for the cumulative value, 4 + 4 for the two difficulties, 4 for the retarget height,
+8 for the last-push slot — about 36 bytes.** The window stays at 288 and `LightClient::SPACE` goes
+from 9,322 to roughly 9,358, far inside the cap.
+
+This also gives DAA a home: implementing the retarget now means **computing** `expected_bits` at a
+boundary rather than accepting a declared one (F7), and the anchor it needs — the previous period's
+start height and time — is the same kind of stored scalar.
+
+### One caveat, stated rather than hidden
+
+`work(b) = 2^256 / (target + 1)` fits a `u128` for BSV's real difficulty range (per-block work is
+roughly `2^69`, and a full chain about `2^89`). It would not fit for an absurdly high difficulty, and
+the arithmetic should **saturate** rather than wrap. Worth a test at the boundary.
