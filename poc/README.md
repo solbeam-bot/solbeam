@@ -180,7 +180,7 @@ solbeam-poc/
 - [ ] Merkle verification: given txid, branch, index and height, fold to the stored root
 - [ ] Reorg handling: **built as fork staging** — `init_staging` / `push_fork_header` / `commit_fork` / `abandon_staging`, strictly-heavier commit, not a walk-back-and-replace
 - [ ] Off-chain `advancer` pushes real regtest headers every block
-- **DAA is not skipped by choice (F7):** regtest has a **fixed difficulty target**, which hides the defect. `check_daa` has **no caller**, `push_header` requires `bits == expected_bits`, and `expected_bits` is never refreshed — so the client **halts permanently at the first retarget** on testnet or mainnet. Implementing the retarget is required before testnet, not a follow-up flag
+- **DAA is implemented (W1.6).** The retarget is cw-144, exactly as the SV Node's `src/pow.cpp` computes it, and it is verified against real mainnet headers — **324/324 predicted exactly**. The old fixed-target check (F7) is gone. What remains open is that the rule is hard-coded: BSV's own documentation says it will revert to 2016-block retargeting at some point, so changing it must not need a program redeploy
 - **Done when:** a BSV tx in a regtest block can be proven to have happened, entirely on-chain, with no oracle
 
 ### P2 — Peg in: mint (~1 week)

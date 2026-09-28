@@ -1,5 +1,9 @@
 # 15. Second audit — who loses funds
 
+> **Historical, as of the audit.** Findings are preserved as they were recorded. F7 and the
+> `commit_fork` height comparison have since been fixed (W1.6/W1.7); see `poc/TEST_PLAN.md` §0 and
+> `docs/13-summary.md` for the current state. The sections that were amended carry a note.
+
 A focused adversarial pass on the mechanism as it now stands, organised around four
 questions: who loses in a **natural** reorg, who loses to a **reorg attacker**, who can
 **extract funds illicitly**, and who can be **damaged without being robbed**.
@@ -183,6 +187,7 @@ bridge **stops minting at the first retarget, permanently.**
 The older framing called DAA "a flag, not an omission". That is no longer accurate: the flag
 is now **load-bearing for liveness**, not merely for security. Worth deciding before testnet:
 implement the retarget, or permit `expected_bits` to advance at a retarget boundary.
+**Fixed in W1.6** — see `difficulty.rs`; the finding is kept as the audit recorded it.
 
 ### X1 — "The vault does not exist" · **correct, and already addressed**
 

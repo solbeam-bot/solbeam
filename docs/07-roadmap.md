@@ -10,7 +10,7 @@ component the rest of the design rests on, then the parts that need bonds and ad
 
 | Step | What ships | Why this order |
 |---|---|---|
-| **F7 — the difficulty retarget** | `expected_bits` advances at a difficulty boundary and `check_daa` is called | The one defect that **halts the built system permanently at the first retarget**. Invisible on regtest, fatal on testnet or mainnet, so nothing later can be tested on a real chain until it is fixed |
+| ~~**F7 — the difficulty retarget**~~ | ~~`expected_bits` advances at a boundary~~ | **Closed.** cw-144 is implemented and verified against real mainnet headers, **324/324 exact**, so the client follows a real chain. **Still open:** the rule is hard-coded and BSV plans to change it, so the algorithm needs to be swappable without a redeploy |
 | **F6 — the replay-list ceiling** | `MIN_PEG_IN` enforced, and `MAX_USED = 200` sized or replaced | A hard ceiling of **200 peg-ins per 48-hour window**, with no attacker required |
 | **The vault** | Every mint lands in a program-owned token account; release after maturity, burn if a reorg is followed | The component the rest of the design rests on. It gives reversibility without a freeze authority and removes the window in which a fraudulent mint could be sold |
 | **Per-relayer deposits and `owed_R`** | Each relayer's own deposit script; `bond_R ≥ k × owed_R` from proofs the program verified; relayer consent | Turns a fraud from something holders absorb into something the relayer is charged for, and removes the pooled reserve |

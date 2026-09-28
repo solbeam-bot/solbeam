@@ -16,12 +16,13 @@ described as working that are specified but not built. §1 is kept as history, n
 
 - **The light client** — trusted checkpoint, a 192-block rolling window storing a block hash, chainwork and time
   per header, linkage, and proof of work with the target taken **from the chain** rather than from
-  the submitted header. 17 on-chain tests.
+  the submitted header. 20 on-chain tests.
 - **`solBSV`** — classic SPL, 8 decimals, no freeze authority, mint authority a program PDA.
 - **The mint** — verifies a deposit against the window: Merkle fold, on-chain transaction parsing,
   exact output script, confirmation depth, replay refusal. Then mints.
 - **Fork staging** — per-submitter, batched, abandonable; reorg following with a strictly-heavier
-  commit.
+  commit **by accumulated chainwork**, re-anchored at the fork point recorded when the branch was
+  staged (P2).
 - **The Python reference and the live SV Node pin** — all checkers pass; 21/21 against a real node.
 
 ### 0.2 Designed, and NOT built
@@ -46,7 +47,7 @@ posture, not a seeded-book special case.
 
 | | Defect | Effect |
 |---|---|---|
-| **F7** | `expected_bits` is set at `initialize` and never updated; `check_daa` is never called | **Halts permanently at the first difficulty retarget.** Invisible on regtest, fatal on testnet or mainnet. Introduced by the A1 fix |
+| ~~**F7**~~ | ~~`expected_bits` is set at `initialize` and never updated~~ | **Fixed by W1.6.** The retarget is cw-144, from the node's `src/pow.cpp`, and it is verified against real data: **324/324 mainnet headers predicted exactly**. The old `bits == expected_bits` requirement is gone for every header with 147 records behind it |
 | **F6** | `MAX_USED = 200` with `MIN_PEG_IN` unimplemented | **A hard ceiling of 200 peg-ins per 32-hour window**, with no attacker required |
 | **C3** | `initialize` accepts any header meeting **its own** declared `bits` | The first caller picks the trusted root *and* its difficulty |
 | **A6** | One bridge-wide P2PKH deposit script | The pooled reserve the design removes |
@@ -58,8 +59,10 @@ Full findings, including which are inherent and which merely unbuilt, are in
 
 ### 0.4 Next, in order
 
-1. **F7** — implement the retarget, or allow `expected_bits` to advance at a boundary. Without it
-   the plan cannot reach testnet at all.
+1. ~~**F7**~~ — **closed.** cw-144 is implemented (`difficulty.rs`) and verified 324/324 against
+   real mainnet headers (`difficulty-vectors/`). What is *not* closed: the algorithm is hard-coded,
+   and BSV's own documentation says it will revert to 2016-block retargeting at some point, so the
+   code needs a way to change the rule without a redeploy (recorded as X3).
 2. **F6** — enforce `MIN_PEG_IN` and size or replace the replay list.
 3. **The vault** — the component the rest of the design rests on.
 4. **Per-relayer deposits, `owed_R`, consent** — what turns a fraud from something holders absorb
@@ -93,7 +96,7 @@ The Python checker suite passes **156/156** offline, and **157/157** with a live
 
 ### 1.3 Not started
 
-- **Phase 2 — built.** The light client, the deposit verifier and the `solBSV` mint are built and verified on-chain — **17 tests** against the fixture, including a hostile-advancer suite and fork staging with reorg following. **Real chainwork for the fork choice is not built**: `commit_fork` compares branch length, which is correct on regtest only. See §4.5, and §0 for the authoritative status.
+- **Phase 2 — built.** The light client, the deposit verifier and the `solBSV` mint are built and verified on-chain — **20 tests** against the fixture, including a hostile-advancer suite and fork staging with reorg following. **Real chainwork for the fork choice is not built**: `commit_fork` compares branch length, which is correct on regtest only. See §4.5, and §0 for the authoritative status.
 - **Phase 3** — the off-chain services (advancer / watcher / relayer); bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
 - **Phase 5** — monitoring. Plan only; see §11.
@@ -297,15 +300,15 @@ The consequence is a defect in built code, audit finding **F7**: on any chain wh
 
 ### 4.3 Test scope
 
-> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (17 on-chain tests). Cases 2.5 (DAA), 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row.
+> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (20 on-chain tests). Cases 2.5 (DAA), 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row.
 
 | # | Case | Expected |
 |---|---|---|
 | 2.1 | Mint properties | 8 decimals; freeze authority absent; mint authority == the bridge PDA |
-| 2.2 | Light client accepts a valid header sequence | Checkpoint + window stored; each header links to the tip. **No chainwork accumulates** — not built |
+| 2.2 | Light client accepts a valid header sequence | Checkpoint + window stored; each header links to the tip, and each record carries its own cumulative chainwork and timestamp |
 | 2.3 | Bad PoW / bad linkage / wrong checkpoint | Each rejected |
 | 2.4 | **Rolling window bound** | A header outside the window is rejected; **rent cost measured and recorded** |
-| 2.5 | **Difficulty retarget (F7)** | **Not built and not tested.** Today every header after a retarget is rejected `UnexpectedRetarget`. The case to add: a valid retarget accepted, an invalid one rejected |
+| 2.5 | **Difficulty retarget** | **Built and tested.** A valid retarget is accepted and a wrong one is rejected `UnexpectedRetarget` (fixture-level); the rule itself is replayed against **324/324 real mainnet headers** in `difficulty-vectors/`, which is the test that matters. **Not covered end to end on a chain whose difficulty actually varies** — the fixture is constant-difficulty, so the on-chain assertion exercises the no-retarget path |
 | 2.6 | **Cross-implementation agreement** | The on-chain Merkle/header logic and the Python verifier accept and reject the *same* fixtures. This is the single most valuable test in the PoC — it is where two independent implementations are forced to agree |
 | 2.7 | **Mint from the Phase 1 fixture** | Balance rises by exactly the deposited amount, at the right ATA, with 8 decimals |
 | 2.8 | Replay the same proof | Rejected |
@@ -338,7 +341,16 @@ Three parts were needed, and all three are now built:
 2. **the replacement policy** — **strictly heavier wins, ties keep the incumbent**, so an equal-length branch cannot be used to churn the tip; a branch may fork back to any height still inside the window, and deeper than that needs a checkpoint reset, which is a governance action;
 3. **what happens to already-minted deposits** — in the **shipped** program, **nothing.** The mint went straight to the depositor, no vault exists, and `solBSV` deliberately has no freeze authority, so a *released* balance cannot be reversed. (In the designed system a still-*staged* mint is burned out of the program-owned vault; a released mint still cannot be reversed.) The trade is explicit: no confiscation, at the cost of a possible unbacked mint after a reorg deeper than twelve blocks.
 
-**Chainwork is absent, not flag-shaped.** `commit_fork` compares branch *length*, which is correct on regtest because the target never changes and work is therefore proportional to length. Testnet needs real chainwork — `work = 2^256 / (target + 1)`, summed — and **none of it is built**. Unlike DAA (F7), which is built code that halts, chainwork is simply missing. Implementing it now would be untested code, since regtest cannot exercise it.
+**Chainwork is built now, and the comparison is by work.** Each `HeaderRecord` stores the cumulative
+work of the target its header declares — `work = 2^256 / (target + 1)`, summed from the checkpoint —
+and `commit_fork` compares that, so a longer but lower-work branch loses. On a constant-difficulty
+chain the two rules agree, which is why this was invisible on regtest; the arithmetic is what cw-144
+needs anyway, since the retarget *is* a function of the work difference between two blocks.
+
+**What is still not exercised:** a branch choice decided *by* differing work. The fixture's chain
+mines every block at the same target, so the on-chain test cannot distinguish the chainwork
+comparison from a length comparison. The per-header work derivation is verified against real mainnet
+headers; the comparison on a varying-difficulty branch is not.
 
 ### 4.6 The branch cannot be submitted in one transaction
 
@@ -364,6 +376,13 @@ The error names the symptom and says nothing about the cause, which is why it re
 **The griefing decision, and why it went the way it did.** A single shared staging slot can be occupied with junk, denying legitimate reorgs to everyone. The options were per-submitter accounts, a bond on a shared slot, or accepting the contention.
 
 **Per-submitter, no bond.** The staging PDA is seeded `[b"staging", submitter]`, so no two submitters can contend for the same slot — the problem is removed structurally rather than priced. A bond would still leave one slot to fight over and would drag in slashing machinery for what is only a denial of reorg-following. And since rent is a refundable deposit rather than a fee, an attacker creating many staging accounts costs themselves opportunity cost and harms nobody, which is a better failure mode than a slashed bond.
+
+**Re-anchoring (P2).** `init_staging` records the hash of the block at `fork_height` **once**, and
+`commit_fork` refuses unless the chain still holds that block at that height. Without it, two
+branches staged against the same height could both commit and the window would be spliced from two
+chains with no linkage between them — a mint forgery rather than a nuisance. The branch's first
+header is linked to the recorded hash, not to a fresh lookup, for the same reason. `ForkPointMoved`
+is the error; re-staging is the remedy.
 
 **An off-by-one worth recording.** `fork_height` is the **last block the two branches share** — the common ancestor — so a branch of N headers commits at tip `fork_height + N`. The fixture's own `fork.from_height` uses the *other* convention: it is the first block of the competing branch. The original `push_fork` computed `from_height + len`, which for the fixture is 191 rather than the correct 190. **That bug was invisible because the test was skipped** — it would have failed on its first real run, which is precisely the cost of leaving a gap marked rather than closed.
 
@@ -554,7 +573,7 @@ Indicative, one focused developer. Note that Phase 1 is new work that the earlie
 | **Phase 0** — environment, bootstrap, doctor | 2–3 days | ✅ **Done.** `doctor.sh`: 19 ok, 1 warning, 0 failures on the x86_64 droplet |
 | **Phase 1A** — synthetic chain + deposit proof | 3–4 days | ✅ **Done.** |
 | **Phase 1B** — real SV Node format pin | 1–2 days | ✅ **Done.** Took four live iterations, all on `getmerkleproof2`'s wire format |
-| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 17 on-chain tests. Real chainwork is still not built |
+| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 20 on-chain tests. Real chainwork is still not built |
 | **Phase 3** — burn, relayer, bond, deadline, challenge | 1–1.5 weeks | Includes the misbehaving-relayer mode |
 | **Testnet repeat** (BSV testnet + Solana devnet) | 2–3 days | **Blocked until the retarget is implemented (F7)**: DAA is actively rejected today, so the client halts at the first difficulty change — it is not a flag to switch on |
 | **Total to a demoable PoC** | **~5–6 weeks** | |

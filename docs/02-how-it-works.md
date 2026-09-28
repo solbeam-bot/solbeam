@@ -1,7 +1,7 @@
 # 2. How it works
 
 > **Built or specified?** The light client, the `solBSV` token and the mint exist today and pass
-> 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
+> 20 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
 > designed, not built.** The program that ships mints straight to the depositor, so every step
 > below that depends on the vault is a specification rather than a description of running code.
 > [`13-summary.md`](13-summary.md) is the authoritative account; the reasoning is in

@@ -1,5 +1,7 @@
 import * as anchor from "@anchor-lang/core";
-import { Program } from "@anchor-lang/core";
+// `Solbeam` is the generated IDL type (see target/types/solbeam.ts). The
+// tests treat the program namespace structurally rather than through
+// Anchor's Idl generic, which needs the real generated IDL to instantiate.
 import { Solbeam } from "../target/types/solbeam";
 import { expect } from "chai";
 import { createHash } from "crypto";
@@ -24,7 +26,7 @@ function displayToInternal(hex: string): Buffer {
 describe("solbeam — BSV light client", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = anchor.workspace.Solbeam as Program<Solbeam>;
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
 
   const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
   const raws: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
@@ -145,7 +147,7 @@ describe("solbeam — BSV light client", () => {
 describe("solbeam — verify a deposit against the window", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = anchor.workspace.Solbeam as Program<Solbeam>;
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
 
   const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
   const raws: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
@@ -368,7 +370,7 @@ describe("solbeam — verify a deposit against the window", () => {
 describe("solbeam — a hostile advancer", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = anchor.workspace.Solbeam as Program<Solbeam>;
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
 
   const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
   const raws: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
@@ -464,7 +466,7 @@ describe("solbeam — a hostile advancer", () => {
 describe("solbeam — following a reorg", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = anchor.workspace.Solbeam as Program<Solbeam>;
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
 
   const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
   const raws: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
@@ -520,9 +522,11 @@ describe("solbeam — following a reorg", () => {
     expect(after.tipHeight.toNumber()).to.equal(fork.tip_height);
     expect(Buffer.from(after.tipHash).toString("hex"))
       .to.equal(doubleSha256(last).toString("hex"));
-    // The window is bounded, so the deepest headers fall out of it. 288 is the
-    // 48-hour window, sized by time rather than picked — see TEST_PLAN 4.7.
-    expect(after.headers.length).to.be.at.most(288);
+    // The window is bounded, so the deepest headers fall out of it. 192 is the
+    // 32-hour window, and it is fixed by what cw-144 needs to store per header
+    // (hash + chainwork + time = 52 bytes) against the 10,240-byte account cap,
+    // not by a duration anyone picked — see TEST_PLAN 4.7 and §0.
+    expect(after.headers.length).to.be.at.most(192);
     // Committing closes the staging account and hands the rent back, so a
     // successful reorg does not strand a deposit.
     expect(await provider.connection.getAccountInfo(staging)).to.be.null;
@@ -564,5 +568,305 @@ describe("solbeam — following a reorg", () => {
     await program.methods.abandonStaging()
       .accounts({ staging, submitter: provider.wallet.publicKey }).rpc();
     expect(await provider.connection.getAccountInfo(staging)).to.be.null;
+  });
+});
+
+/**
+ * The A7 case the old test did NOT cover.
+ *
+ * The replay key used to be `(txid, vout, height)`. Re-submitting the same proof
+ * at the same height therefore fails under either key and proves nothing about
+ * the bug — which is what "refuses the same deposit twice" above does. The bug
+ * only appears when the SAME transaction is included at a DIFFERENT height,
+ * which is what a reorg produces when it re-mines a block.
+ *
+ * The re-inclusion is built for real rather than approximated: block 117's
+ * Merkle root is put into a new header at 118 that links to 117. A block that
+ * carries 117's root contains exactly 117's transactions, so the deposit really
+ * is in the canonical block at 118 — which is the consensus-relevant part of a
+ * reorg, and a valid header by every check the client makes (linkage, the
+ * chain's own target, real proof of work against the regtest target).
+ *
+ * This runs last and re-anchors the checkpoint, because it needs block 117 to be
+ * the TIP: a re-inclusion that moves the deposit *forward* is the direction a
+ * reorg produces, and the earlier blocks have long since left a 192-record
+ * window by the time the reorg suite has finished.
+ */
+describe("solbeam — replay across a re-inclusion (A7)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const [usedDeposits] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("used_deposits")], program.programId);
+  const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("deposit_script")], program.programId);
+  const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("mint")], program.programId);
+  const recipientOwner = new anchor.web3.PublicKey(
+    Buffer.from(fixture.proof.recipient, "hex"));
+  const TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+  const ASSOCIATED_TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+  const [recipientAta] = anchor.web3.PublicKey.findProgramAddressSync(
+    [recipientOwner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM);
+
+  const rawAt = (height: number): Buffer =>
+    Buffer.from(fixture.headers.find((h: any) => h.height === height)!.raw, "hex");
+
+  /** The fixture's deposit proof, optionally re-anchored to another height. */
+  const proof = (height: number, header: Buffer) => ({
+    height: new anchor.BN(height),
+    txid: Array.from(displayToInternal(fixture.proof.txid)),
+    vout: fixture.proof.vout,
+    amount: new anchor.BN(fixture.proof.amount),
+    recipient: Array.from(Buffer.from(fixture.proof.recipient, "hex")),
+    index: fixture.proof.index,
+    branch: fixture.proof.branch.map((h: string) => Array.from(Buffer.from(h, "hex"))),
+    header: Array.from(header),
+    tx: Buffer.from(fixture.deposit_tx_raw, "hex"),
+  });
+
+  const accounts = () => ({
+    lightClient, usedDeposits, depositScript, mint,
+    recipientTokenAccount: recipientAta, recipientOwner,
+    submitter: provider.wallet.publicKey,
+  });
+
+  it("refuses the same (txid, vout) re-included at a different height", async () => {
+    const raw116 = rawAt(116);
+    const raw117 = rawAt(117);
+    const raw118 = rawAt(118);
+
+    // Reach a state where 117 is the tip, by moving the checkpoint to 116 and
+    // extending. `setCheckpoint` resets the window, so this is the honest way to
+    // get a small freshly-anchored chain rather than by rewinding anything.
+    await program.methods
+      .setCheckpoint(new anchor.BN(116), Array.from(doubleSha256(raw116)))
+      .accounts({ lightClient, authority: provider.wallet.publicKey })
+      .rpc();
+    await program.methods.pushHeader(Array.from(raw117))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+
+    const lc = await program.account.lightClient.fetch(lightClient);
+    expect(lc.tipHeight.toNumber()).to.equal(117);
+    // One record plus the 116 tip is two, well inside the window, so nothing
+    // here is exercising window eviction.
+    expect(lc.headers.length).to.equal(1);
+
+    // The re-inclusion: 117's transactions, in a block at 118.
+    const reIncluded = Buffer.alloc(80);
+    reIncluded.writeUInt32LE(0x20000000, 0);              // version
+    doubleSha256(raw117).copy(reIncluded, 4);             // links to 117
+    raw117.copy(reIncluded, 36, 36, 68);                  // SAME merkle root
+    reIncluded.writeUInt32LE(1780000000, 68);             // time
+    reIncluded.writeUInt32LE(0x207fffff, 72);             // regtest target
+    // Regtest's target, big-endian: mantissa 0x7fffff, exponent 0x20, so the
+    // three mantissa bytes land at [3..6]. The program compares the digest
+    // reversed against exactly this.
+    const target = Buffer.alloc(32);
+    target[3] = 0x7f; target[4] = 0xff; target[5] = 0xff;
+    let nonce = 0;
+    for (;;) {
+      expect(nonce).to.be.below(10_000_000); // ~2 tries expected at regtest's target
+      reIncluded.writeUInt32LE(nonce, 76);
+      if (Buffer.from(doubleSha256(reIncluded)).reverse().compare(target) <= 0) break;
+      nonce++;
+    }
+    expect(doubleSha256(reIncluded).toString("hex"))
+      .to.not.equal(doubleSha256(raw118).toString("hex"));
+
+    await program.methods.pushHeader(Array.from(reIncluded))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    const afterPush = await program.account.lightClient.fetch(lightClient);
+    expect(afterPush.tipHeight.toNumber()).to.equal(118);
+    expect(Buffer.from(afterPush.tipHash).toString("hex"))
+      .to.equal(doubleSha256(reIncluded).toString("hex"));
+
+    // The probe: the same transaction, the same output, a different height, and
+    // the claimed header is now canonical at that height.
+    try {
+      await program.methods.verifyDeposit(proof(118, reIncluded)).accounts(accounts()).rpc();
+      expect.fail("should have refused a re-inclusion at a different height");
+    } catch (e: any) {
+      // AlreadyMinted specifically — not HeaderMismatch or BadMerkleProof, which
+      // would mean the proof never reached the replay check and the test would be
+      // passing for the wrong reason.
+      expect(String(e)).to.contain("AlreadyMinted");
+    }
+
+    // The control: at the height the deposit was ACTUALLY minted at, the same
+    // proof is refused for the same reason. If the two error differently, the
+    // key is height-sensitive somewhere.
+    try {
+      await program.methods.verifyDeposit(proof(117, raw117)).accounts(accounts()).rpc();
+      expect.fail("should have refused the original replay too");
+    } catch (e: any) {
+      expect(String(e)).to.contain("AlreadyMinted");
+    }
+
+    // Still exactly one entry, still at its original height. A height-keyed
+    // implementation reaches this point with two.
+    const used = await program.account.usedDeposits.fetch(usedDeposits);
+    expect(used.keys.length).to.equal(1);
+    expect(used.keys[0].height.toNumber()).to.equal(fixture.proof.height);
+  });
+});
+
+/**
+ * P2 — the fork re-anchoring forgery vector.
+ *
+ * `commit_fork` used to splice `headers[..=fork_idx] ++ staging.hashes` while
+ * looking the fork point up from *current* chain state, and `push_fork_header`
+ * linked a branch's first header the same way. Two branches could therefore be
+ * staged against the same height, commit one after the other, and produce a
+ * window holding the prefix of one chain and the branch of another with no
+ * linkage between them — the client's only invariant. A header that is in no
+ * chain could then be made canonical, which is a mint forgery, not a nuisance.
+ *
+ * The fix records the parent hash when the branch is staged and re-checks it at
+ * commit. These two tests pin both halves: that the check fires when the parent
+ * moves, and that it does not fire when it has not.
+ */
+describe("solbeam — a stale staged fork (P2)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const rawAt = (height: number): Buffer =>
+    Buffer.from(fixture.headers.find((h: any) => h.height === height)!.raw, "hex");
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+
+  /**
+   * A funded submitter. The staging account is ~10 KB, so `init` needs rent —
+   * an unfunded keypair fails with a system-program error that reads like a
+   * logic failure and is not one. Each test gets its own keypair because the
+   * staging PDA is seeded on the submitter: two branches by one submitter would
+   * be the same account.
+   */
+  const submitter = async (): Promise<{ key: anchor.web3.Keypair; addr: anchor.web3.PublicKey }> => {
+    const key = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      key.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    const [addr] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("staging"), key.publicKey.toBuffer()], program.programId);
+    return { key, addr };
+  };
+
+  /** Re-anchor the trusted checkpoint, which resets the window. */
+  const reanchor = async (height: number) => {
+    await program.methods
+      .setCheckpoint(new anchor.BN(height), Array.from(doubleSha256(rawAt(height))))
+      .accounts({ lightClient, authority: provider.wallet.publicKey })
+      .rpc();
+  };
+
+  /**
+   * A block that links to `prev` but is otherwise the fixture's block at
+   * `height`. Only `prev` is rewritten, so the header is well-formed, carries
+   * the fixture's real proof of work against the regtest target, and its hash is
+   * a new one.
+   */
+  const extends_ = (height: number, prev: Buffer): Buffer => {
+    const raw = rawAt(height);
+    doubleSha256(prev).copy(raw, 4);
+    return raw;
+  };
+
+  const stage = async (
+    who: { key: anchor.web3.Keypair; addr: anchor.web3.PublicKey },
+    forkHeight: number,
+    branch: Buffer[],
+  ) => {
+    await program.methods.initStaging(new anchor.BN(forkHeight))
+      .accounts({ lightClient, staging: who.addr, submitter: who.key.publicKey,
+                  systemProgram: anchor.web3.SystemProgram.programId })
+      .signers([who.key]).rpc();
+    for (let i = 0; i < branch.length; i += 12) {
+      await program.methods.pushForkHeader(Buffer.concat(branch.slice(i, i + 12)))
+        .accounts({ lightClient, staging: who.addr, submitter: who.key.publicKey })
+        .signers([who.key]).rpc();
+    }
+  };
+
+  it("rejects a commit whose fork point has moved (the stale branch)", async () => {
+    await reanchor(120);
+    expect((await program.account.lightClient.fetch(lightClient)).tipHeight.toNumber())
+      .to.equal(120);
+
+    const base120 = rawAt(120);
+    const b121 = extends_(121, base120);
+    const b122 = extends_(122, b121);
+    const b123 = extends_(123, b122);
+    expect(doubleSha256(b121).toString("hex")).to.not.equal(doubleSha256(rawAt(121)).toString("hex"));
+
+    // Branch A: a single header off 120, staged while the fork point is 120.
+    const a = await submitter();
+    await stage(a, 120, [b121]);
+
+    // Now move the fork point: a DIFFERENT, heavier branch off the same height
+    // commits, so the chain no longer holds A's parent at 120.
+    const b = await submitter();
+    await stage(b, 120, [b121, b122, b123]);
+    await program.methods.commitFork()
+      .accounts({ lightClient, staging: b.addr, submitter: b.key.publicKey })
+      .signers([b.key]).rpc();
+
+    const moved = await program.account.lightClient.fetch(lightClient);
+    expect(moved.tipHeight.toNumber()).to.equal(123);
+    expect(Buffer.from(moved.tipHash).toString("hex"))
+      .to.equal(doubleSha256(b123).toString("hex"));
+
+    try {
+      await program.methods.commitFork()
+        .accounts({ lightClient, staging: a.addr, submitter: a.key.publicKey })
+        .signers([a.key]).rpc();
+      expect.fail("should have refused a branch whose fork point moved");
+    } catch (e: any) {
+      const m = String(e).match(/Error Code: (\w+)/);
+      // ForkPointMoved specifically. ForkNotHeavier would mean the re-anchor
+      // check never ran, which is the bug this test exists for.
+      expect(m ? m[1] : String(e)).to.equal("ForkPointMoved");
+    }
+
+    // A refused commit reverts, so its `close` constraint never runs. Without
+    // abandon_staging the rent would be stranded — which is that instruction's
+    // entire purpose.
+    expect(await provider.connection.getAccountInfo(a.addr)).to.not.be.null;
+    await program.methods.abandonStaging()
+      .accounts({ staging: a.addr, submitter: a.key.publicKey })
+      .signers([a.key]).rpc();
+    expect(await provider.connection.getAccountInfo(a.addr)).to.be.null;
+  });
+
+  it("still commits when the fork point has NOT moved (the control)", async () => {
+    // The same shape without the interleaving. If the re-anchor check were too
+    // strict — comparing against the wrong block, or re-reading the parent after
+    // the window had already been rebuilt — this fails while the test above
+    // still passes.
+    await reanchor(124);
+    const b125 = extends_(125, rawAt(124));
+
+    const c = await submitter();
+    await stage(c, 124, [b125]);
+    await program.methods.commitFork()
+      .accounts({ lightClient, staging: c.addr, submitter: c.key.publicKey })
+      .signers([c.key]).rpc();
+
+    const after = await program.account.lightClient.fetch(lightClient);
+    expect(after.tipHeight.toNumber()).to.equal(125);
+    expect(Buffer.from(after.tipHash).toString("hex"))
+      .to.equal(doubleSha256(b125).toString("hex"));
+    expect(await provider.connection.getAccountInfo(c.addr)).to.be.null;
   });
 });

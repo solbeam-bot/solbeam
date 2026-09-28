@@ -23,7 +23,7 @@ Send BSV to the named deposit script, attaching an `OP_RETURN` that carries your
   fee, depth)             maturity window
 ```
 
-> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The shipped program mints straight to the depositor's token account, so the vault and maturity steps above are a specification today, not shipped behaviour.
+> **Built or designed?** The light client, the token and the mint exist and pass 20 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The shipped program mints straight to the depositor's token account, so the vault and maturity steps above are a specification today, not shipped behaviour.
 
 ---
 

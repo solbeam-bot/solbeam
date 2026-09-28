@@ -269,7 +269,3 @@ pub struct Record {
     pub time: u32,
     pub chainwork: u128,
 }
-
-/// How many blocks in [`LOOKBACK`] a caller must be able to reach back for.
-/// Asserted at compile time against `WINDOW` in `lib.rs`.
-pub const _LOOKBACK_CHECK: () = assert!(LOOKBACK < 200);

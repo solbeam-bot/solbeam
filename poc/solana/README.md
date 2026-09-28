@@ -1,7 +1,7 @@
 # Phase 2 — the BSV light client on Solana
 > **STALE — predates the current program.** It claims "this code has never been
 > compiled", that `check_daa()` runs on every header, and that there is "no mint and no
-> token". None of that is true today: the program builds, has 17 passing tests, mints
+> token". None of that is true today: the program builds, has 20 passing tests, mints
 > `solBSV`, and `check_daa` has **no caller at all**. See [`TEST_PLAN.md`](../TEST_PLAN.md) §0.
 
 

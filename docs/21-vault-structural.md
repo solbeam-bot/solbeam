@@ -1,5 +1,8 @@
 # 21. The vault — structural redesign
 
+> **Historical audit.** Findings are as recorded; where one has since been closed, the item says so
+> inline.
+
 Two reviews of the previous vault failed on the same four classes of defect. This is a redesign
 against those classes rather than a third patch. It supersedes [`20-vault-revised.md`](20-vault-revised.md)
 and [`19-vault.md`](19-vault.md).
@@ -187,11 +190,14 @@ close.
 
 ## Chainwork — required, and nearly free
 
-**The defect:** `commit_fork` compares **height** (`lib.rs:401`), so a longer but lower-work branch
-replaces a heavier one. While the difficulty is constant these are the same thing — which is why it
-has never bitten on regtest — but **the moment DAA is enabled they diverge, and the whole reorg rule
-becomes "whoever mines the most blocks wins"**, regardless of the work in them. A vault whose release
-predicate rests on canonicity cannot be built on a client that compares length.
+**Was a defect; now fixed.** `commit_fork` compared **height**, so a longer but lower-work branch
+would have replaced a heavier one: while the difficulty is constant those are the same thing, which is
+why it never bit on regtest, but the moment DAA is enabled they diverge and the reorg rule becomes
+"whoever mines the most blocks wins" regardless of the work in them. Since W1.6/W1.7 every record
+carries its own cumulative chainwork — derived from its own `bits` — and the commit compares that. The
+comparison is still asserted on a constant-difficulty chain (the fixture), so **the rule is exercised
+but a varying-difficulty branch choice is not**: the chainwork arithmetic is verified against mainnet
+headers in `difficulty-vectors/`, and the comparison against them is not.
 
 ### The rule
 
@@ -258,7 +264,7 @@ ASERT derives the target from an **anchor block** and the incoming block's own t
 |---|---|
 | **Two `bits` values derive in-window difficulty** | False. Up to 288 distinct values can sit in a 288-header window |
 | **~36 bytes, window stays 288** | False. `hash + bits` is 36 B × 288 = 10,368, plus 106 B overhead = **10,474 > the 10,240 cap** |
-| **`push_header` works on a real chain** | **It does not.** It requires `bits == expected_bits`, so it rejects every header after a per-block adjustment — F7 is not "halts at the next retarget", it is **"halts almost immediately on any real chain"** |
+| **`push_header` works on a real chain** | **It does now.** The finding below was correct when written; W1.6 replaced the fixed target with cw-144, verified against real mainnet headers at 324/324 exact. *Original finding:* it requires `bits == expected_bits`, so it rejects every header after a per-block adjustment — F7 is not "halts at the next retarget", it is "halts almost immediately on any real chain" |
 | **Chainwork can be computed from two scalars** | Cannot. `bits_at(height)` is wrong for nearly every header |
 
 **This also means the shipped light client has never been tested against a real difficulty.** Regtest
@@ -289,7 +295,7 @@ It cannot be assumed.** This is the correction that matters most in the whole do
 | **T9** | `Marker` is again three things at once (replay record, slash evidence, closeable object) with contradictory field lists — **class 1 and class 2 were obeyed per instance, not per class** | high |
 | **T10** | Chainwork arithmetic underspecified: 256-bit division, the baseline at `initialize` (cumulative from genesis — not derivable from a checkpoint header, and never listed as a trusted scalar), and `commit_fork` never specified to *write* the new state | high |
 | **T11** | Rent now ~$0.11 extra per item, and no `stake`/`announce_unbond`/`withdraw_bond` instruction exists though the table says `Bond` is closed by one | medium |
-| **T12** | **Silent decision reversals:** requiring a registered relayer script reverses D6/P8, and "genesis is the ordinary bonded path" reverses D3/G2, with no change recorded in doc 14. Doc 13:39 and doc 03:53 still claim *"strictly-heavier commit — yes, 17 passing tests"* while `commit_fork` compares **height** (`lib.rs:401`) | medium |
+| **T12** | **Silent decision reversals:** requiring a registered relayer script reverses D6/P8, and "genesis is the ordinary bonded path" reverses D3/G2, with no change recorded in doc 14. Doc 13:39 and doc 03:53 claim *"strictly-heavier commit — yes"*; the commit now compares **chainwork**, not height (W1.7), and the suite is 20 tests rather than 17 | medium |
 
 ### Verdict
 

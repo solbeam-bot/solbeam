@@ -1,7 +1,7 @@
 # 10. Brand & visual language
 
 > **Built or specified?** The light client, the `solBSV` token and the mint exist today and pass
-> 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
+> 20 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
 > designed, not built.** [`13-summary.md`](13-summary.md) is the authoritative account.
 
 

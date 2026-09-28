@@ -1,7 +1,7 @@
 # 6. Parameters & governance
 
 > **Specification, not shipped behaviour.** The light client, the token, the mint and fork
-> staging are **built and tested** (17 on-chain tests). **The vault, the two gates, maturity, the
+> staging are **built and tested** (20 on-chain tests). **The vault, the two gates, maturity, the
 > order book, staking, bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a
 > distinct parameter and all of peg-out are designed and not built.** DAA is **actively rejected
 > in the built client** (F7), not merely absent. The shipped program mints straight to the

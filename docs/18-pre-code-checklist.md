@@ -1,5 +1,9 @@
 # 18. Before we code — the critical list
 
+> **Historical.** Items are preserved as recorded; where one has since been closed it carries a
+> **Fixed** note. F7, A7's test gap, P2, the window resize and the chainwork comparison were
+> addressed in W1 — see `workstreams/W1-light-client-verification.md`.
+
 Consolidated from three adversarial audits (findings A1–A18, F1–F7, C1–C4, plus the
 documentation verification). Organised by **when it has to be dealt with**, not by severity,
 because that is the useful question now.
@@ -156,7 +160,8 @@ allow a historic header to be supplied with a chain of headers; or add the refun
 needed, and it interacts directly with the maturity length.*
 
 ### P4 — `FLOOR` and the retarget · **F7, blocks testnet**
-`push_header` requires `bits == expected_bits`, set once at `initialize` and never refreshed.
+`push_header` required `bits == expected_bits`, set once at `initialize` and never refreshed.
+**Fixed in W1.6:** the target is now computed per block by cw-144.
 **The client halts permanently at the first difficulty retarget.** Invisible on regtest; fatal on
 testnet or mainnet. Needs a stored difficulty-period anchor — BSV retargets every 2016 blocks and
 we store 192, of which 147 are consumed by the DAA.

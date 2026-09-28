@@ -37,7 +37,7 @@ SOLBEAM is deliberately asymmetric: **trustless in, trust-minimised out.** This 
 **Solana can verify BSV.** BSV uses double-SHA-256 proof-of-work over an 80-byte header, and Solana exposes a native SHA-256 syscall. So a BSV light client on Solana can check, from first principles:
 
 - the header chain links correctly,
-- each header meets its difficulty target — **with a caveat: DAA is actively rejected in the built client, not merely absent.** `check_daa` is a stub with no caller and `push_header` requires `bits` to equal the value fixed at initialization, so the client **halts permanently at the first retarget** (F7). Following BSV's difficulty adjustment is designed, not built;
+- each header meets its difficulty target — and the target is the one BSV's own algorithm derives for that block. cw-144 is implemented (`difficulty.rs`) and verified against real mainnet headers at **324/324 exact**. **The caveat that remains:** the rule is hard-coded, and BSV's documentation says it will revert to 2016-block retargeting at some point, so a consensus change would need a redeploy;
 - a given transaction is included in a given block via its Merkle branch.
 
 Minting is authorised by that proof alone. There is no attestor to bribe, no oracle to spoof, no committee to capture, and no way to censor a mint.

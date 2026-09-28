@@ -5,19 +5,18 @@
 > document holds the full reasoning.
 >
 > **Built or designed?** The shipped program is exactly **light client + `solBSV` token +
-> the mint + fork staging**, and it passes 17 on-chain tests. **The vault, the two gates,
+> the mint + fork staging**, and it passes 20 on-chain tests. **The vault, the two gates,
 > maturity, release, burn, the order book, staking, bonds, `owed_R`, consent, per-relayer
 > deposit scripts, all of peg-out, `FLOOR` as a distinct parameter, and the difficulty
 > retarget are designed and not built.** The shipped mint goes straight to the depositor's
 > token account, so nothing is staged yet and most of this document is a specification
 > rather than a property of the code.
 >
-> One exception to "not built" is worth stating sharply: **DAA is not merely
-> unimplemented, it is actively rejected.** `check_daa` has **no caller** and
-> `expected_bits` is set once at `initialize` and never refreshed, while `push_header`
-> requires `bits == expected_bits`. The client therefore **halts permanently at the first
-> difficulty retarget** (F7). On regtest that is invisible because the target never
-> changes; on testnet or mainnet the bridge stops minting.
+> The retarget — the one component here that was **actively rejected rather than merely
+> missing** — is now implemented. The client computes cw-144 per block from the node's
+> `src/pow.cpp`, verified against real mainnet headers at **324/324 exact**, and its window
+> stores the chainwork and timestamps the rule needs. The old `bits == expected_bits`
+> requirement, which halted the client at the first per-block adjustment (F7), is gone.
 
 ---
 

@@ -25,8 +25,8 @@ anything above the light client until this closes.
 | **W1.3** | Identify the actual DAA and verify it predicts real headers | ✅ **done — cw-144, 324/324 exact** |
 | **W1.4** | Determine what the client must store per header, and whether the window fits the 10,240-byte cap | ✅ **done — 52 B/record, WINDOW = 192, 10,094 of 10,240** |
 | **W1.5** | Whether the DAA is computable from the client's own window | ✅ **done — yes, needs **147** records of lookback (not 146)** |
-| **W1.6** | Rewrite `push_header`'s difficulty check against the real algorithm, with a test using real headers | pending |
-| **W1.7** | Fix **P2** — `commit_fork` does not re-anchor the staged branch — which is still unfixed and is the one defect doc 18 called the genuine forgery vector | pending |
+| **W1.6** | Rewrite `push_header`'s difficulty check against the real algorithm, with a test using real headers | ✅ **done** — `difficulty.rs`, **324/324 mainnet headers exact** (`difficulty-vectors/`) |
+| **W1.7** | Fix **P2** — `commit_fork` does not re-anchor the staged branch — which is still unfixed and is the one defect doc 18 called the genuine forgery vector | ✅ **done** — `fork_parent_hash` recorded at `init_staging`, re-checked at `commit_fork` (`ForkPointMoved`) |
 
 ## What is already known, and should not be re-litigated
 
@@ -153,6 +153,57 @@ VERIFY cw-144 over heights 968377..968700
 
 **324 of 324 blocks predicted exactly, with no tolerance and no fitting.** This is not a plausible
 model; it is the algorithm.
+
+### W1.6 / W1.7 — what was built
+
+**The rule lives in `difficulty.rs`**, with no Anchor types, so the acceptance test can replay the
+real headers without a validator: `poc/solana/difficulty-vectors/` `#[path]`-includes that exact
+source file and runs 471 mainnet headers through it with a plain `cargo test`.
+
+```
+cw-144: 324 of 324 mainnet headers predicted exactly, heights 968377..968700
+```
+
+**Two details the task description had wrong, both caught by the replay and not by reading:**
+
+1. **The lookback is 147 records, not 146.** `GetSuitableBlock(x)` reads three blocks ending at `x`,
+   and the older argument is `GetAncestor(nHeight - 144)` where `nHeight` is the *parent's* height.
+   The header at `h` therefore needs records `h-147 .. h-145`. With 146 the replay matches **0 of
+   324** headers; with 147 it matches **324 of 324**. An off-by-one in a lookback is exactly the kind
+   of error that stays invisible until testnet, which is what the replay exists to prevent.
+
+2. **The clamps are `72 * nPowTargetSpacing` and `288 * nPowTargetSpacing`** — 43,200 s and
+   172,800 s — and *not* 72 and 288 multiplied by the 144-block averaging window. The larger reading
+   makes both bounds 144 times too big, so every real timespan looks short and every target pins to
+   the lower clamp. The replay catches it because no header matches.
+
+**The window is 192 records, and it is fixed by arithmetic rather than chosen.**
+
+```
+LIGHT_CLIENT_FIXED = 110 bytes   (8 discriminator, 8+8 heights, 32 tip hash, 8 window_start,
+                                  32 authority, 4 expected_bits, 1 no_retargeting,
+                                  4 pow_limit_bits, 8 last_push_slot, 1 paused, 1 bump, 4 Vec len)
+HEADER_RECORD_SIZE = 52 bytes    (32 hash + 16 chainwork u128 + 4 time)
+SPACE = 110 + 192 x 52 = 10,094  of 10,240   -> 146 bytes of margin
+```
+
+193 records gives 94 bytes of margin and 194 gives 42, so **192 is the largest that leaves a real
+margin** — and it is 45 records above the 147 the DAA itself needs. The deposit lifetime is therefore
+**32 hours at 600 s/block**, down from the 48 the design assumed. `WINDOW_HOURS = 32`, asserted at
+compile time along with `WINDOW > difficulty::LOOKBACK`.
+
+**One rule was not in the task description and had to be mirrored:** the node's
+`GetNextWorkRequired` opens with `if (params.fPowNoRetargeting) return pindexPrev->GetBits();`, and
+regtest sets that flag. `LightClient::no_retargeting` is that rule, derived deterministically at
+`initialize` (the checkpoint's compact target is the largest the encoding can express). Without it
+the regtest fixture — fixed target `0x207fffff`, which cw-144 does not reproduce — would be rejected
+block by block.
+
+**W1.7 — P2.** `init_staging` records `fork_parent_hash` once; `push_fork_header` links the branch's
+first header to the recorded hash; `commit_fork` requires the chain still to hold that hash at that
+height and otherwise fails `ForkPointMoved`. Two tests: one that stages a branch, moves the fork
+point with a heavier branch, and asserts the stale commit is refused; one that asserts an
+uncontested commit still succeeds.
 
 ### What the client needs, and what that costs — **W1.4 / W1.5**
 

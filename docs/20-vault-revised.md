@@ -1,5 +1,8 @@
 # 20. The vault — revised
 
+> **Historical audit.** Findings are as recorded; where one has since been closed, the item says so
+> inline.
+
 Supersedes [`19-vault.md`](19-vault.md), whose first draft was audited and found broken. Every
 finding V1–V10 is addressed below, with the decision that settled it where one was needed.
 
@@ -317,8 +320,8 @@ V5 makes release depend on **a** tip advancing, not *the honest* tip. The attack
 is the most motivated pusher. A bot that receives `BrokenLinkage` cannot "stage and commit the fork"
 unless its branch is longer than the attacker's — precisely the hashpower it lacks.
 
-And **`commit_fork` compares height, not chainwork** (`lib.rs:401`), so a longer but lower-work
-branch wins. On the unbacked path the only party with a pending mint is the attacker, so the
+And **`commit_fork` used to compare height, not chainwork** — fixed in W1.7, so a lower-work branch
+no longer wins (though the comparison itself is only exercised on a constant-difficulty chain). On the unbacked path the only party with a pending mint is the attacker, so the
 incentive is inverted. Adding C3 and F7, "the program verifies every header" is also not currently
 true.
 

@@ -50,7 +50,7 @@ path mints; every one returns.
 | **Fees mature with the principal** | A fee withdrawable earlier than its mint would be an exit from maturity |
 | **Same-asset yield** | BSV stakers earn BSV; `solBSV` stakers earn `solBSV` |
 | **Do not pool the reserve** | Aggregation is what creates a single key worth stealing. Per-relayer deposits mean no reserve contract to write, audit or trust |
-| **Confirmed by test** | 17 on-chain tests, 21/21 live SV Node checks, all Python checkers, on the local validator |
+| **Confirmed by test** | 20 on-chain tests, 21/21 live SV Node checks, all Python checkers, on the local validator |
 
 ---
 

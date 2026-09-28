@@ -20,7 +20,7 @@ move the coin back and forth to rebalance and to earn a fee. Retail reaches `sol
 an exchange or a pool rather than through the peg directly — which is why a peg that takes
 hours is acceptable, and why the interesting questions are economic rather than interactive.
 
-> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain
+> **Built or designed?** The light client, the token and the mint exist and pass 20 on-chain
 > tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and
 > not built.** The shipped program mints straight to the depositor's token account, so nothing
 > is staged yet and the protections described below are, at this moment, a specification
@@ -33,18 +33,18 @@ describe them in the present tense. This is the canonical answer.
 
 | Capability | Built? | Evidence |
 |---|---|---|
-| Light client: checkpoint, header window, linkage, proof of work | **Partly** | Window is 192; the difficulty check is being replaced (W1) |
-| `solBSV` — classic SPL, 8 decimals, no freeze authority | **Yes** | 17 passing tests |
-| The mint, against a verified deposit | **Yes** | 17 passing tests |
-| Fork staging and strictly-heavier commit | **Yes** | 17 passing tests |
-| **Difficulty retarget (DAA)** | **No — and actively rejected.** `check_daa` is a stub with **no caller**; `push_header` requires `bits == expected_bits`, which is set once and never refreshed. **The client halts permanently at the first retarget** (F7) | `lib.rs:207`, `:869` |
-| **Committed confirmation depth** | **No.** The built mint uses a fixed `MIN_CONFIRMATIONS = 12`. No depth is parsed from the `OP_RETURN` | `lib.rs:65`, `:524` |
-| **Per-relayer deposit scripts / a relayer registry** | **No.** One bridge-wide P2PKH `DepositScript` PDA | `lib.rs:449` |
+| Light client: checkpoint, header window, linkage, proof of work, **per-block difficulty** | **Yes** | Window is 192; cw-144 verified against **324/324** real mainnet headers |
+| `solBSV` — classic SPL, 8 decimals, no freeze authority | **Yes** | 20 passing tests |
+| The mint, against a verified deposit | **Yes** | 20 passing tests |
+| Fork staging, re-anchored at commit, and a strictly-heavier commit by **chainwork** | **Yes** | 20 passing tests |
+| **Difficulty retarget (DAA)** | **Yes — cw-144**, from the node's `src/pow.cpp`: the median-of-three suitable blocks at each end, the work difference, the 72x/288x time clamps, and the `(-work)/work` target, capped at `powLimit`. **Verified against real mainnet headers: 324/324 exact, no tolerance.** The old `bits == expected_bits` check (F7) is gone | `difficulty.rs`, `difficulty-vectors/` |
+| **Committed confirmation depth** | **No.** The built mint uses a fixed `MIN_CONFIRMATIONS = 12`. No depth is parsed from the `OP_RETURN` | `lib.rs` (`MIN_CONFIRMATIONS`) |
+| **Per-relayer deposit scripts / a relayer registry** | **No.** One bridge-wide P2PKH `DepositScript` PDA | `lib.rs` (`DepositScript`) |
 | **The vault, the two gates, maturity, release, burn** | **No** | nothing in code |
 | **The order book, staking, bonds, `owed_R`, consent** | **No** | nothing in code |
 | **All of peg-out** | **No** | nothing in code |
-| **`FLOOR` as a parameter** | **No.** Only the `MIN_CONFIRMATIONS` constant exists | `lib.rs:65` |
-| **That the critical fixes are all tested** | **No.** A1 and A7 have tests; **A2 (authority) and A3 (mint pin) do not** | `tests/light_client.ts` |
+| **`FLOOR` as a parameter** | **No.** Only the `MIN_CONFIRMATIONS` constant exists | `lib.rs` (`MIN_CONFIRMATIONS`) |
+| **That the critical fixes are all tested** | **No.** A1, A7 and P2 have tests. **A2 (authority) and A3 (mint pin) do not.** A7's test is now a genuine cross-height re-inclusion: the earlier one resubmitted the same proof at the same height, which the old height-keyed replay check would also have refused, so it proved nothing | `tests/light_client.ts` |
 
 **The shipped program is exactly: light client + token + mint to the depositor + fork staging.**
 Everything else in this document is a specification.

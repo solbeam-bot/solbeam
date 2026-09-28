@@ -37,7 +37,7 @@ use solana_sha256_hasher::hash as sha256;
 
 pub mod difficulty;
 
-use difficulty::{compact_to_target, target_to_compact, Record, U128, U256};
+use difficulty::{compact_to_target, target_to_compact, Record, MAINNET_POW_LIMIT_BITS, U256};
 
 declare_id!("EYsckW3596zBL1pxfxGev44z6LH4hEpoHff7tSisvjCW");
 
