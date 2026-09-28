@@ -54,108 +54,104 @@ the counterparty or back to the sender.** No failure path mints; every one retur
 
 ## Decisions
 
-### D1 — Who may stake — **settled: specialists first, with an upgrade path**
+All eight are settled for the PoC. Each records what was decided, and separately what it
+defers — because several of these are **decisions to defer**, which is different from leaving
+a question open.
 
-Specialists only at launch. **Anyone may stake is a phase-2 goal**, so the design must carry
-an upgrade path from the start rather than bolting one on. That path is not designed yet and
-is recorded as a deliverable, not a maybe.
+### D1 — Who may stake — **specialists first; anyone-may-stake is a phase-2 goal**
 
-### D3 — Genesis — **settled: G2, the vault-gated genesis mint**
+Specialists only at launch, with an open-staking phase to follow. **The upgrade path is a
+deliverable, not a maybe** — the design must carry it from the start rather than have it
+bolted on. What that path looks like is deferred to final implementation.
+
+### D2 — Filling — **auto-approve, settled for the PoC**
+
+Bids fill automatically. The reasoning is in the section below: the vault means a reorged fill
+reverses the liability and the staker loses nothing, so the loss is systemic rather than
+per-fill and there is little for a per-fill approval to inspect. **To be reviewed against the
+finished system** — if a last look turns out to be cheap insurance, it can be added then.
+
+### D3 — Genesis — **G2, the vault-gated genesis mint**
 
 The genesis mint lands in the program vault and is released only once a matching BSV deposit
-has been verified. No unbacked window exists at any point, so there is nothing to attack and
-nothing to keep quiet about.
+is verified. No unbacked window exists at any point, so there is nothing to attack and nothing
+to keep quiet about.
 
-### D4 — `FLOOR` — **settled for the PoC: 12 blocks, fixed**
+### D4 — `FLOOR` — **12 blocks, fixed in code**
 
-**The question was whether `FLOOR` is the depth a deposit waits. It is — the minimum
-confirmation depth.** Depositors and bids may commit to *more*; never less. Twelve blocks is
-the PoC value, fixed in code, with a change mechanism named as a gap and deliberately not
-built yet.
+`FLOOR` is the minimum confirmation depth. Depositors and bids may commit to *more*, never
+less. Twelve blocks for the PoC. The change mechanism is deferred; see the note below.
 
-**Does `FLOOR` still make sense once bids name their own depth? Yes, and it is worth being
-precise about why, because it is a different parameter from maturity:**
+*Depth and maturity are different parameters, which is why `FLOOR` survives the book:* depth
+sets **the cost of attacking** — a reorg must out-mine it — while maturity sets **the time
+available to detect**. A low floor makes attacks cheap and therefore frequent, which raises
+the number of chances for a detection failure to slip through.
 
-| | Controls | Effect |
-|---|---|---|
-| **Depth** (bids, floored) | How deep a deposit must be before minting | **The cost of attacking.** A reorg must out-mine the depth |
-| **Maturity** | How long a staged mint waits before release | **The time available to detect.** A longer window is more chance for the honest chain to be pushed |
+### D5 — Bond multiple — **`k = 1`, and self-dealing stakers are accepted**
 
-They are not substitutes. Tuning depth changes how *expensive* an attack is; tuning maturity
-changes how *likely* it is to be caught. A low floor makes attacks cheap and therefore
-frequent, which raises the number of chances for a detection failure to slip through — so
-the floor is what keeps the attack *rate* down, not what makes any single attack safe.
+`bond ≥ owed`, and a staker underwriting its own deposit is an accepted risk rather than a
+prohibited one. The consequence is recorded plainly: at `k = 1` a self-dealing attack is
+roughly break-even, so what makes it unprofitable is **the mining cost of the reorg**, not the
+bond. The bond's job is covering an honest relayer's shortfall.
 
-### D5 — Bond multiple — **settled: `k = 1`**
+### D6 — A peg-in with no underwriter — **allowed, explicitly**
 
-`bond ≥ owed`. Note the consequence honestly: at `k = 1` a **self-dealing** staker who
-underwrites its own fraudulent deposit is roughly break-even, so what makes that attack
-unprofitable is the mining cost of the reorg, not the bond. The bond's job at `k = 1` is
-covering an honest relayer's shortfall, not punishing a determined one.
+A peg-in may proceed with no underwriter at all. Whoever does so **accepts the initial risk of
+a system with nobody watching while liquidity is seeded**, and may keep topping up on those
+terms. This is a deliberate, stated risk acceptance rather than an oversight.
 
-### D6 — The unbacked path — **clarified**
+*For final implementation, not the PoC:* the note should be made that this can be bounded if
+it proves necessary — for example expiring it after `n + 1000` blocks, or restricting it to a
+designated initial LP address. Neither is needed now; **both need writing down so the option
+is not lost.**
 
-The genesis case is not a risk: before any BSV is in the reserve there is nothing to steal,
-so an attacker gains nothing by minting early. That reasoning is sound.
+### D7 — Governance — **none in the PoC**
 
-**But D6 was asking about steady state, not genesis** — whether a peg-in may proceed with *no
-staker willing to underwrite it* once the system is live. That is a different question and is
-still open. The two cases need separating because the genesis answer ("nothing to steal yet")
-does not carry over to a funded reserve.
+The PoC is built without any governance mechanism. Details are to be figured out on review
+once the system is better understood and demonstrably working. Recorded so that "we launched
+without governance" is a decision rather than an omission, and so the upgrade path stays a
+named gap.
 
-### D7 — Votable or increase-only — **settled: it stays a gap**
+### D8 — The reserve invariant — **monitored, not enforced**
 
-Launch without a governance mechanism at all, provided an upgrade path exists, undefined for
-now. Either direction is acceptable when it is built. Recorded so that "we launched without
-governance" is a decision rather than an oversight.
-
-### D8 — The reserve invariant — **settled: monitored, not enforced**
-
-`custodied BSV ≥ outstanding solBSV` is **published and monitored, and the protocol cannot
-fix it** — the reserve is off-chain BSV the program cannot read. The website shows the ratio;
-the program does not check it. Stated plainly rather than left as an implied guarantee.
+`custodied BSV ≥ outstanding solBSV` is published and monitored, and **the protocol cannot
+enforce it** — the reserve is off-chain BSV the program cannot read. The website shows the
+ratio; the program does not check it.
 
 ---
 
-## D2 — Can a staker's bid fill automatically? — needs review
+## Deferred to final implementation
 
-**This was summarised as "a bid that always fills is a bid of sitting ducks". Working it
-through properly, that framing was wrong, and the corrected version is below.**
+These are named so they cannot be quietly forgotten. None blocks the PoC.
 
-### Why "sitting ducks" overstated it
+| Deferred | From | Note |
+|---|---|---|
+| The open-staking upgrade path | D1 | Anyone-may-stake is a phase-2 goal; the design must carry it from the start |
+| Bounding the unbacked peg-in | D6 | Block-height expiry, or a designated initial LP address |
+| The change mechanism for `FLOOR` | D4 | Voting, or the stakers. Fixed in code for now |
+| Governance generally | D7 | Absent by decision, not by accident |
+| The program upgrade authority | A5 | Can override every parameter. The fix is governance, possibly tied to staking |
+| An independent audit | — | The four critical defects so far were found by our own adversarial review |
 
-The original argument was that a miner fills a passive bid, reorgs, and the staker eats the
-loss. But **the vault changes who bears it**: the attacker's mint is staged, not liquid. If
-the reorg is detected, the staged tokens are burned, the liability is reversed, and **the
-staker loses nothing at all.** The staker is only harmed when detection *fails* — and that is
-not a property of any individual fill.
+---
 
-So the loss is **systemic, not per-fill.** It depends on whether somebody pushes the honest
-chain during the maturity window, which a staker cannot assess by looking at a deposit. There
-is little for a last look to inspect, because a toxic deposit is indistinguishable from an
-honest one.
+## D2 in full — why auto-approve
 
-### What that implies
+**An earlier draft of this document called a book of auto-filling bids "a book of sitting
+ducks". That framing was wrong**, and the correction is worth keeping because it is the
+reason the decision went the way it did.
 
-| Option | Assessment |
-|---|---|
-| **Auto-approve** ✅ | The per-fill check was never the protection. Defensible once depth and maturity carry the risk, and it keeps the book simple and fast |
-| Last look | Still some value — it lets a staker decline when the *system* looks unhealthy, not when a deposit looks toxic — but the staleness gate below already covers that case |
-| Explicit approval | Strongest on paper, slowest in practice, and it adds a censorship point for a risk it cannot actually judge |
+The argument was that a miner fills a passive bid, reorgs, and the staker eats the loss. But
+**the vault changes who bears it**: the mint is staged, not liquid, so if the reorg is detected
+the staged tokens are burned, the liability is reversed, and **the staker loses nothing.** The
+staker is only harmed when detection *fails*, which is a property of the system rather than of
+any individual fill.
 
-### The lever that actually matters
-
-If the risk is detection failure, then the parameters that matter are:
-
-1. **Maturity length** — how long the attacker's tokens stay burnable;
-2. **The incentive to push the honest chain** — permissionless and cheap, and stakers have the
-   most to lose, but nothing yet rewards it;
-3. **Depth**, which keeps the attack rate down (see D4).
-
-**D2 therefore reduces to a smaller question: is auto-approve acceptable given that the
-protection is depth plus maturity plus an incentivised advancer?** The alternative is to treat
-the last look as cheap insurance. Either is defensible; the "sitting duck" argument for
-forcing it does not survive contact with the vault.
+So the loss is **systemic, not per-fill** — and a toxic deposit is indistinguishable from an
+honest one, so a last look has little to inspect. The levers that actually matter are
+**maturity length**, **depth** (which keeps the attack rate down), and **the incentive to push
+the honest chain**. Auto-approve is the simple answer at PoC stage, to be revisited against
+the finished system.
 
 ## Not settled, and deliberately out of scope for the PoC
 
