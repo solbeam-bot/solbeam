@@ -50,7 +50,7 @@
 A full BSV header chain cannot live on Solana economically. There are roughly **968,000 BSV headers**; at current Solana rent that is tens of megabytes and hundreds of SOL, against a 10 MiB per-account cap. The chain therefore lives on-chain as:
 
 - a **checkpoint** (a recent, well-buried header), plus
-- a **rolling window** of **288 subsequent headers** — 48 hours at BSV's ten-minute target — held in a single account of 9,286 bytes, comfortably inside Solana's 10,240-byte account cap. A competing branch is staged in batches and committed only if **strictly heavier**; ties keep the incumbent, so an equal-length branch cannot churn the tip.
+- a **rolling window** of **288 subsequent headers** — 48 hours at BSV's ten-minute target — held in a single account of 9,322 bytes, comfortably inside Solana's 10,240-byte account cap. A competing branch is staged in batches and committed only if **strictly heavier**; ties keep the incumbent, so an equal-length branch cannot churn the tip.
 
 Verification itself is cheap: an 80-byte header double-SHA-256 costs **226 CU**, a 12-level Merkle branch **2,616 CU** — a **full SPV deposit proof is about 2,842 CU**, negligible against Solana's per-transaction limit. The expense is *state*, not computation.
 

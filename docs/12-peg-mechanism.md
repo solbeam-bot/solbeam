@@ -1,4 +1,20 @@
 # 12. Peg-in and peg-out: the mechanism
+> ⚠️ **PARTLY SUPERSEDED — the body of this document predates the current design.**
+> It was written before the two-gate vault, the order book and the settled decisions, and
+> parts of it describe a model that was replaced. **Where this document and
+> [`13-summary.md`](13-summary.md) or [`14-decisions.md`](14-decisions.md) disagree, they win.**
+>
+> Known-superseded in the body: the bond formula `bond ≥ k × (hot float + tranche)`
+> (now `bond_R ≥ k × owed_R`); a fixed 10 bp fee (now discovered on the order book);
+> failure paths that re-mint (now the escrow is returned, so supply never changes);
+> minting to the depositor (now into the program vault); D2 as an open question (now
+> settled: auto-approve); D5 and D8 as unresolved (now settled); and governance or voting
+> over `FLOOR` (now fixed in code, with no governance in the PoC).
+>
+> Sections written after the change — `owed_R`, the order book, the buffer, the audit
+> findings — are current. **A full refresh of this document is outstanding.**
+
+
 
 > **Start with [`13-summary.md`](13-summary.md)** for a description of the system as it
 > stands, then [`14-decisions.md`](14-decisions.md) for what is still open. This document

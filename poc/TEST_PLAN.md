@@ -381,13 +381,13 @@ A day is the right scale because of what a deeper reorg would mean. If BSV reorg
 | `bits` | 4 | — | Read once on push, dead afterwards |
 | `nonce` | 4 | — | Never used after the proof-of-work check |
 
-`288 × 32 + overhead = 9,286 bytes` — the same account size the earlier 144-header layout needed, now covering twice the time. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
+`288 × 32 + overhead = 9,322 bytes` — the same account size the earlier 144-header layout needed, now covering twice the time. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
 
 Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it, and the suite is 14 passing.
 
 Two latent bugs on the reorg path were fixed while the fields were being reshaped: `push_fork` never advanced `window_start` when it pruned the rebuilt window, and it indexed `headers[fork_idx]` directly — which would **panic** in the one state that is genuinely empty, immediately after `initialize`.
 
-**The trade-off this leaves open.** A larger window also survives longer advancer outages: a stalled client is safe but stops minting, so more history means more slack before a checkpoint reset is needed. The cost is rent (linear in the window) and compute on the mint path, because **the whole account is deserialised on every instruction**. At 9,286 bytes that is comfortable against the 200,000 CU budget, but it is the constraint that will bind first if the window grows much further — not rent. The running cost is analysed in [`docs/02-how-it-works.md`](../docs/02-how-it-works.md#what-it-costs-to-run).
+**The trade-off this leaves open.** A larger window also survives longer advancer outages: a stalled client is safe but stops minting, so more history means more slack before a checkpoint reset is needed. The cost is rent (linear in the window) and compute on the mint path, because **the whole account is deserialised on every instruction**. At 9,322 bytes that is comfortable against the 200,000 CU budget, but it is the constraint that will bind first if the window grows much further — not rent. The running cost is analysed in [`docs/02-how-it-works.md`](../docs/02-how-it-works.md#what-it-costs-to-run).
 
 ## 5. Phase 3 — peg out
 

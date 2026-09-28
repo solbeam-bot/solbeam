@@ -1,4 +1,4 @@
-# 13. Decision register
+# 14. Decision register
 
 **Read this first.** [`12. Peg-in and peg-out: the mechanism`](12-peg-mechanism.md) holds the
 full reasoning and the audit findings. This page is the short version: the flows as they

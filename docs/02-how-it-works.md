@@ -39,7 +39,7 @@ Solana charges rent-exemption up front, at roughly **5,080 lamports per byte**, 
 
 | | Size | One-time | at $77/SOL |
 |---|---|---|---|
-| Light client, 48-hour window | 9,286 B | 0.048 SOL | **$3.68** |
+| Light client, 48-hour window | 9,322 B | 0.048 SOL | **$3.68** |
 | *(Solana's per-account creation ceiling)* | *10,240 B* | *0.053 SOL* | *$4.06* |
 
 A 24-hour window would cost half that, at 4,678 B. The 48-hour window is the one built, because the same money buys twice the reorg horizon — see below.
@@ -77,8 +77,8 @@ The window now stores a **bare block hash**. A deposit claim carries the raw 80-
 
 | | Per header | Window | Account |
 |---|---|---|---|
-| Before | 64 B (hash + root) | 144 (24 h) | 9,286 B |
-| Now | **32 B (hash only)** | **288 (48 h)** | 9,286 B |
+| Before | 64 B (hash + root) | 144 (24 h) | 9,322 B |
+| Now | **32 B (hash only)** | **288 (48 h)** | 9,322 B |
 
 **The same deposit now buys twice the reorg horizon** — two days instead of one, leaving a full day of margin over the "BSV is broken if it reorgs for a day" line.
 

@@ -172,7 +172,7 @@ Per-relayer deposits are the path that does not depend on it landing. The covena
 2. **The BSV reserve keys.** BSV sits under keys that can spend it. There is no covenant, and BSV has no timelocks to fall back on.
 3. **The program upgrade authority.** It can override every parameter, which makes it an unconditional mint voucher. Out of scope for the proof of concept, and recorded rather than hidden.
 4. **That honest headers get pushed within the maturity window.** A liveness condition anyone can satisfy, with a built-in incentive: an undetected fraud eats the buffer, so the parties with the most to lose have the most reason to advance the honest chain. It is the load-bearing assumption of the whole system, and the second audit says so in as many words.
-| **That the code is correct** | **Not independently audited.** Our own adversarial review found four critical defects in it; all are fixed and tested, which is not the same as correct |
+5. **That the code is correct.** Not independently audited. Our own adversarial review found four critical defects in it; all are fixed, and two of the four fixes have no test.
 
 Everything else — deposits, backing, minting, maturity, the bond gate and the payout proof — is enforced by code. **Except where it is not yet written:** the vault, the book, per-relayer deposits and all of peg-out are designed and not built, and this list will not be shorter than reality until they are.
 
