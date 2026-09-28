@@ -61,7 +61,7 @@ pub const HEADER_LEN: usize = 80;
 /// account. 192 records is 115,200 seconds = **32 hours at 600 s/block**.
 ///
 /// What actually constrains the *bottom* is cw-144's own lookback:
-/// [`difficulty::LOOKBACK`] = 146 records. A window at or below that could not
+/// [`difficulty::LOOKBACK`] = 147 records. A window at or below that could not
 /// compute the retarget for its own oldest blocks, so 192 is 46 records of
 /// slack over the minimum. The product consequence is real and is recorded in
 /// the workstream: the 48-hour deposit deadline the design assumed is gone.
@@ -74,7 +74,7 @@ pub const SECONDS_PER_BLOCK: u64 = 600;
 pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; // 192
 
 /// The window must be wide enough for the difficulty algorithm to be
-/// computable at all. `LOOKBACK` is 146 (144 + 2 for the median); a window at
+/// computable at all. `LOOKBACK` is 147 (144 + 3 for the median); a window at
 /// or below it would silently fall back to the genesis rule in the middle of a
 /// live chain, which is exactly the defect this workstream exists to fix.
 const _: () = assert!(
@@ -835,7 +835,7 @@ pub struct LightClient {
     ///
     /// Since W1.6 this is the target a header must carry **only when
     /// [`LightClient::no_retargeting`] is set** (regtest) or while the window is
-    /// still too short to compute cw-144 (fewer than 146 records, i.e. the first
+    /// still too short to compute cw-144 (fewer than 147 records, i.e. the first
     /// blocks after `initialize` or `set_checkpoint`). On a live chain it is the
     /// checkpoint's value and nothing more.
     pub expected_bits: u32,
