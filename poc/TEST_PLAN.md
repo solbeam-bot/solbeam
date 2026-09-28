@@ -378,11 +378,17 @@ The error names the symptom and says nothing about the cause, which is why it re
 **Per-submitter, no bond.** The staging PDA is seeded `[b"staging", submitter]`, so no two submitters can contend for the same slot — the problem is removed structurally rather than priced. A bond would still leave one slot to fight over and would drag in slashing machinery for what is only a denial of reorg-following. And since rent is a refundable deposit rather than a fee, an attacker creating many staging accounts costs themselves opportunity cost and harms nobody, which is a better failure mode than a slashed bond.
 
 **Re-anchoring (P2).** `init_staging` records the hash of the block at `fork_height` **once**, and
-`commit_fork` refuses unless the chain still holds that block at that height. Without it, two
-branches staged against the same height could both commit and the window would be spliced from two
-chains with no linkage between them — a mint forgery rather than a nuisance. The branch's first
-header is linked to the recorded hash, not to a fresh lookup, for the same reason. `ForkPointMoved`
-is the error; re-staging is the remedy.
+`commit_fork` refuses unless the chain still holds that block at that height. Without it, a branch
+staged on block X at height H survives a competing commit forked **below** H: that commit replaces X
+with X', and the stale branch — whose first header links to X — is spliced onto X' regardless. The
+window then holds `headers[..=H]` from one chain stapled to a branch from another at a broken link,
+with no linkage between them — a mint forgery rather than a nuisance. (Two branches staged at the
+*same* height cannot do this: `commit_fork` keeps the prefix up to and including the fork point, so
+that block's hash is unchanged, and the second branch is spliced onto the same block the first was.)
+The branch's first header is linked to the recorded hash, not to a fresh lookup, for the same
+reason. `ForkPointMoved` is the error; re-staging is the remedy. The stale-branch test asserts its
+branch is **strictly heavier** than the incumbent before it asserts `ForkPointMoved`, so a tie
+cannot be what refuses it; the check was verified by removing it and watching that test fail.
 
 **An off-by-one worth recording.** `fork_height` is the **last block the two branches share** — the common ancestor — so a branch of N headers commits at tip `fork_height + N`. The fixture's own `fork.from_height` uses the *other* convention: it is the first block of the competing branch. The original `push_fork` computed `from_height + len`, which for the fixture is 191 rather than the correct 190. **That bug was invisible because the test was skipped** — it would have failed on its first real run, which is precisely the cost of leaving a gap marked rather than closed.
 
