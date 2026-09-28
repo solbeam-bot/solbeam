@@ -908,10 +908,17 @@ describe("solbeam — a stale staged fork (P2)", () => {
     expect(doubleSha256(b121).toString("hex"))
       .to.not.equal(doubleSha256(rawAt(121)).toString("hex"));
 
-    // Branch A: a single header off 121, staged while the chain holds the
-    // fixture's block at 121. A records that block as its parent.
+    // Branch A: two headers off 121, staged while the chain holds the fixture's
+    // block at 121. A records that block as its parent. It is deliberately
+    // STRICTLY HEAVIER than anything the chain will hold — four blocks' work
+    // from the re-anchor against B's three — so the re-anchor check is provably
+    // the only thing that can refuse it. A tie or a lighter branch would be
+    // refused as ForkNotHeavier too, and the test would not distinguish the fix
+    // from its absence.
+    const a1 = forkFrom(rawAt(122), rawAt(121));
+    const a2 = forkFrom(rawAt(123), a1);
     const a = await submitter();
-    await stage(a, 121, [forkFrom(rawAt(122), rawAt(121))]);
+    await stage(a, 121, [a1, a2]);
 
     // Now move the fork point out from under A. B forks one block BELOW A, at
     // 120, and is heavier, so its commit replaces the block at 121 with b121.
@@ -924,6 +931,20 @@ describe("solbeam — a stale staged fork (P2)", () => {
     expect(moved.tipHeight.toNumber()).to.equal(122);
     expect(Buffer.from(moved.tipHash).toString("hex"))
       .to.equal(doubleSha256(b122).toString("hex"));
+
+    // A's staged branch outweighs the incumbent, so a commit that did not
+    // re-check the parent would splice it in and the window would hold a branch
+    // whose parent hash is not in the chain. State the inequality rather than
+    // leaving it to the error code. Compared as BigInt because chainwork is a
+    // u128 and `BN` in the hand-written type stand-in exposes only toString.
+    const aStaged = await program.account.forkStaging.fetch(a.addr);
+    const work = (r: { chainwork: { toString(): string } }) =>
+      BigInt(r.chainwork.toString());
+    const aHeaviest = aStaged.records[aStaged.records.length - 1];
+    const incumbentTip = moved.headers[moved.headers.length - 1];
+    expect(work(aHeaviest) > work(incumbentTip),
+      "A's branch must be strictly heavier, or ForkNotHeavier refuses it too")
+      .to.equal(true);
 
     try {
       await commit(a);
