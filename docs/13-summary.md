@@ -64,29 +64,62 @@ Everything else in this document is a specification.
 | **Relayers** | A role, not a company. Anybody may run one. As designed, a relayer holds BSV, pays redemptions, and lodges a bond in `solBSV` that the program can seize. No relayer registry, `owed_R` or bond exists yet |
 | **The website** | Planned order entry, published parameters, and the external metrics. **No consensus role at all** — see *What is trusted* |
 
-## Peg-in — BSV to `solBSV` (designed)
+## How it works, end to end (designed)
 
-As designed, a depositor chooses terms from the book — how much liquidity, at what fee, waiting
-how many confirmations — and sends BSV to the relayer's script, attaching an `OP_RETURN` naming
-their Solana address. After the agreed depth, `solBSV` **would be minted into the vault**, not to
-the depositor, and released to them once a maturity window passes with the deposit still
-canonical. In the shipped program none of this is staged: the mint goes straight to the
-depositor's token account.
+**Everything passes through the vault.** A mint does not go to the depositor, and a redemption
+does not leave the holder — both go into one program-owned token account, and leave it only when
+the program is satisfied. That single property is what makes the rest work.
 
-If a reorg is followed in the meantime, the design **burns** the staged tokens. The depositor's
-BSV returns to them because the deposit itself was reorged away, and they end exactly where they
-started. Nobody else is affected. No burn or staging path exists in code yet.
+### Peg-in
 
-## Peg-out — `solBSV` to BSV (designed)
+```
+1  CHOOSE    terms from the book: liquidity, fee, and how many confirmations to wait
+2  SEND      BSV to a relayer's own script; OP_RETURN carries your Solana address
+             and this deployment's domain separator
+3  DEPTH     wait the depth the bid named, measured in BSV block time
+4  STAGE     solBSV is minted INTO THE VAULT — not to you — and a PendingMint records
+             the block hash your deposit was proven against
+5  RESOLVE   still canonical, maturity passed -> vault to you
+             reorged (the stored hash moved)  -> burned. Your BSV came back with the
+                                                 reorg, so you are where you started
+```
 
-In the design a holder escrows `solBSV` **into the vault** and names a BSV destination. A relayer
-whose bond covers the amount accepts the request and has a deadline — measured in Solana slots —
-to pay BSV and prove it against the light client. A challenge window would follow, during which a
-payout that is later reorged away can be caught.
+**Step 5 is decided by the program, not by anyone's report.** It compares the hash stored in your
+`PendingMint` against the hash it now holds for that height. Same means canonical; different means
+reorged. No oracle, no watcher, no discretion — a reorg is a fact about the headers.
 
-On success the design burns the escrowed `solBSV` and the relayer keeps its fee. On failure the
-escrow is **returned to the holder**. Supply is unchanged either way: no failure path mints. None
-of peg-out is built.
+`release_mint` and `burn_staged` are **permissionless**: anyone may resolve a pending item and
+reclaim the closed account's rent. **Nobody's cooperation is ever required.**
+
+### Peg-out
+
+```
+1  ESCROW    solBSV moves into the vault; a BSV destination and a deadline are named
+2  ACCEPT    a relayer consents to the liability, and its bond must cover it afterwards
+3  PAY       the relayer pays BSV and proves it against the light client
+4  SETTLE    the escrow is burned and the relayer keeps the fee
+   or
+4' CANCEL    permissionless after the deadline: the escrow returns to the holder
+```
+
+**Failure returns; it never mints.** Supply is unchanged and the holder is whole without asking
+anyone. That is also why the bond is not needed here — the escrow return already covers it, and
+paying both would compensate twice. The bond answers a relayer's **deliberate theft or
+abandonment**, not a failed redemption.
+
+**Deadlines are in Solana slots**, so a cluster halt freezes the clock rather than burning a
+relayer who could not act.
+
+### What is entrusted to nobody
+
+| | |
+|---|---|
+| **Is this deposit real?** | The light client verifies proof of work and Merkle inclusion |
+| **Was it reorged?** | The program compares its own stored hashes |
+| **Resolving a pending item** | Permissionless — anyone may call it |
+| **Which relayer may serve** | Any bonded one that consents; a third party cannot occupy another's capacity |
+| **The fee** | Discovered on the order book, not set |
+
 
 ## The idea that holds the design together
 
