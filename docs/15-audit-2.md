@@ -256,3 +256,44 @@ registry, no consent, no `owed_R`, no `bond_R` and no bond check, so *every* peg
 the unbacked one. The design's layering — underwriter, bond, buffer — is entirely prospective.
 That is expected at this stage, but it means **the D6 risk acceptance is currently the whole
 system's risk posture**, not a seeded-book special case.
+
+---
+
+## X3 — BSV changes its difficulty algorithm · **protocol risk, outside our control**
+
+**Recorded because the client now hard-codes cw-144, verified against real headers, and that rule
+belongs to somebody else.**
+
+BSV's own documentation states plainly: *"the original Bitcoin client updated the difficulty target
+every 2016 blocks… however the current difficulty adjustment algorithm changes the rate every block
+in an attempt to compensate for the dynamics of the multiple competing SHA256 chains that currently
+exist. **The difficulty algorithm will be adjusted back to the original 2016 block adjustment rate
+in the near future.**"*
+([BSV Hub](https://hub.bsvblockchain.org/higher-learning/bsv-academy/bsv-theory/proof-of-work/controlling-the-block-discovery-rate.md))
+
+If that happens, or if BSV adopts anything else, **the client rejects every header from the change
+point onward and the bridge halts.** Not a theft, not an exploit — a **liveness failure** caused by
+a third party.
+
+**Why it is worth naming rather than assuming away:**
+
+| | |
+|---|---|
+| **The failure is total, not partial** | The difficulty check gates every header, so nothing advances and no deposit can be proven |
+| **It is already announced** | This is not a hypothetical; the Foundation has said it intends to change it |
+| **Deposits in flight are at risk** | A halted client cannot release a staged mint, and the window is only ~30 hours (W1.4) |
+| **It has no cryptographic defence** | No amount of design makes a hard-coded rule survive its own replacement |
+
+**Mitigations, in order of preference:**
+
+1. **Version the DAA rule on-chain.** Store which rule is active; accept either at a known activation
+   height. A new rule becomes a parameter, not a program upgrade.
+2. **Treat the difficulty rule as upgradeable**, which the program's upgrade authority (A5) already
+   allows — the authority is a liability elsewhere but is the *mechanism* here. Requires monitoring
+   BSV's release notes and shipping before the change activates.
+3. **Monitor and warn.** A website banner is not a defence, but it converts a silent halt into a
+   public one.
+
+**This is assumed not to change in the near term, by decision.** The assumption is recorded here so
+that it is an accepted risk rather than an unnoticed one — and so that whoever revisits this knows
+the trigger to watch for: a BSV release that touches `CalculateNextWorkRequired`.
