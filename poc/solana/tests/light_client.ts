@@ -23,6 +23,68 @@ function displayToInternal(hex: string): Buffer {
   return Buffer.from(hex, "hex").reverse();
 }
 
+// -- regtest proof-of-work helpers -------------------------------------------
+//
+// The fixture is a synthetic regtest chain: every header declares bits
+// 0x207fffff, so every header a test fabricates has to be mined against that
+// target. Getting the target's BYTE POSITION wrong fails silently and
+// expensively. The program's `bits_to_target_be` places the mantissa at
+// `32 - exponent`, so for exponent 0x20 the three mantissa bytes land at
+// [0..3] and the target is ~2^255 — a coin flip per nonce. An earlier version
+// of this file put them at [3..6], a target of ~2^231 that a random digest
+// meets about once in 2^25 tries; the A7 loop ground through 10M nonces and
+// found nothing, which is how that mistake surfaced.
+
+/** Regtest's compact target: the `bits` every fixture header carries. */
+const REGTEST_BITS = 0x207fffff;
+
+/** `bits_to_target_be(0x207fffff)` — mantissa 0x7fffff at bytes [0..2]. */
+const REGTEST_TARGET = (() => {
+  const target = Buffer.alloc(32);
+  target[0] = 0x7f;
+  target[1] = 0xff;
+  target[2] = 0xff;
+  return target;
+})();
+
+/** The digest in the order `meets_target` compares it: reversed. */
+function hashBigEndian(header: Buffer): Buffer {
+  return Buffer.from(doubleSha256(header)).reverse();
+}
+
+/**
+ * Grind `header`'s nonce until it meets regtest's target. Mutates in place and
+ * returns the header. Throws rather than returning an unmined header: a caller
+ * that ignored the failure would just push another invalid block.
+ */
+function mineRegtest(header: Buffer, limit = 10_000_000): Buffer {
+  for (let nonce = 0; nonce < limit; nonce++) {
+    header.writeUInt32LE(nonce, 76);
+    if (hashBigEndian(header).compare(REGTEST_TARGET) <= 0) return header;
+  }
+  throw new Error(`no regtest solution in ${limit} nonces`);
+}
+
+/**
+ * A block in the shape of `template` that links to `prev` and meets the regtest
+ * target, but is a genuinely different block from `template`.
+ *
+ * Rewriting `prev` alone is not enough. The fixture is a contiguous chain, so
+ * for a header at height H the fixture's own `prev` already IS hash(H-1), and
+ * `forkFrom(rawAt(H), rawAt(H-1))` is a byte-for-byte no-op: the "new" branch
+ * would carry the canonical block's own hash and a test comparing the two would
+ * be comparing a value with itself. The timestamp bump makes the block
+ * distinct; re-mining the nonce keeps it well formed, because linkage, the
+ * chain's target and proof of work all still have to pass.
+ */
+function forkFrom(template: Buffer, prev: Buffer, salt = 0): Buffer {
+  const raw = Buffer.from(template);
+  doubleSha256(prev).copy(raw, 4);
+  raw.writeUInt32LE(raw.readUInt32LE(68) + 1 + salt, 68);
+  raw.writeUInt32LE(REGTEST_BITS, 72);
+  return mineRegtest(raw);
+}
+
 describe("solbeam — BSV light client", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -587,10 +649,12 @@ describe("solbeam — following a reorg", () => {
  * reorg, and a valid header by every check the client makes (linkage, the
  * chain's own target, real proof of work against the regtest target).
  *
- * This runs last and re-anchors the checkpoint, because it needs block 117 to be
- * the TIP: a re-inclusion that moves the deposit *forward* is the direction a
+ * This runs last and re-anchors the checkpoint, because it needs block 117 in
+ * the window: a re-inclusion that moves the deposit *forward* is the direction a
  * reorg produces, and the earlier blocks have long since left a 192-record
- * window by the time the reorg suite has finished.
+ * window by the time the reorg suite has finished. The re-inclusion at 118 is
+ * then buried twelve blocks deep, because the replay check is not reached at
+ * all until MIN_CONFIRMATIONS is satisfied.
  */
 describe("solbeam — replay across a re-inclusion (A7)", () => {
   const provider = anchor.AnchorProvider.env();
@@ -619,6 +683,18 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
 
   const rawAt = (height: number): Buffer =>
     Buffer.from(fixture.headers.find((h: any) => h.height === height)!.raw, "hex");
+
+  /**
+   * An 80-byte regtest header to use as a template at `height`. The main chain
+   * only runs 113–128; the competing branch covers 119–190 and is a valid
+   * regtest chain of the same shape, so it supplies the deeper heights. Only the
+   * template's size and `bits` matter — `forkFrom` rewrites prev, time and nonce.
+   */
+  const templateAt = (height: number): Buffer => {
+    const h = fixture.headers.find((x: any) => x.height === height)
+      ?? fixture.fork.headers.find((x: any) => x.height === height);
+    return Buffer.from(h.raw, "hex");
+  };
 
   /** The fixture's deposit proof, optionally re-anchored to another height. */
   const proof = (height: number, header: Buffer) => ({
@@ -666,28 +742,32 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
     doubleSha256(raw117).copy(reIncluded, 4);             // links to 117
     raw117.copy(reIncluded, 36, 36, 68);                  // SAME merkle root
     reIncluded.writeUInt32LE(1780000000, 68);             // time
-    reIncluded.writeUInt32LE(0x207fffff, 72);             // regtest target
-    // Regtest's target, big-endian: mantissa 0x7fffff, exponent 0x20, so the
-    // three mantissa bytes land at [3..6]. The program compares the digest
-    // reversed against exactly this.
-    const target = Buffer.alloc(32);
-    target[3] = 0x7f; target[4] = 0xff; target[5] = 0xff;
-    let nonce = 0;
-    for (;;) {
-      expect(nonce).to.be.below(10_000_000); // ~2 tries expected at regtest's target
-      reIncluded.writeUInt32LE(nonce, 76);
-      if (Buffer.from(doubleSha256(reIncluded)).reverse().compare(target) <= 0) break;
-      nonce++;
-    }
+    reIncluded.writeUInt32LE(REGTEST_BITS, 72);           // regtest target
+    mineRegtest(reIncluded);                              // ~2 tries expected
     expect(doubleSha256(reIncluded).toString("hex"))
       .to.not.equal(doubleSha256(raw118).toString("hex"));
 
     await program.methods.pushHeader(Array.from(reIncluded))
       .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+
+    // Bury it. `verify_deposit` refuses a claim with fewer than
+    // MIN_CONFIRMATIONS (12) confirmations BEFORE it reaches the replay check,
+    // so a re-inclusion left at the tip would be refused as
+    // InsufficientConfirmations and this test would prove nothing about replay.
+    // Eleven successors put block 118 twelve deep; they are the fixture's own
+    // next blocks re-mined onto the re-inclusion, which is the shape of a
+    // forward reorg.
+    let parent: Buffer = reIncluded;
+    for (let h = 119; h <= 129; h++) {
+      parent = forkFrom(templateAt(h), parent);
+      await program.methods.pushHeader(Array.from(parent))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    }
+
     const afterPush = await program.account.lightClient.fetch(lightClient);
-    expect(afterPush.tipHeight.toNumber()).to.equal(118);
+    expect(afterPush.tipHeight.toNumber()).to.equal(129);
     expect(Buffer.from(afterPush.tipHash).toString("hex"))
-      .to.equal(doubleSha256(reIncluded).toString("hex"));
+      .to.equal(doubleSha256(parent).toString("hex"));
 
     // The probe: the same transaction, the same output, a different height, and
     // the claimed header is now canonical at that height.
@@ -722,13 +802,15 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
 /**
  * P2 — the fork re-anchoring forgery vector.
  *
- * `commit_fork` used to splice `headers[..=fork_idx] ++ staging.hashes` while
+ * `commit_fork` used to splice `headers[..=fork_idx] ++ staging.records` while
  * looking the fork point up from *current* chain state, and `push_fork_header`
- * linked a branch's first header the same way. Two branches could therefore be
- * staged against the same height, commit one after the other, and produce a
- * window holding the prefix of one chain and the branch of another with no
- * linkage between them — the client's only invariant. A header that is in no
- * chain could then be made canonical, which is a mint forgery, not a nuisance.
+ * linked a branch's first header the same way. A branch staged on block X at
+ * height H could therefore survive a competing commit forked BELOW H: that
+ * commit replaced X with X', and the stale branch — whose first header links to
+ * X — was spliced onto X' regardless. The window then held `headers[..=H]` from
+ * one chain stapled to a branch from another at a broken link, which is the
+ * client's only invariant. A header that is in no chain could then be made
+ * canonical, which is a mint forgery, not a nuisance.
  *
  * The fix records the parent hash when the branch is staged and re-checks it at
  * commit. These two tests pin both halves: that the check fires when the parent
@@ -763,7 +845,15 @@ describe("solbeam — a stale staged fork (P2)", () => {
     return { key, addr };
   };
 
-  /** Re-anchor the trusted checkpoint, which resets the window. */
+  /**
+   * Re-anchor the trusted checkpoint, which resets the window.
+   *
+   * Note what the reset leaves behind: `set_checkpoint` empties `headers`, so
+   * the checkpoint block itself is NOT a record. The first `push_header`
+   * afterwards sets `window_start` to *that* block's height. So the shallowest
+   * height a branch can name as a fork point is one above the checkpoint, and
+   * any test that wants a fork point at all has to push a header first.
+   */
   const reanchor = async (height: number) => {
     await program.methods
       .setCheckpoint(new anchor.BN(height), Array.from(doubleSha256(rawAt(height))))
@@ -771,16 +861,16 @@ describe("solbeam — a stale staged fork (P2)", () => {
       .rpc();
   };
 
-  /**
-   * A block that links to `prev` but is otherwise the fixture's block at
-   * `height`. Only `prev` is rewritten, so the header is well-formed, carries
-   * the fixture's real proof of work against the regtest target, and its hash is
-   * a new one.
-   */
-  const extends_ = (height: number, prev: Buffer): Buffer => {
-    const raw = rawAt(height);
-    doubleSha256(prev).copy(raw, 4);
-    return raw;
+  /** Extend the canonical chain with the fixture's own header at that height. */
+  const push = async (raw: Buffer) => {
+    await program.methods.pushHeader(Array.from(raw))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+  };
+
+  const commit = async (who: { key: anchor.web3.Keypair; addr: anchor.web3.PublicKey }) => {
+    await program.methods.commitFork()
+      .accounts({ lightClient, staging: who.addr, submitter: who.key.publicKey })
+      .signers([who.key]).rpc();
   };
 
   const stage = async (
@@ -800,37 +890,43 @@ describe("solbeam — a stale staged fork (P2)", () => {
   };
 
   it("rejects a commit whose fork point has moved (the stale branch)", async () => {
-    await reanchor(120);
+    // Re-anchor one block below the fork point the stale branch will name, and
+    // push two real headers, so that both the fork point (121) and the block
+    // that will replace it are genuine records in the window.
+    await reanchor(119);
     expect((await program.account.lightClient.fetch(lightClient)).tipHeight.toNumber())
-      .to.equal(120);
+      .to.equal(119);
+    await push(rawAt(120));
+    await push(rawAt(121));
 
-    const base120 = rawAt(120);
-    const b121 = extends_(121, base120);
-    const b122 = extends_(122, b121);
-    const b123 = extends_(123, b122);
-    expect(doubleSha256(b121).toString("hex")).to.not.equal(doubleSha256(rawAt(121)).toString("hex"));
+    // Branch B's replacement blocks. `forkFrom` re-mines the fixture's own 121
+    // and 122 onto the chain, so B carries the fixture's real proof of work but
+    // is a different chain above 120 — and, importantly, the block it puts at
+    // 121 is NOT the block the fixture has there.
+    const b121 = forkFrom(rawAt(121), rawAt(120));
+    const b122 = forkFrom(rawAt(122), b121);
+    expect(doubleSha256(b121).toString("hex"))
+      .to.not.equal(doubleSha256(rawAt(121)).toString("hex"));
 
-    // Branch A: a single header off 120, staged while the fork point is 120.
+    // Branch A: a single header off 121, staged while the chain holds the
+    // fixture's block at 121. A records that block as its parent.
     const a = await submitter();
-    await stage(a, 120, [b121]);
+    await stage(a, 121, [forkFrom(rawAt(122), rawAt(121))]);
 
-    // Now move the fork point: a DIFFERENT, heavier branch off the same height
-    // commits, so the chain no longer holds A's parent at 120.
+    // Now move the fork point out from under A. B forks one block BELOW A, at
+    // 120, and is heavier, so its commit replaces the block at 121 with b121.
+    // The chain still has *a* block at 121 when A commits — just not A's.
     const b = await submitter();
-    await stage(b, 120, [b121, b122, b123]);
-    await program.methods.commitFork()
-      .accounts({ lightClient, staging: b.addr, submitter: b.key.publicKey })
-      .signers([b.key]).rpc();
+    await stage(b, 120, [b121, b122]);
+    await commit(b);
 
     const moved = await program.account.lightClient.fetch(lightClient);
-    expect(moved.tipHeight.toNumber()).to.equal(123);
+    expect(moved.tipHeight.toNumber()).to.equal(122);
     expect(Buffer.from(moved.tipHash).toString("hex"))
-      .to.equal(doubleSha256(b123).toString("hex"));
+      .to.equal(doubleSha256(b122).toString("hex"));
 
     try {
-      await program.methods.commitFork()
-        .accounts({ lightClient, staging: a.addr, submitter: a.key.publicKey })
-        .signers([a.key]).rpc();
+      await commit(a);
       expect.fail("should have refused a branch whose fork point moved");
     } catch (e: any) {
       const m = String(e).match(/Error Code: (\w+)/);
@@ -850,23 +946,24 @@ describe("solbeam — a stale staged fork (P2)", () => {
   });
 
   it("still commits when the fork point has NOT moved (the control)", async () => {
-    // The same shape without the interleaving. If the re-anchor check were too
-    // strict — comparing against the wrong block, or re-reading the parent after
-    // the window had already been rebuilt — this fails while the test above
-    // still passes.
+    // The same shape without the interleaving. `set_checkpoint(124)` leaves no
+    // record at 124, so push the fixture's 125 to give the branch a fork point
+    // that is genuinely in the window. If the re-anchor check were too strict —
+    // comparing against the wrong block, or re-reading the parent after the
+    // window had already been rebuilt — this fails while the test above still
+    // passes.
     await reanchor(124);
-    const b125 = extends_(125, rawAt(124));
+    await push(rawAt(125));
+    const b126 = forkFrom(rawAt(126), rawAt(125));
 
     const c = await submitter();
-    await stage(c, 124, [b125]);
-    await program.methods.commitFork()
-      .accounts({ lightClient, staging: c.addr, submitter: c.key.publicKey })
-      .signers([c.key]).rpc();
+    await stage(c, 125, [b126]);
+    await commit(c);
 
     const after = await program.account.lightClient.fetch(lightClient);
-    expect(after.tipHeight.toNumber()).to.equal(125);
+    expect(after.tipHeight.toNumber()).to.equal(126);
     expect(Buffer.from(after.tipHash).toString("hex"))
-      .to.equal(doubleSha256(b125).toString("hex"));
+      .to.equal(doubleSha256(b126).toString("hex"));
     expect(await provider.connection.getAccountInfo(c.addr)).to.be.null;
   });
 });
