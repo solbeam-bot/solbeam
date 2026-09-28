@@ -2,7 +2,8 @@
 > **STALE — predates the current program.** It claims "this code has never been
 > compiled", that `check_daa()` runs on every header, and that there is "no mint and no
 > token". None of that is true today: the program builds, has 20 passing tests, mints
-> `solBSV`, and `check_daa` has **no caller at all**. See [`TEST_PLAN.md`](../TEST_PLAN.md) §0.
+> `solBSV`, and the difficulty retarget is **cw-144**, verified against 324/324 real
+> mainnet headers (`check_daa` no longer exists). See [`TEST_PLAN.md`](../TEST_PLAN.md) §0.
 
 
 **First increment: the light client only.** A checkpoint, a rolling window of
@@ -91,17 +92,19 @@ Each is a decision, not an oversight:
 - **No chainwork.** Reorg resolution needs accumulated work to reject a *valid
   but lower-work* competing chain — linkage alone is not enough. Getting it
   right means 256-bit arithmetic, so it gets its own increment rather than an
-  approximation.
+  approximation. *(Since built — W1.7; each record stores cumulative chainwork.)*
 - **No DAA.** Regtest fixes the target. `check_daa()` exists, is code-pathed and
   runs on every header, so enabling retargeting for testnet is a comparison
-  rather than a rewrite.
+  rather than a rewrite. *(Since closed, and the claim corrected: `check_daa` never ran on
+  every header and has been removed. W1.6 replaced the fixed target with **cw-144**,
+  verified against 324/324 real mainnet headers.)*
 - **No mint and no token.** Deliberately absent, which also keeps this
   increment clear of the Anchor 1.x CPI changes.
 
 ## Next
 
 1. `anchor build` on the droplet, then a fix pass.
-2. Chainwork, so a lower-work competing chain is rejected.
+2. ~~Chainwork, so a lower-work competing chain is rejected.~~ **Done (W1.7).**
 3. The Merkle fold and `verify_deposit`, consuming the fixture's **instruction**
    — not just its headers.
 4. `solBSV`: classic SPL, 8 decimals, no freeze authority, mint authority = the

@@ -3,8 +3,9 @@
 > **Specification, not shipped behaviour.** The light client, the token, the mint and fork
 > staging are **built and tested** (20 on-chain tests). **The vault, the two gates, maturity, the
 > order book, staking, bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a
-> distinct parameter and all of peg-out are designed and not built.** DAA is **actively rejected
-> in the built client** (F7), not merely absent. The shipped program mints straight to the
+> distinct parameter and all of peg-out are designed and not built.** The difficulty retarget is
+> **implemented** — cw-144, verified against 324/324 real mainnet headers (open item X3: the rule
+> is hard-coded and BSV may change it). The shipped program mints straight to the
 > depositor's token account, so the parameters below that depend on the vault or on a book are,
 > at this moment, a specification rather than a property of the code.
 

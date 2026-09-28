@@ -111,14 +111,15 @@ the true statement is that **self-dealing is unprofitable only to the extent det
 
 | Vector | Harm | Cost to attacker | Stopped by |
 |---|---|---|---|
-| Fill the replay list with dust | **All peg-ins fail** once 200 entries are used | Dust plus 200 Solana fees | **Nothing.** `MIN_PEG_IN` is unimplemented and `MAX_USED = 200 < WINDOW = 288`, so the list can be filled inside a window and refilled |
+| Fill the replay list with dust | **All peg-ins fail** once 200 entries are used | Dust plus 200 Solana fees | **Nothing.** `MIN_PEG_IN` is unimplemented and `MAX_USED = 200` fills the list well inside a window, which can then be refilled. *(The window was 288 blocks when this audit was written; W1.4 made it 192, so the list is now larger than the window in blocks — the ceiling is still hard.)* |
 | Force a pause | **Nothing — an attacker cannot force one** | — | `set_paused` is authority-gated (A2 fixed) and `commit_fork` only emits an event, so no attacker path halts minting |
 | Deny service to the advancer | **An undetected fraud releases a mint into circulation and dilutes holders** | Blocking a permissionless, unstaked role | **Nothing** for that loss: a slash needs detection too, so the bond is not reached either. Detection is the only defence against a released fraudulent mint — but it is not the whole system's single dependency (see below) |
 | Occupy bond capacity | **The attacker's own capacity only** | — | **A mint naming relayer R needs R's signature/consent**, so a third party cannot occupy an innocent relayer's capacity |
 
 ### F6 — The replay list is a cheap, repeatable shutdown · **unimplemented · serious**
 
-The list holds 200 entries for a 288-block window. Two hundred dust deposits fill it, after
+The list holds 200 entries — for the 288-block window of this audit, since resized to 192 records
+(32 h) by W1.4. Two hundred dust deposits fill it, after
 which **every** peg-in fails during the rest of the window — and it can be repeated. `MIN_PEG_IN`
 is specified as a parameter but is not enforced in code, so the deposits need not be
 economically meaningful. For a bridge whose peg-in is the product, this is a complete
@@ -243,8 +244,9 @@ It would become real if a depositor signed with `SIGHASH_NONE`, which no wallet 
 ### Confirmed, and worse than recorded
 
 **F6 is a hard throughput ceiling, not only a griefing vector.** `MAX_USED = 200` with no
-`MIN_PEG_IN` means the program can process **at most 200 peg-ins per 48-hour window** even
-with no attacker at all. The griefing case is simply an attacker reaching that ceiling
+`MIN_PEG_IN` means the program can process **at most 200 peg-ins per window** even
+with no attacker at all — 48 hours at the time of this audit, **32 hours** after the W1.4
+resize. The griefing case is simply an attacker reaching that ceiling
 deliberately. Worth separating in the write-up: one is a capacity limit, the other is abuse of
 it.
 
@@ -286,7 +288,7 @@ a third party.
 |---|---|
 | **The failure is total, not partial** | The difficulty check gates every header, so nothing advances and no deposit can be proven |
 | **It is already announced** | This is not a hypothetical; the Foundation has said it intends to change it |
-| **Deposits in flight are at risk** | A halted client cannot release a staged mint, and the window is only ~30 hours (W1.4) |
+| **Deposits in flight are at risk** | A halted client cannot release a staged mint, and the window is only **32 hours** (W1.4; the audit wrote ~30 h before the resize was final) |
 | **It has no cryptographic defence** | No amount of design makes a hard-coded rule survive its own replacement |
 
 **Mitigations, in order of preference:**

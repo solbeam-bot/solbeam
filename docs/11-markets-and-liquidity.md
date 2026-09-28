@@ -16,7 +16,7 @@ Nobody has to wait on the peg's confirmation depth to get `solBSV`, or on a rede
 
 A user picks their point on that line: speed, cost, or trust.
 
-> **Built or designed?** The light client, the token, the mint and fork staging are built and pass 20 on-chain tests. **The vault, the two gates, maturity, the order book, staking, bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all of peg-out are designed and not built** — DAA is **actively rejected in the built client** (F7), not merely absent — so the peg plumbing described below is the finished specification; the shipped program mints straight to the depositor. The market layer is external (pools, orderbooks, market makers) and is not SOLBEAM's to build.
+> **Built or designed?** The light client, the token, the mint and fork staging are built and pass 20 on-chain tests. **The vault, the two gates, maturity, the order book, staking, bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all of peg-out are designed and not built.** The difficulty retarget is **implemented** — cw-144, verified against 324/324 real mainnet headers; the open item is X3, that the rule is hard-coded and BSV may change it — so the peg plumbing described below is the finished specification; the shipped program mints straight to the depositor. The market layer is external (pools, orderbooks, market makers) and is not SOLBEAM's to build.
 
 ---
 

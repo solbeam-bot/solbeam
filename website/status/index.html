@@ -104,7 +104,7 @@
       </div>
       <ul>
         <li>A BSV deposit produces a <strong>portable mint instruction</strong>: 202 bytes, byte-identical on every run, verifiable from the file alone.</li>
-        <li><strong>48 tests</strong>, including tampered proofs, inflated amounts, replays, malformed deposits, and a chain reorg that discards a deposit.</li>
+        <li><strong>51 tests</strong>, including tampered proofs, inflated amounts, replays, malformed deposits, and a chain reorg that discards a deposit.</li>
         <li>Needs no node — a generated chain — so it runs anywhere.</li>
       </ul>
     </div>
@@ -128,15 +128,15 @@
         <span class="phase__state">In progress</span>
       </div>
       <ul>
-        <li><strong>Done: the light client on-chain.</strong> A checkpoint, a rolling <strong>48-hour window</strong> (288 blocks, sized by time rather than picked), storing a bare block hash per header, with linkage and proof of work. <strong>17 tests passing</strong> against the Phase&nbsp;1A fixture, including a full mint and a hostile-advancer suite.</li>
+        <li><strong>Done: the light client on-chain.</strong> A checkpoint and a rolling <strong>32-hour window</strong> (192 records, sized by what the difficulty rule needs and the account cap allows, not picked), each record storing the block hash, its cumulative chainwork and its timestamp. Linkage, proof of work and the <strong>cw-144 difficulty retarget</strong> — verified against <strong>324/324 real mainnet headers</strong>. <strong>20 tests passing</strong> against the Phase&nbsp;1A fixture, including a full mint and a hostile-advancer suite.</li>
         <li><strong>Done: the two implementations agree.</strong> The on-chain client derives the same header hash as the Phase&nbsp;1A Python reference, from the same fixture, unmodified.</li>
         <li><strong>Done: a hostile advancer cannot reorder, replay or rewind.</strong> The worst it can do is stall, which is what the design claims.</li>
         <li><strong>Done: the client follows a legitimate reorg.</strong> A competing branch is staged and committed only if it is <em>strictly</em> heavier, so a tie keeps the incumbent. Already-minted deposits are not reversed — the confirmation depth is the protection, and the token has no freeze authority, so a reversal is impossible by design rather than merely unimplemented.</li>
-        <li><strong>An adversarial review found Three critical defects fixed (a vacuous proof-of-work check, an unauthenticated checkpoint path, an unconstrained mint) and one serious one (a replay key that double-minted after a reorg); three criticals remain open (A4, A5, A6). Three of the five fixes have tests.</strong> The most serious: the difficulty target was read from the header being checked, so proof of work was <em>vacuous</em> — anyone could append headers and mint with no hashpower. Also fixed: an unauthenticated path that let any key rewrite the trusted checkpoint or halt minting; a counterfeit mint that could strand a user's deposit permanently; and a replay key that double-minted a deposit after a reorg. Two of the four have tests; two do not. <strong>Three critical issues remain open and are documented rather than hidden:</strong> the staking buffer is not verifiable on-chain, the program upgrade authority can override every parameter, and the reserve address is a plain key rather than a covenant.</li>
+        <li><strong>An adversarial review found three critical defects fixed (a vacuous proof-of-work check, an unauthenticated checkpoint path, an unconstrained mint) and two serious ones (a replay key that double-minted after a reorg, and a fork-staging point that could be spliced); three criticals remain open (A4, A5, A6). Five fixes in all — A1, A2, A3, A7 and P2 — of which <strong>three have tests (A1, A7, P2); A2 and A3 do not</strong>.</strong> The most serious: the difficulty target was read from the header being checked, so proof of work was <em>vacuous</em> — anyone could append headers and mint with no hashpower. Also fixed: an unauthenticated path that let any key rewrite the trusted checkpoint or halt minting; a counterfeit mint that could strand a user's deposit permanently; a replay key that double-minted a deposit after a reorg; and a fork-staging point that let a staged branch be spliced onto a different block. <strong>Three critical issues remain open and are documented rather than hidden:</strong> the staking buffer is not verifiable on-chain, the program upgrade authority can override every parameter, and the reserve address is a plain key rather than a covenant.</li>
         <li><strong>Done: the deposit verifier.</strong> It consumes the fixture's 202-byte instruction — Merkle fold, on-chain transaction parsing, exact output script, confirmation depth, and replay refusal. It accepts the real deposit and refuses four tampered versions of it.</li>
         <li><strong>Done: the mint.</strong> A verified deposit mints <code>solBSV</code> to the address named in the OP_RETURN. The test asserts the recipient's balance equals the deposit exactly — eight decimals, one base unit per satoshi, no scaling. The token has no freeze authority and its mint authority is a program PDA, so no operator key can create supply.</li>
         
-        <li><strong>Left, and it is a real gap:</strong> the client is safe against a hostile advancer but cannot <em>follow</em> a legitimate reorg — it stalls on the abandoned branch. Closing it is a design decision as much as code, so it is deliberately not guessed at.</li>
+        <li><strong>Done: the client follows a real chain's difficulty.</strong> The retarget is <strong>cw-144</strong>, computed per block from the node's <code>src/pow.cpp</code> and verified against <strong>324/324 real mainnet headers</strong>. <strong>Still open (X3):</strong> the rule is hard-coded, and BSV's own documentation says it will change, so the algorithm needs a way to change without a redeploy.</li>
       </ul>
     </div>
 
@@ -175,7 +175,7 @@
     <h2>What is proven so far</h2>
     <div class="tally">
       <span><b>13</b> adversarial plays</span>
-      <span><b>17</b> on-chain tests</span>
+      <span><b>20</b> on-chain tests</span>
       <span><b>0</b> of the vault built</span>
       <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>

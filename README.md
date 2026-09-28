@@ -42,7 +42,7 @@ Bonding can make cheating unprofitable. It cannot make it impossible, and it doe
 
 **Early, and the split matters.**
 
-**Built and tested:** the light client, the `solBSV` token and the mint — **17 on-chain tests**, plus 21/21 checks against a live SV Node and the full Python checker suite. The shipped program mints straight to the depositor's token account.
+**Built and tested:** the light client, the `solBSV` token and the mint — **20 on-chain tests**, plus 21/21 checks against a live SV Node and the full Python checker suite. The shipped program mints straight to the depositor's token account.
 
 **Designed, not built:** the vault and its two gates, the order book, staking and bonds, per-relayer deposits, and **all of peg-out**. Those are a specification at this point, not a property of the code. See [`poc/TEST_PLAN.md`](poc/TEST_PLAN.md) §0 for the honest baseline and [`docs/14-decisions.md`](docs/14-decisions.md) for the settled decisions.
 

@@ -1,10 +1,10 @@
 # 5. Relayers
 
-> **Built or designed?** The light client, the token, the mint and fork staging exist and pass 17
+> **Built or designed?** The light client, the token, the mint and fork staging exist and pass 20
 > on-chain tests. **The vault, the two gates, maturity, the order book, staking, bonds, `owed_R`,
 > consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all of peg-out are
-> designed and not built.** DAA is **actively rejected in the built client** (F7), not merely
-> absent. No relayer, bid or bond described below exists in code yet; the shipped program mints
+> designed and not built.** The difficulty retarget is **implemented** — cw-144, verified against
+> 324/324 real mainnet headers (open item X3: the rule is hard-coded). No relayer, bid or bond described below exists in code yet; the shipped program mints
 > straight to the depositor's token account. Read this as a specification.
 
 ## What a relayer actually is

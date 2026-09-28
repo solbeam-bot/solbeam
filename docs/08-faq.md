@@ -19,7 +19,7 @@ Into a **program-owned vault**, never straight to your wallet. The program mints
 Because releasing real BSV requires a BSV signature, and BSV Script cannot verify Solana's ed25519 consensus. Solana can check BSV; BSV cannot check Solana. That asymmetry is a property of the two chains. The roadmap target — a BSV covenant that releases funds against a zero-knowledge proof of the Solana burn — would remove the key entirely.
 
 **What happens if a relayer disappears?**
-The redemption deadline expires and the program **returns your escrowed `solBSV` to you**. On failure the escrow comes back rather than being re-minted, so supply is unchanged, and the relayer's bond is slashed. Either way you keep the same amount.
+The redemption deadline expires and the program **returns your escrowed `solBSV` to you**. On failure the escrow comes back rather than being re-minted, so supply is unchanged, and the bond is **not** additionally transferred — the returned escrow already makes you whole. (The bond answers a relayer's `owed_R` — deliberate theft or abandonment of what it owes — not a missed redemption.) Either way you keep the same amount.
 
 **What if BSV's price rises sharply?**
 Nothing breaks. The bond is held in **`solBSV`** — the same asset as the exposure — so a price move scales both sides together. There is no oracle to feed and no governor to react, which also means there is no window in which an attacker could strike. A sharp move only changes relayer fee revenue in dollar terms. (An earlier draft used a stablecoin bond with a price governor; that was a written call option on the reserve. See [Parameters](06-parameters.md#a-caution-on-the-stablecoin-bond).)

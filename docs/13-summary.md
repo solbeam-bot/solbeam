@@ -146,8 +146,9 @@ nobody should accept. `FLOOR` is not a parameter in code; the shipped mint uses 
 `MIN_CONFIRMATIONS = 12` and parses no depth from the deposit.
 
 **Detection comes from the chain itself.** As designed, a reorg is visible in the BSV headers the
-client already stores: depth from the headers, timing *intended* to come from the timestamps at offset 68, which are not yet read of each
-header. Nothing external is consulted.
+client already stores: depth and block time from the headers, including the timestamp at offset 68,
+which each record stores because cw-144 needs it. Nothing external is consulted. (What is not built
+is the maturity/release logic that would consume those signals.)
 
 **Detection requires someone to advance the honest chain** — which is permissionless, cheap,
 and *incentivised*. An undetected fraud would eat the underwriter's bond, so the parties with the
@@ -191,17 +192,18 @@ Deliberately short.
 | **The checkpoint** | The light client starts from a block hash taken on faith. It is published, buried deep, and the only thing not proven |
 | **The BSV reserve keys** | BSV sits under keys that can spend it. There is no covenant, and BSV has no timelocks to fall back on |
 | **The program upgrade authority** | It can override every parameter. Out of scope for the proof of concept, and recorded rather than hidden |
-| **That honest headers get pushed within the maturity window** | A liveness condition anyone can satisfy, not a trust assumption — and, as designed, one with a built-in incentive. The bond answers a missed redemption on its own deadline; detection is what answers a fraudulent mint that has already been released (see [`15-audit-2.md`](15-audit-2.md)) |
-| **That the code is correct** | **It is not independently audited.** Our own adversarial review found defects in it. Three critical ones — a vacuous proof-of-work check, an unauthenticated checkpoint path, and an unconstrained mint — are fixed, as is one serious one, a replay key that double-minted after a reorg. **Three criticals remain open: A4, A5 and A6.** Three of the four fixes have tests; A2 and A3 do not |
+| **That honest headers get pushed within the maturity window** | A liveness condition anyone can satisfy, not a trust assumption — and, as designed, one with a built-in incentive. A missed redemption is answered by the **escrow return** at its own deadline, not by the bond; the bond answers `owed_R` (theft or abandonment). Detection is what answers a fraudulent mint that has already been released (see [`15-audit-2.md`](15-audit-2.md)) |
+| **That the code is correct** | **It is not independently audited.** Our own adversarial review found defects in it. Three critical ones — a vacuous proof-of-work check, an unauthenticated checkpoint path, and an unconstrained mint — are fixed, as are two serious ones: a replay key that double-minted after a reorg (A7) and a fork-staging point that could be spliced (P2). **Three criticals remain open: A4, A5 and A6.** Three of the five fixes have tests (A1, A7, P2); A2 and A3 do not |
 
 Everything else — backing, maturity and the payout proof — is **designed** to be enforced by
 code. It is not enforced today: the shipped program is the light client, the token, the mint to
 the depositor, and fork staging, exactly as the table above says.
 
 > **What is still wrong is in [`15-audit-2.md`](15-audit-2.md), not here.** Four
-> critical defects in the built code are fixed; **F7 (the client halts permanently at the first
-> difficulty retarget), F6 (a hard 200-peg-in ceiling per window) and C3 (the first caller picks
-> the checkpoint and its difficulty) are open**, and the vault itself is unbuilt. See also
+> critical defects in the built code are fixed; **F6 (a hard 200-peg-in ceiling per window) and C3
+> (the first caller picks the checkpoint and its difficulty) are open**, and the vault itself is
+> unbuilt. **F7 is closed** — cw-144 is implemented and verified 324/324 against real mainnet
+> headers; what remains from it is X3, that the rule is hard-coded and BSV may change it. See also
 > [`poc/TEST_PLAN.md`](../poc/TEST_PLAN.md) §0 for the honest baseline.
 
 ## Where to read next

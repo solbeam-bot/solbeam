@@ -12,27 +12,32 @@ because that is the useful question now.
 
 ## Status at a glance — read this first
 
-**Nothing on this page is fixed.** Every item is either *decided* (the approach is agreed, no
-code written) or *open* (needs a decision). The code is unchanged from the A1/A2/A3/A7 fixes.
+**Nothing on this page was fixed when it was written.** Every item was either *decided* (the
+approach is agreed, no code written) or *open* (needs a decision). The code was unchanged from the
+A1/A2/A3/A7 fixes. Since then **P2 and P4 have been fixed — W1.7 and W1.6 respectively** — and the
+notes below say so inline; the rest is as recorded.
 
 | | Item | Status | What it needs |
 |---|---|---|---|
 | **P1** | Checkpoint race + self-declared difficulty | **Decided** — race accepted | Deploy privately; address-link later if wanted. No code |
-| **P2** | `commit_fork` does not re-anchor | ✅ **Fixed** (W1.7) | `fork_parent_hash` stored at init, linked from, re-checked at commit → `ForkPointMoved`. Commit now also compares **chainwork**, not heightt commit |
+| **P2** | `commit_fork` does not re-anchor | ✅ **Fixed** (W1.7) | `fork_parent_hash` stored at init, linked from, re-checked at commit → `ForkPointMoved`. Commit now also compares **chainwork**, not height |
 | **P3** | Deposits have a hard ~32 h life | **Decided** — 48 h accepted, but **the window cannot hold it** | W1 measured the real limit at **32 h** (192 records). The app automates the mint; deadline disclosed; unproven receipts published off-chain. **The 48 is now wrong and needs re-deciding** |
-| **P4** | Retarget halts the client (F7) | **Specified** | Store the difficulty-period anchor; compute and check the new target. Testable on regtest |
+| **P4** | Retarget halts the client (F7) | ✅ **Fixed** (W1.6) | cw-144 computed and checked per block, verified against **324/324** real mainnet headers (`difficulty-vectors/`). What remains is **X3**: the rule is hard-coded and BSV may change it, so it needs to be swappable without a redeploy |
 | **P5** | Replay-list shutdown and hard ceiling | **Decided** | `MIN_PEG_IN = 1 BSV`, **and the fixed list replaced by a nullifier PDA per minted deposit** |
 | **P6–P10** | Vault-era items | **Design-in** | Depend on the vault, which is unbuilt |
 
-Only **P1** is closed by a decision rather than by work. Everything else is work still to do.
+**P1 is closed by a decision; P2 and P4 are closed by work (W1.7/W1.6).** Everything else is work
+still to do.
 
 ## What is materially outstanding
 
-After the decisions on P1–P7, four things carry real weight, in order:
+After the decisions on P1–P7, four things carried real weight, in order. The first two are now
+closed and are kept in place:
 
-1. **P2 — window splicing.** The one genuine forgery vector. Code, light client, testable on
-   regtest.
-2. **P4 — the retarget halt.** Blocks testnet; self-contained; testable on regtest.
+1. ~~**P2 — window splicing.**~~ The one genuine forgery vector. **Fixed in W1.7** —
+   `fork_parent_hash` is recorded at init and re-checked at commit.
+2. ~~**P4 — the retarget halt.**~~ Blocks testnet; self-contained; testable on regtest. **Fixed in
+   W1.6** — cw-144, verified 324/324. X3 (the hard-coded rule) remains.
 3. **The vault has no instruction set designed.** Release, burn, escrow and return do not exist
    even on paper, so there is nothing to audit and P8/P10 depend on it. **This is the largest
    design gap left.**
@@ -145,10 +150,10 @@ hook. They never need the relayer's cooperation to be made whole; they need only
 | Option | Extends the deadline? | Cost | Verdict |
 |---|---|---|---|
 | **Automate the mint** in the app | No — but the deadline stops mattering | trivial | **Do it.** The primary answer |
-| **Disclose the deadline** (48 h) in the UI | No | trivial | **Do it** |
+| **Disclose the deadline** (32 h) in the UI | No | trivial | **Do it** |
 | **Publish unproven receipts** off-chain | No | low | **Do it.** This is the "24-hour rule" — monitoring and reputation, not code |
 | Historic-header bridging | By ~12 blocks (tx limit) | medium | Marginal |
-| Multiple window accounts (4 × 192) | Yes, 4× | 4× rent (~$16) + complexity | Possible if 48 h proves too short |
+| Multiple window accounts (4 × 192) | Yes, 4× | 4× rent (~$16) + complexity | Possible if 32 h proves too short |
 | A refund path | — | — | Needs the relayer's key. A rule, not code |
 | A covenant | — | research | The structural fix: removes the relayer's discretion entirely |
 
@@ -159,12 +164,15 @@ Options: size the window against `depth + maturity` with margin and state the de
 allow a historic header to be supplied with a chain of headers; or add the refund path. *Decision
 needed, and it interacts directly with the maturity length.*
 
-### P4 — `FLOOR` and the retarget · **F7, blocks testnet**
+### P4 — `FLOOR` and the retarget · **F7, fixed in W1.6**
 `push_header` required `bits == expected_bits`, set once at `initialize` and never refreshed.
-**Fixed in W1.6:** the target is now computed per block by cw-144.
-**The client halts permanently at the first difficulty retarget.** Invisible on regtest; fatal on
-testnet or mainnet. Needs a stored difficulty-period anchor — BSV retargets every 2016 blocks and
-we store 192, of which 147 are consumed by the DAA.
+**Fixed in W1.6:** the target is now computed per block by cw-144 — the node's rule, verified
+against **324/324** real mainnet headers.
+**The original note is kept for the record:** the client halted permanently at the first difficulty
+change, invisible on regtest and fatal on testnet or mainnet. The supposed fix here — a stored
+difficulty-period anchor, on the premise that "BSV retargets every 2016 blocks" — was itself wrong:
+BSV adjusts **every block**. What is still open is **X3**, not F7: the rule is hard-coded and BSV
+may replace it, so it needs a way to change without a redeploy.
 
 ### P5 — The replay list is a cheap shutdown and a hard ceiling · **F6, unfixed**
 `MAX_USED = 200` with `MIN_PEG_IN` unimplemented. Two hundred dust deposits block every peg-in for
@@ -195,7 +203,7 @@ capacity limit, not a safety one, and it would bite in ordinary use.
 
 | Option | Ceiling | Cost | Verdict |
 |---|---|---|---|
-| Keep the fixed list at 200 | 200 per 48 h | — | Fine for a PoC; not for production |
+| Keep the fixed list at 200 | 200 per 32 h | — | Fine for a PoC; not for production |
 | Shrink `DepositKey` (u32 height) | ~255 | trivial | Marginal |
 | **A nullifier PDA per minted deposit** ✅ | **none** | ~0.002 SOL rent per mint, refundable when closed | **The structural fix.** Solana cannot enumerate PDAs, but it does not need to — replay is checked by looking up a derived address |
 | Multiple list accounts | 200 × n | n × rent | Works, more moving parts |

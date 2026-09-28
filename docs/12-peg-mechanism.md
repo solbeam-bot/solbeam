@@ -7,16 +7,18 @@
 > **Built or designed?** The shipped program is exactly **light client + `solBSV` token +
 > the mint + fork staging**, and it passes 20 on-chain tests. **The vault, the two gates,
 > maturity, release, burn, the order book, staking, bonds, `owed_R`, consent, per-relayer
-> deposit scripts, all of peg-out, `FLOOR` as a distinct parameter, and the difficulty
-> retarget are designed and not built.** The shipped mint goes straight to the depositor's
+> deposit scripts, all of peg-out and `FLOOR` as a distinct parameter are designed and not
+> built.** The shipped mint goes straight to the depositor's
 > token account, so nothing is staged yet and most of this document is a specification
 > rather than a property of the code.
 >
-> The retarget — the one component here that was **actively rejected rather than merely
-> missing** — is now implemented. The client computes cw-144 per block from the node's
+> The difficulty retarget — the one component here that was **actively rejected rather than
+> merely missing** — is now implemented. The client computes cw-144 per block from the node's
 > `src/pow.cpp`, verified against real mainnet headers at **324/324 exact**, and its window
 > stores the chainwork and timestamps the rule needs. The old `bits == expected_bits`
 > requirement, which halted the client at the first per-block adjustment (F7), is gone.
+> **What stays open is X3:** the rule is hard-coded and BSV's own documentation says it will
+> change, so the algorithm needs a way to change without a redeploy.
 
 ---
 
@@ -1114,9 +1116,9 @@ the reviewer's. **Fixed** means addressed in code with a test where one was poss
 | **A6** | The peg-in destination is a **P2PKH key, not a covenant** — the entry point for the whole reserve is a raw key | critical | **Proposed** — remove the pooled reserve rather than secure it. See the section above |
 | **A7** | **The replay key included `height`**, so a deposit re-included at a different height after a reorg minted twice. Introduced by this document's own pruning change | serious | **Fixed** — identity is `(txid, vout)`; height stored only for pruning |
 | **A8** | The staging escrow is **not implemented**, and `UsedDeposits` stores no recipient or amount, so reversing N credited mints needs an off-chain indexer and one paid transaction per depositor | serious | **Open** — proposed only |
-| **A9** | `MAX_USED = 200 < WINDOW = 288` is a cheap peg-in shutdown; `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented, so 200 one-satoshi deposits block all later peg-ins | serious | **Open** |
+| **A9** | `MAX_USED = 200` against a `WINDOW` of 192 is a cheap peg-in shutdown; `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented, so 200 one-satoshi deposits fill the list and block all later peg-ins for as long as those blocks stay in the window (up to 32 h). The list is now larger than the window in blocks, so the two are no longer the same scale — but the ceiling is still a hard one | serious | **Open** |
 | **A10** | The aggregate cap is not tied to the buffer, so `S ≥ M` cannot hold by construction | serious | **Open** |
-| **A11** | `commit_fork` never re-anchors the staged branch, so an intervening commit can splice the window from two chains with broken linkage | serious | **Open** |
+| **A11** | `commit_fork` never re-anchors the staged branch, so an intervening commit can splice the window from two chains with broken linkage | serious | **Fixed** (W1.7) — `fork_parent_hash` is recorded at `init_staging`, linked from `push_fork_header`, and re-checked at `commit_fork` (`ForkPointMoved`) |
 | **A12** | `commit_fork` only emits an event — no depth recorded, no pause, no bounty — so the gate is triggered off-chain and is itself griefable given A1 | serious | **Open** |
 | **A13** | "No oracles, by construction" is false for quantities that gate funds: the hot float is off-chain BSV | serious | **Open** — see A4 |
 | **A14** | The committed confirmation depth is not parsed, and **would not bind an attacker anyway** — the fraud's depositor *is* the attacker, so they commit exactly `FLOOR`. It is a market term, not a safety one | serious | **Open** |
@@ -1155,9 +1157,10 @@ The design implies these changes to the implemented program:
 - **`MIN_CONFIRMATIONS`** stays 12 and is the code's form of `FLOOR`; **`FLOOR` as a
   distinct parameter is not built.** There is no governance in the PoC (D7), so it is fixed
   in code rather than voted. Loosening it means shipping a new program.
-- **The difficulty retarget** must be implemented, or `expected_bits` permitted to advance,
-  before testnet: the client halts permanently at the first retarget (F7). This is a
-  liveness gap in the built code, not a designed feature still to be written.
+- **The difficulty retarget** is **implemented** (W1.6): the client computes cw-144 per block,
+  verified against real mainnet headers at 324/324 exact, so the F7 halt is closed. **What remains
+  open is X3** — the rule is hard-coded and BSV has said it will change, so the algorithm needs a
+  way to change without a redeploy. That is a liveness item, not a missing feature.
 - **`commit_fork`** must record reorg depth and block time when it fires, feeding
   the depth rule and the pause.
 - **`push_header`** must start using the header timestamp it would need to start parsing, to

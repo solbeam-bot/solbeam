@@ -1,6 +1,6 @@
 # 3. Architecture
 
-> **Built or designed?** The light client, `solBSV` and the mint exist and pass 17 on-chain
+> **Built or designed?** The light client, `solBSV` and the mint exist and pass 20 on-chain
 > tests, and the header window is real. **The vault, the order book, per-relayer deposits and
 > all of peg-out are designed and not built.** The shipped program mints straight to the
 > depositor's token account, so every property below that depends on the vault is a
@@ -16,7 +16,7 @@
  │  ─ a P2PKH script per   │       │                                  │
  │    relayer, no pooled   │       │  Light client                    │
  │    reserve              │       │  ─ checkpoint + 192-block window │
- │  ─ the relayer pays     │       │  ─ PoW / Merkle checks (DAA is **not** implemented — see below)     │
+ │  ─ the relayer pays     │       │  ─ PoW / Merkle checks (DAA: cw-144, verified 324/324)              │
  │    redemptions from its │       │                                  │
  │    own float            │       │  Vault (program-owned account)   │
  └───────────┬─────────────┘       │  ─ every mint lands here first   │
@@ -50,7 +50,7 @@
 A full BSV header chain cannot live on Solana economically. There are roughly **968,000 BSV headers**; at current Solana rent that is tens of megabytes and hundreds of SOL, against a 10 MiB per-account cap. The chain therefore lives on-chain as:
 
 - a **checkpoint** (a recent, well-buried header), plus
-- a **rolling window** of **192 subsequent headers** — 32 hours at BSV's ten-minute target — held in a single account of 9,322 bytes, comfortably inside Solana's 10,240-byte account cap. A competing branch is staged in batches and committed only if **strictly heavier**; ties keep the incumbent, so an equal-length branch cannot churn the tip.
+- a **rolling window** of **192 subsequent headers** — 32 hours at BSV's ten-minute target — held in a single account of 10,103 bytes, comfortably inside Solana's 10,240-byte account cap. A competing branch is staged in batches and committed only if **strictly heavier**; ties keep the incumbent, so an equal-length branch cannot churn the tip.
 
 Verification itself is cheap: an 80-byte header double-SHA-256 costs **226 CU**, a 12-level Merkle branch **2,616 CU** — a **full SPV deposit proof is about 2,842 CU**, negligible against Solana's per-transaction limit. The expense is *state*, not computation.
 

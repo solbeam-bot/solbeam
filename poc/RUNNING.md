@@ -59,7 +59,7 @@ Needs only Python 3.11+, so it runs on **any** machine:
 bash poc/checks/run_all.sh
 ```
 
-Expected: `20/20`, `51/51`, `17/17`, `48/48`, `20/20`, `13/13`, then **`ALL CHECKERS PASSED`**.
+Expected: `20/20`, `51/51`, `17/17`, `51/51`, `20/20`, `13/13`, then **`ALL CHECKERS PASSED`**.
 
 Two of the six reach the network to validate against live chain data (mainnet block 800000, real testnet blocks and signatures). The rest are offline, and without network the two **fail** rather than silently passing — deliberately.
 
@@ -164,9 +164,9 @@ The full list of toolchain facts, with reasoning, is in [`VERSIONS.md`](VERSIONS
 | | |
 |---|---|
 | `poc/scripts/doctor.sh` | exits 0 — **19 ok, 1 warning, 0 failures** |
-| `bash poc/checks/run_all.sh` | **ALL CHECKERS PASSED** — 156 offline, 157 with a node, plus 13 plays |
+| `bash poc/checks/run_all.sh` | **ALL CHECKERS PASSED** — 159 offline, 160 with a node, plus 13 plays |
 | `poc/scripts/regtest-up.sh status` | chain `regtest`, a block height, a hash rate |
-| `anchor test --validator legacy` | **9 passing** |
+| `anchor test --validator legacy` | **20 passing, 0 failing** |
 | `poc/fixtures/` | `deposit_1.json` and `node_merkleproof_raw.json` |
 
 ---

@@ -39,10 +39,10 @@
 //! `GetAncestor(nHeight - 144)` takes a **height**, and `pindexLast` is at
 //! `nHeight - 1`. The ancestor is therefore at height `nHeight - 145` in
 //! absolute terms — *not* "the block 144 back from the tip". Selecting the
-//! first block 144 back from the tip is off by one and reproduces **0 of 471**
-//! real mainnet headers, while the correct height arithmetic reproduces every
-//! block from the window filling onward. See `FIRST_PREDICTED_INDEX` in the
-//! vectors harness.
+//! first block 144 back from the tip is off by one and reproduces **0 of the
+//! 324** real mainnet headers with a full lookback, while the correct height
+//! arithmetic reproduces every block from the window filling onward. See
+//! `FIRST_PREDICTED_INDEX` in the vectors harness.
 
 use uint::construct_uint;
 

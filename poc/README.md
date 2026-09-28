@@ -84,15 +84,15 @@ Decisions baked into this sketch (change them if you disagree):
 | Piece | Where it lives | Who pays | Who can write to it |
 |---|---|---|---|
 | **The verification code** | A **Solana program** (BPF) deployed to the cluster — devnet, then mainnet | one-off deploy fee | nobody; it's code |
-| **The header state** | **Solana accounts** owned by that program (a checkpoint and a rolling window of 192 header recordsshes; **no chainwork yet**) | rent, paid by whoever initialises/extends it | only via the program's instructions |
+| **The header state** | **Solana accounts** owned by that program (a checkpoint and a rolling window of 192 header records, each carrying the block hash, its cumulative chainwork and its timestamp) | rent, paid by whoever initialises/extends it | only via the program's instructions |
 | **The advancer** | An **off-chain bot**, planned (in the PoC, the same process as the watcher/relayer) | its own SOL for fees | anyone — it is permissionless |
 
-So the flow is: the advancer reads headers from a **BSV node's JSON-RPC** and submits them in a Solana transaction; the program checks proof-of-work, chaining and the **fixed target** before storing them. It does not yet follow a difficulty retarget (F7).
+So the flow is: the advancer reads headers from a **BSV node's JSON-RPC** and submits them in a Solana transaction; the program checks proof-of-work, chaining and the **cw-144 target** before storing them. The retarget is implemented and verified against 324/324 real mainnet headers; the open item is X3, that the rule is hard-coded and BSV may change it.
 
 Two consequences that matter for the design review:
 
 1. **The advancer is untrusted.** It cannot fake a header — the program rejects bad PoW/linkage. The worst it can do is stall, which is a *liveness* problem, not a safety one. Anyone can advance the chain, so the fix for a stalled advancer is "someone else's bot".
-2. **On devnet there is no real cost.** On mainnet, header state costs rent, which is why production uses a **checkpoint + rolling window** rather than the whole chain. The PoC stores a 32-hour window — **192 header records**, 52 bytes each (10,094 bytes total) — to prove the mechanism; it does not attempt genesis-up sync.
+2. **On devnet there is no real cost.** On mainnet, header state costs rent, which is why production uses a **checkpoint + rolling window** rather than the whole chain. The PoC stores a 32-hour window — **192 header records**, 52 bytes each (10,103 bytes total) — to prove the mechanism; it does not attempt genesis-up sync.
 
 The BSV node is the *only* stateful thing you host yourself, and it's a commodity: run SV Node locally in regtest for the PoC.
 
@@ -174,7 +174,7 @@ solbeam-poc/
 
 ### P1 — BSV light client on Solana (~1–2 weeks, the long pole)
 
-- [ ] `initialize` / `set_checkpoint` — accept a checkpoint, check chaining and PoW against the target, store the 192-hash window. **Chainwork is not stored**
+- [ ] `initialize` / `set_checkpoint` — accept a checkpoint, check chaining and PoW against the target, store the 192-record window. **Each record stores hash, cumulative chainwork and time** (52 bytes), which is what cw-144 needs
 - [ ] `push_header(header)` — append one header, verify `prev_hash` links to the tip, verify PoW
 - [ ] Rolling window: keep **192** records, prune older ones (the built storage model)
 - [ ] Merkle verification: given txid, branch, index and height, fold to the stored root
@@ -208,7 +208,7 @@ See the matrix in §6. **This is the part reviewers will care about most** — t
 ### P5 — Public testnet / devnet run (~2–3 days)
 
 - [ ] Repeat P2/P3 against **BSV testnet** + **Solana devnet**
-- [ ] Implement the **difficulty retarget** (F7) — required, not optional: the client halts permanently at the first retarget. Confirmations are already fixed at 12
+- [x] **The difficulty retarget is implemented** (W1.6) — cw-144, exactly as the SV Node's `src/pow.cpp` computes it, verified against real mainnet headers at **324/324 predicted exactly**. The open item is **X3**: the rule is hard-coded and BSV's own documentation says it will change, so it must become swappable without a redeploy. Confirmations are already fixed at 12
 - [ ] Publish the demo recording / transaction links for review
 
 ---
@@ -253,7 +253,7 @@ That script is the artefact to share for feedback — it makes the trust model c
 
 > **Several of these are settled elsewhere.** The host, deposit payload, off-chain language, user surface and time scale are decisions 1–5 in [`TEST_PLAN.md`](TEST_PLAN.md) §10; the token details (Q5) and the non-goals (Q6) are confirmed in §3.1/§4.1 and §7 of that plan. The rest remain open.
 
-1. **Chain for P1–P4: regtest (recommended — instant, deterministic) or straight to public BSV testnet?** Regtest lets the full matrix run in seconds; testnet is more realistic but exposes the retarget defect (F7) immediately and has 10-minute blocks.
+1. **Chain for P1–P4: regtest (recommended — instant, deterministic) or straight to public BSV testnet?** Regtest lets the full matrix run in seconds; testnet is more realistic and has 10-minute blocks. (The retarget defect, F7, is no longer a reason to avoid it — cw-144 is implemented and verified 324/324.)
 2. **Off-chain stack: Go, TypeScript, or Rust?** **Settled for the PoC: Python** (decision 3, [`TEST_PLAN.md`](TEST_PLAN.md) §10). The production language is deliberately left open.
 3. **Peg-out scope for the PoC:** real 1-of-1 bond + slash (recommended — proves the enforcement path) or a trusted relayer stub so the light client gets all the attention?
 4. **Where do you want the PoC to run for the demo** — your machine only, or should it deploy to devnet so reviewers can poke at it themselves?
@@ -273,7 +273,7 @@ That script is the artefact to share for feedback — it makes the trust model c
 | P2 mint | ~1 week |
 | P3 peg-out | ~1 week |
 | P4 negative tests | 2–3 days |
-| P5 testnet (requires the retarget fix, F7) | 2–3 days |
+| P5 testnet (retarget implemented; X3, the hard-coded rule, remains) | 2–3 days |
 | **Total to a demoable PoC** | **~4–5 weeks** |
 
 Mint-only (P0–P2, with the relayer stubbed) landed in **~2 weeks** and is already enough to show the strongest claim: trustless minting.

@@ -39,10 +39,10 @@ Solana charges rent-exemption up front, at roughly **5,080 lamports per byte**, 
 
 | | Size | One-time | at $77/SOL |
 |---|---|---|---|
-| Light client, 32-hour window | 10,094 B | 0.051 SOL | **$3.96** |
+| Light client, 32-hour window | 10,103 B | 0.051 SOL | **$3.96** |
 | *(Solana's per-account creation ceiling)* | *10,240 B* | *0.053 SOL* | *$4.06* |
 
-A 24-hour window would cost half that, at 4,678 B. The 32-hour window is what is built, because the same money buys twice the reorg horizon — see below.
+A 24-hour window would be 144 records — 7,607 B — for about three-quarters of the rent. The 32-hour window is what is built, because the extra records buy eight more hours of reorg horizon — see below.
 
 **This does not grow with the BSV chain, and that is the entire point of the rolling window.** If the client stored history instead, the same numbers would be:
 
@@ -69,18 +69,18 @@ Every BSV block needs one header pushed, so the client costs **144 transactions 
 
 Two mitigations exist. Headers can be **batched**, since about 12 fit in one transaction: that cuts base fees to **$1.56/year**, at the cost of the client lagging about two hours behind the chain — acceptable, because a mint already waits out the confirmation depth the depositor chose, and then the maturity window on top. Batching does not reduce priority fees, which dominate.
 
-### Being parsimonious: what the window stores, and why it is now one word long
+### Being parsimonious: what the window stores, and why
 
 An earlier layout kept a 32-byte block hash **and** a 32-byte Merkle root per header. The hash is what authenticates the header — but **the Merkle root is a field inside the header**, bytes 36 to 68 of the same 80 bytes the hash was computed from. Storing it separately was redundant: the hash already commits to it.
 
-The window now stores a **bare block hash**. A deposit claim carries the raw 80-byte header; the program checks `hash(supplied) == stored_hash[height]`, then reads the Merkle root straight out of it. Same security, half the storage — and the check is not optional, because without it a claimant could substitute a header of its own choosing and prove anything. There is a test for exactly that.
+The window stores **no Merkle root**. A deposit claim carries the raw 80-byte header; the program checks `hash(supplied) == stored_hash[height]`, then reads the Merkle root straight out of it. That is 32 bytes saved per record — and the check is not optional, because without it a claimant could substitute a header of its own choosing and prove anything. There is a test for exactly that. The record itself is still **52 bytes** — block hash (32), cumulative chainwork (16) and timestamp (4) — because cw-144 needs the last two.
 
 | | Per header | Window | Account |
 |---|---|---|---|
 | Before | 64 B (hash + root) | 144 (24 h) | 9,322 B |
-| Now | **52 B (hash + chainwork + time)** | **192 (32 h)** | 10,094 B |
+| Now | **52 B (hash + chainwork + time)** | **192 (32 h)** | 10,103 B |
 
-**The same deposit now buys twice the reorg horizon** — two days instead of one, leaving a full day of margin over the "BSV is broken if it reorgs for a day" line.
+**The window is 32 hours, not 24** — the same account holds 192 records rather than 144, and the extra records are spent on reorg horizon rather than on margin.
 
 A further step is possible — store only every Nth hash and have the claimant supply the handful of headers that bridge the gap — but it runs into the same 1232-byte transaction limit that constrains everything else here, and it buys storage the protocol does not currently need. Worth knowing about; not worth doing yet.
 

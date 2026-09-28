@@ -55,8 +55,8 @@ Not transaction fees — **rent on accounts**, and one of them per user:
 | Account | Nature | Cost |
 |---|---|---|
 | **First-time ATA** for a recipient who has never held `solBSV` | **Rent, recoverable only by closing the ATA** | **0.00149 SOL — $0.11** |
-| `LightClient` (9,322 B) | One-time, refundable | 0.048 SOL — $3.68 |
-| `ForkStaging` per submitter (9,269 B) | One-time, refundable on commit or abandon | 0.047 SOL — $3.62 |
+| `LightClient` (10,103 B) | One-time, refundable | 0.051 SOL — $3.95 |
+| `ForkStaging` per submitter (10,069 B) | One-time, refundable on commit or abandon | 0.051 SOL — $3.94 |
 | A resting bid on the book | Per bid, refundable on cancel | scales with the record size |
 | An in-flight mint or redemption record | Per item, refundable on settle | scales with the record size |
 

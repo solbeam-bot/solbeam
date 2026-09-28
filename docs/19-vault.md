@@ -8,7 +8,7 @@ pending item.
 
 ---
 
-> ⚠️ **SUPERSEDED BY [`21-vault-structural.md`](21-vault-structural.md).** This first draft was audited and found broken; the corrected design is in doc 20.
+> ⚠️ **SUPERSEDED BY [`21-vault-structural.md`](21-vault-structural.md).** This first draft was audited and found broken; the corrected design is in doc 21 (doc 20 was the intermediate revision, itself superseded).
 > An adversarial review of the first draft found four critical defects, three of them inherent to
 > the design as described rather than merely unspecified. They are listed in §Audit findings at the
 > end and the design needs a revision pass before any code is written.

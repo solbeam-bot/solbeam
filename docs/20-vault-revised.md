@@ -209,7 +209,9 @@ addition. It is not needed to make the design work.
 
 The constraint is `confirmations + MATURITY ≤ WINDOW`, with `FLOOR = 12` and `WINDOW = 288`, so the
 ceiling is 276. **144 leaves a wide margin** (12 + 144 = 156 of 288) and a total user wait of about
-26 hours. It is a round number, comfortably inside the window, and it is a parameter — raise it for
+26 hours. *(The window has since been fixed at **192 records / 32 h** by W1.4 — cw-144 forces
+chainwork and time into each record — so this arithmetic is the superseded revision, kept as
+written.)* It is a round number, comfortably inside the window, and it is a parameter — raise it for
 more detection time, lower it for faster mints.
 
 ### R3 — Bond custody: the ordinary shape, nothing clever
@@ -291,7 +293,8 @@ block, which is a reorg deeper than the window itself.
 V5's whole point was to stop a stalled advancer causing a vacuous release. **It does not.**
 
 In branch 3 — the height has left the window — there is no hash to check and cannot be, because the
-record is gone. And by then `tip >= window_start + 287 >= deposit_height + 288`, so *"the tip has
+record is gone. And by then `tip >= window_start + 287 >= deposit_height + 288` *(the arithmetic of
+this revision's 288-record window; the built window is 192 — W1.4)*, so *"the tip has
 advanced past it"* is **automatically true**. V5 adds nothing there. The in-window branch already had
 the hash check.
 
@@ -361,7 +364,7 @@ Also: **nothing decrements `owed`**, so it is monotone and `withdraw_bond` becom
 | **W8** | The vault-invariant claim is false while the fee sink and the shared payout are undefined |
 | **W9** | The `UNBACKED` flag labels an unbacked mint without bounding it — the loss still lands on holders who never saw the flag |
 | **W10** | The instruction set does not compose: `claimed` has no resolver, settlement is described as two-phase but specified as one, the `OP_RETURN` layout contradicts R4, `D ≥ W + C_payout` mixes Solana slots with BSV blocks, `nonce` is in the seeds but not the record, `owed` has no decrement, and `verify_deposit`'s two inits are not stated to be atomic |
-| **W11** | The closing paragraph is false: the checkpoint *is* trusted, the upgrade authority can override every parameter, a relayer signature was required, and F7 means the client halts at the first retarget so its view cannot be kept current on testnet |
+| **W11** | The closing paragraph is false: the checkpoint *is* trusted, the upgrade authority can override every parameter, a relayer signature was required, and F7 means the client halts at the first retarget so its view cannot be kept current on testnet. *(F7 has since been fixed — W1.6, cw-144 verified 324/324; X3, the hard-coded rule, remains.)* |
 
 ### What the revision did genuinely fix
 

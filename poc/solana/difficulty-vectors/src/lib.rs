@@ -19,7 +19,7 @@
 //!    which is what makes the comparison in (1) a comparison of the same thing.
 //!
 //! The window is modelled locally rather than pushed through a validator: the
-//! algorithm needs 146 records of history, and a Solana transaction carries
+//! algorithm needs 147 records of history, and a Solana transaction carries
 //! twelve, so an on-chain replay of 471 mainnet headers is hundreds of
 //! transactions to test arithmetic that needs no chain at all. The on-chain
 //! tests cover the window and the instructions; this covers the rule.

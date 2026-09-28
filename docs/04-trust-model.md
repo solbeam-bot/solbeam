@@ -2,11 +2,12 @@
 
 SOLBEAM is deliberately asymmetric: **trustless in, trust-minimised out.** This chapter states exactly what you are trusting, and why.
 
-> **Built or designed?** The light client, the token, the mint and fork staging exist and pass 17
+> **Built or designed?** The light client, the token, the mint and fork staging exist and pass 20
 > on-chain tests. **The vault, the two gates, maturity, the order book, staking, bonds, `owed_R`,
 > consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all of peg-out are
-> designed and not built.** DAA is worse than absent — it is **actively rejected in the built
-> client** (F7), not merely unimplemented. The shipped program mints straight to the depositor's
+> designed and not built.** The difficulty retarget is **implemented** — cw-144, verified against
+> 324/324 real mainnet headers; what stays open is X3, that the rule is hard-coded and BSV may
+> change it. The shipped program mints straight to the depositor's
 > token account, so nothing is staged and no relayer holds a bond yet. Every property below is
 > therefore one of three things, and they are labelled:
 >
@@ -91,7 +92,7 @@ That last point carries more weight than it first appears, and it is a **correct
 | Relayer spends its own float (naked spend, no redemption outstanding) | This is the relayer's own money, and no holder is out of pocket — but see §The naked-option attack for why the residual still sets a constraint. **The bond does not cover it**; structurally reduced by **per-relayer isolation** and by **holding no idle float** |
 | A relayer's float is stolen by an outsider | The thief never posted a bond, so the slash compensates nothing directly — but the loss is confined to that one relayer's float, not a pooled reserve. Mitigated by per-relayer isolation and key hygiene |
 | Nobody fulfils redemptions | Escrows are returned to holders after the deadline; open redemption is a public race, and the discovered fee attracts relayers |
-| Fake deposit proof | Rejected by the light client (proof of work and Merkle inclusion). The difficulty-retarget check is a stub, so a retargeted chain **halts the client** rather than being followed — DAA is actively rejected, not merely absent (F7) |
+| Fake deposit proof | Rejected by the light client (proof of work and Merkle inclusion). The difficulty retarget is **implemented** — cw-144, verified against 324/324 real mainnet headers — so a retargeted chain is followed rather than stalled. The open item is X3: the rule is hard-coded and BSV may change it, which would need a redeploy |
 | Mint staged, then a reorg is followed | The vault **burns** the staged tokens. The depositor's BSV is reorged away with the deposit, and they end where they started. Nobody else is affected. *Designed, not built* |
 | Reorg after the vault has released | Depth, maturity and `FLOOR` are what make out-mining the honest chain cost more than the fraud is worth. Depth is a term of the bid; `FLOOR` is the backstop |
 | Self-dealing at `k = 1` | An accepted risk (D5). The attacker is underwriting their own deposit, so it is roughly break-even — and what makes it unprofitable is **the mining cost of the reorg**, not the bond. It is unprofitable only to the extent detection works |
@@ -160,7 +161,7 @@ Per-relayer deposits are the path that does not depend on it landing. The covena
 2. **The BSV reserve keys.** BSV sits under keys that can spend it. There is no covenant, and BSV has no timelocks to fall back on.
 3. **The program upgrade authority.** It can override every parameter, which makes it an unconditional mint voucher. Out of scope for the proof of concept, and recorded rather than hidden.
 4. **That honest headers get pushed within the maturity window.** This is the one path where detection is the whole defence. A **released fraudulent mint** has no deadline and no bond to reach — the fraud's depositor is the attacker — so if nobody advances the honest chain and notices the orphan within maturity, holders are diluted. Pushing headers is permissionless, cheap and incentivised: an undetected fraud eats the buffer, so the parties with the most to lose have the most reason to do it. A relayer's **deliberate theft or abandonment** is the other case and does not rest on detection — that loss is self-reporting at the redemption deadline, where the escrow is returned and the bond answers `owed_R` (see [the second audit](15-audit-2.md)).
-5. **That the code is correct.** Not independently audited. Our own adversarial review found Three critical defects fixed (a vacuous proof-of-work check, an unauthenticated checkpoint path, an unconstrained mint) and one serious one (a replay key that double-minted after a reorg); three criticals remain open (A4, A5, A6). Three of the five fixes have tests.
+5. **That the code is correct.** Not independently audited. Our own adversarial review found Three critical defects fixed (a vacuous proof-of-work check, an unauthenticated checkpoint path, an unconstrained mint) and two serious ones (a replay key that double-minted after a reorg, and a fork-staging point that could be spliced — P2); three criticals remain open (A4, A5, A6). Three of the five fixes have tests (A1, A7, P2); A2 and A3 do not.
 
 Everything else — deposits, backing, minting, maturity, the bond gate and the payout proof — is enforced by code. **Except where it is not yet written:** the vault, the book, per-relayer deposits and all of peg-out are designed and not built, and this list will not be shorter than reality until they are.
 

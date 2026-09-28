@@ -55,14 +55,14 @@ pub const HEADER_LEN: usize = 80;
 /// overhead, against a hard 10,240-byte account-creation cap — 46% over, and
 /// `initialize` would simply revert.
 ///
-/// At 52 bytes a record and 944 bytes of fixed fields, 194 records is the
-/// arithmetic maximum. **192 is chosen instead, 1,012 bytes under the cap**,
+/// At 52 bytes a record and 119 bytes of fixed fields, 194 records is the
+/// arithmetic maximum. **192 is chosen instead, 137 bytes under the cap**,
 /// which leaves room for a field or two without resizing every existing
 /// account. 192 records is 115,200 seconds = **32 hours at 600 s/block**.
 ///
 /// What actually constrains the *bottom* is cw-144's own lookback:
 /// [`difficulty::LOOKBACK`] = 147 records. A window at or below that could not
-/// compute the retarget for its own oldest blocks, so 192 is 46 records of
+/// compute the retarget for its own oldest blocks, so 192 is 45 records of
 /// slack over the minimum. The product consequence is real and is recorded in
 /// the workstream: the 48-hour deposit deadline the design assumed is gone.
 ///
@@ -79,7 +79,7 @@ pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; //
 /// live chain, which is exactly the defect this workstream exists to fix.
 const _: () = assert!(
     WINDOW > difficulty::LOOKBACK as usize,
-    "WINDOW must exceed the cw-144 lookback (146 records) or the retarget is not computable"
+    "WINDOW must exceed the cw-144 lookback (147 records) or the retarget is not computable"
 );
 
 /// How deep a deposit must be buried before it can be minted. Twelve blocks is
@@ -245,7 +245,7 @@ pub mod solbeam {
         lc.authority = ctx.accounts.payer.key();
         // Taken from the checkpoint header, which is the one piece of data the
         // client trusts. It is the genesis rule only: the first header that has
-        // 146 records behind it is checked against cw-144 instead, and from
+        // 147 records behind it is checked against cw-144 instead, and from
         // then on this value is never consulted again.
         lc.expected_bits = bits;
         // Derived, never supplied — see the field. `REGTEST_BITS` is the
@@ -291,8 +291,8 @@ pub mod solbeam {
         //    This used to be `bits == expected_bits`, a value fixed at
         //    `initialize`. On a chain whose difficulty changes every block that
         //    rejects every header after the checkpoint — the defect this
-        //    replaces. See `difficulty` for the algorithm, which was verified
-        //    against 471 real mainnet headers.
+        //    replaces. See `difficulty` for the algorithm: of the 471 headers in
+        //    the fixture, the 324 with a full lookback are all predicted exactly.
         let parent_work = lc
             .record(lc.tip_height)
             .map(|r| r.chainwork)
@@ -911,7 +911,7 @@ impl LightClient {
         if let Some(required) = self.required_bits() {
             require!(bits == required, SolbeamError::UnexpectedRetarget);
         } else {
-            // Fewer than 146 records, so the client cannot yet see the ancestor
+            // Fewer than 147 records, so the client cannot yet see the ancestor
             // cw-144 needs and the rule is not computable. It holds the
             // checkpoint's target for those blocks instead. This is bounded and
             // one-way: the window only grows, so once it holds `LOOKBACK`

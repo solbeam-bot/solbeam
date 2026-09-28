@@ -5,8 +5,9 @@ Plain-English definitions of the terms used in this documentation.
 > **Specification, not shipped behaviour.** The light client, the token, the mint and fork
 > staging are **built and tested**. **The vault, the two gates, maturity, the order book, staking,
 > bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all
-> of peg-out are designed and not built.** DAA is **actively rejected in the built client** (F7),
-> not merely absent. The entries for those are the vocabulary of the design, not a description of
+> of peg-out are designed and not built.** The difficulty retarget is **implemented** — cw-144,
+> verified against 324/324 real mainnet headers (open item X3: the rule is hard-coded). The
+> entries for those are the vocabulary of the design, not a description of
 > running code.
 
 **Atomic (in "atomic wrapper")** — here it means the wrapper is 1:1 and minting is authorised purely by a proof: the deposit either verifies on Solana or it doesn't, with no discretionary approval. It does **not** mean redemption is instantaneous.

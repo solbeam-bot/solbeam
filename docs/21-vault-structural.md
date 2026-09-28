@@ -176,7 +176,7 @@ close.
 ## Still required, and not this document's to fix
 
 1. ~~`commit_fork` compares height, not chainwork~~ — **fixed below.**
-2. **F7 — the client halts at the first retarget.** Until fixed, none of this runs on testnet.
+2. ~~**F7 — the client halts at the first retarget.**~~ **Fixed in W1.6** — cw-144, verified against 324/324 real mainnet headers. What remains from it is **X3**: the rule is hard-coded and BSV may change it.
 3. **`MAX_STALENESS_SLOTS`, `MATURITY_BLOCKS`, `D`, `W` are unset.** `D >= C_payout + W` and
    `confirmations + MATURITY <= WINDOW` constrain them; the values are a separate decision.
 4. **`owed_R` needs a decrement on settlement** (specified above) **and a rule for whether released
@@ -231,11 +231,14 @@ bits_at(h) =  if h >= retarget_height  { expected_bits }  else  { prev_bits }
 
 **Cost: 16 bytes for the cumulative value, 4 + 4 for the two difficulties, 4 for the retarget height,
 8 for the last-push slot — about 36 bytes.** The window stays at 288 and `LightClient::SPACE` goes
-from 9,322 to roughly 9,358, far inside the cap.
+from 9,322 to roughly 9,358, far inside the cap. *(Superseded, like the paragraph above: the built
+unit is 52-byte records, the window is 192, and `LightClient::SPACE` is 10,103. The 9,322 figure is
+this document's 288 × 32-byte proposal, kept as written.)*
 
 This also gives DAA a home: implementing the retarget now means **computing** `expected_bits` at a
 boundary rather than accepting a declared one (F7), and the anchor it needs — the previous period's
-start height and time — is the same kind of stored scalar.
+start height and time — is the same kind of stored scalar. *(Also superseded: the rule turned out to
+be cw-144, not a 2016-block retarget with an anchor; F7 was closed in W1.6.)*
 
 ### One caveat, stated rather than hidden
 
@@ -263,14 +266,15 @@ ASERT derives the target from an **anchor block** and the incoming block's own t
 
 | | |
 |---|---|
-| **Two `bits` values derive in-window difficulty** | False. Up to 288 distinct values can sit in a 288-header window |
-| **~36 bytes, window stays 288** | False. `hash + bits` is 36 B × 288 = 10,368, plus 106 B overhead = **10,474 > the 10,240 cap** |
+| **Two `bits` values derive in-window difficulty** | False. Up to 288 distinct values could sit in the then-288-header window; the built window is 192 records, so up to 192 distinct values |
+| **~36 bytes, window stays 288** | False. `hash + bits` is 36 B × 288 = 10,368, plus 106 B overhead = **10,474 > the 10,240 cap**. The built record is 52 B × 192 + 119 B = 10,103 |
 | **`push_header` works on a real chain** | **It does now.** The finding below was correct when written; W1.6 replaced the fixed target with cw-144, verified against real mainnet headers at 324/324 exact. *Original finding:* it requires `bits == expected_bits`, so it rejects every header after a per-block adjustment — F7 is not "halts at the next retarget", it is "halts almost immediately on any real chain" |
 | **Chainwork can be computed from two scalars** | Cannot. `bits_at(height)` is wrong for nearly every header |
 
 **This also means the shipped light client has never been tested against a real difficulty.** Regtest
-uses the maximum target and never adjusts, so the constant-difficulty assumption has held for the
-entire PoC — and would have failed on contact with testnet.
+uses the maximum target and never adjusts, so the constant-difficulty assumption held for the
+entire PoC — and would have failed on contact with testnet. *(Since resolved: W1.6 tested it against
+324/324 real mainnet headers.)*
 
 **What the fix now looks like, and why it is research rather than design:** if BSV uses **ASERT**,
 then the expected target is computable from **one stored anchor** (height, time, bits) plus the
@@ -278,8 +282,14 @@ incoming header's own timestamp — which the header already carries, so **no pe
 needed at all**, and the window can stay 288. If it is the older 144-block moving average, the client
 needs 144 timestamps and the window must shrink to about 253 records at 40 bytes each.
 
-**Which one it is has to be established from BSV's specification and checked against real headers.
-It cannot be assumed.** This is the correction that matters most in the whole document set.
+*(Neither guess was right. W1 established that the rule is **cw-144**, which needs a 147-record
+lookback and per-header chainwork and time; the built window is 192 records of 52 bytes. The
+paragraph is kept as the state of the question when it was written.)*
+
+**Which one it is had to be established from BSV's specification and checked against real headers.
+It could not be assumed** — and that is what W1 did. Neither guess above was right: the rule is
+**cw-144**, which needs a 147-record lookback and per-header chainwork and time, so the built window
+is 192 records of 52 bytes. This was the correction that mattered most in the whole document set.
 
 ### The other findings, briefly
 
@@ -288,7 +298,7 @@ It cannot be assumed.** This is the correction that matters most in the whole do
 | **T1** | `slash` is **forgeable** — nothing requires the spending transaction to be in a block (no header or Merkle proof), so anyone can craft bytes consuming a public outpoint and **burn any relayer's entire bond**. The predicate is also a universal quantifier over a set Solana cannot enumerate | critical |
 | **T2** | **The redesign violates its own class-4 rule.** `slash` pays into *"the holders' reserve account"* — one program-owned account funded by many bonds, unverifiable, exactly the pooled account the redesign claims to have removed. It is also self-contradictory: burning the bond leaves nothing to transfer | critical |
 | **T3** | **The peg-in fee has no home.** The `OP_RETURN` layout has no amount or fee field, so "mints NET amount" is undefined — and if the relayer declares the fee, the program trusts the party with the incentive to overstate it | critical |
-| **T4** | **Recorded P2 is still unanswered.** `commit_fork` still splices without re-checking the fork point, and this document's "still required" list omits it entirely — the one defect doc 18 called *"the one genuine forgery vector"* | critical |
+| **T4** | **Recorded P2 is still unanswered.** `commit_fork` still splices without re-checking the fork point, and this document's "still required" list omits it entirely — the one defect doc 18 called *"the one genuine forgery vector"* | critical — **since fixed (W1.7)**: `fork_parent_hash` is recorded at init and re-checked at commit |
 | **T5** | **`owed_R` double-counts.** Incrementing at both mint and accept, with only settlement decrementing, means a mint redeemed through the same relayer goes 100 → 200 → 100 and the mint line is never discharged. Monotone growth makes `bond_R ≥ k · owed_R` unsatisfiable, so the bond locks | high |
 | **T6** | **The settle/cancel race is still live** — `deadline_slot` is caller-supplied with no `>= now + D` requirement, so a holder can choose a past deadline, keep the BSV the relayer paid, and reclaim the escrow | high |
 | **T7** | **Post-settle reorg leaves the holder with nothing.** The escrow is burned and the item closed, so neither instruction can resolve it — contradicted by docs 13/14 | high |

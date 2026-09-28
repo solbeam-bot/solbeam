@@ -110,8 +110,8 @@ That is the insight a ratio destroys, and it is the reason the absolute numbers 
 | Figure | Source |
 |---|---|
 | `solBSV` supply | Solana `getTokenSupply` |
-| Reserve at large | the covenant-locked cold address balance, read from BSV |
-| Hot float | the individual relayers' own BSV |
+| Reserve at large | the sum over the individual relayers' own deposit scripts, read from BSV — there is **no pooled cold address** |
+| Hot float | the part of each relayer's own BSV it holds against outstanding redemptions |
 | **The invariant** | `reserve ≥ supply`, shown as surplus or deficit |
 
 **Publish the addresses.** A proof-of-reserves that says "here are the addresses, go and look" is stronger than a signed attestation, because it is independently checkable and cannot be quietly restated. Show the series over time, not a snapshot, so a deficit is visible *while it develops* rather than only in the post-mortem.
@@ -132,7 +132,7 @@ Display supply in both tokens and BSV, and show the peg-out queue next to it, be
 ## 6. Metric 5 — candidates worth building next
 
 1. **An adaptive confirmation recommendation** — "12 today; 48 right now, because the rentable-hashpower gate closed" — derived from §2's feasibility measurement rather than fixed. This is the honest use of the numbers: they change a **parameter**, in public, instead of producing a comfort score.
-2. **A peg-out time estimator** from the current float and tranche schedule.
+2. **A peg-out time estimator** from the current per-relayer float.
 3. **A relayer table** — uptime, missed deadlines, capital locked. Clearly labelled as a **market signal for choosing** a relayer, never as enforcement. Reputation does not slash anyone.
 4. **Alerts**: an RSS or webhook feed for invariant breaches, slashes, and parameter changes.
 5. **A parameter-change log**, wired to the governance timelock, so the history of every cap and fee is public.

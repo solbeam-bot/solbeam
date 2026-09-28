@@ -37,7 +37,7 @@ a specification rather than a property.
 - **Per-relayer deposit scripts** — currently one bridge-wide P2PKH, which is the pooled reserve
   that decision A6 exists to remove
 - **All of peg-out** — escrow, deadline, payout proof, challenge, settlement, refunds
-- **`MIN_PEG_IN` / `MAX_PEG_IN`**, the aggregate mint cap, committed-depth parsing, DAA, chainwork
+- **`MIN_PEG_IN` / `MAX_PEG_IN`**, the aggregate mint cap and committed-depth parsing. *(DAA and chainwork were on this list and are now built — W1.6 and W1.7.)*
 
 **The consequence worth stating plainly:** with no underwriter concept anywhere in code, **every
 peg-in today is the D6 unbacked path.** The D6 risk acceptance is the system's current whole
@@ -73,14 +73,14 @@ Full findings, including which are inherent and which merely unbuilt, are in
 
 ### 1.1 Done — the BSV primitives, validated against live chain data
 
-The Python checker suite passes **156/156** offline, and **157/157** with a live SV Node (the live pin adds one check that needs a real node). It runs anywhere Python runs. These are the regression vectors every later implementation must match.
+The Python checker suite passes **159/159** offline, and **160/160** with a live SV Node (the live pin adds one check that needs a real node). It runs anywhere Python runs. These are the regression vectors every later implementation must match.
 
 | Checker | Proves | Result |
 |---|---|---|
 | `checks/check_bsv_core.py` | Header serialisation + double-SHA256, PoW against the compact `bits` target, parent linkage, Merkle root rebuilt from real blocks, branch build/fold, odd-level duplication, tamper rejection | **20/20** — mainnet block 800000; testnet blocks with 5, 8 and 13 txs; synthetic 4- and 5-leaf trees |
 | `checks/check_bsv_tx.py` | Legacy tx codec (byte-exact round-trip, txid), P2PKH parsing, `SIGHASH_FORKID` preimage + digest, **real network signatures verified against digests computed from scratch** | **51/51** — 3 real testnet txs, 12 inputs |
 | `checks/check_bsv_deposit.py` | P2PKH address encoding vs real addresses, `OP_RETURN` carrying a Solana recipient, deposit tx shape, RFC-6979 signing, redemption tx shape | **17/17** |
-| `checks/check_bsv_pegin.py` | **Phase 1A — complete.** A synthetic regtest chain (mining, coinbase maturity, reorg), deposit construction, the proof builder and the verifier: confirmation depth, tampering, malformed deposits, replay, odd Merkle counts, orphaned branches. Emits `fixtures/deposit_1.json` | **48/48** — the fixture is byte-deterministic across runs |
+| `checks/check_bsv_pegin.py` | **Phase 1A — complete.** A synthetic regtest chain (mining, coinbase maturity, reorg), deposit construction, the proof builder and the verifier: confirmation depth, tampering, malformed deposits, replay, odd Merkle counts, orphaned branches. Emits `fixtures/deposit_1.json` | **51/51** — the fixture is byte-deterministic across runs |
 | `checks/check_bsv_node.py` | **Phase 1B — complete.** Pins our byte formats against a real SV Node: txid, the codec vs `decoderawtransaction`, the 80-byte header vs the node's raw header, the Merkle root, and the branch vs `getmerkleproof2` | **21/21 live** — passed against SV Node v1.1.1, 2026-09-26. Raw response committed as `fixtures/node_merkleproof_raw.json` |
 | `adversary/attack.py` | 13 attacks against a fresh synthetic chain each, plus an honest control | **13/13 as documented** |
 
@@ -96,7 +96,7 @@ The Python checker suite passes **156/156** offline, and **157/157** with a live
 
 ### 1.3 Not started
 
-- **Phase 2 — built.** The light client, the deposit verifier and the `solBSV` mint are built and verified on-chain — **20 tests** against the fixture, including a hostile-advancer suite and fork staging with reorg following. **Real chainwork for the fork choice is not built**: `commit_fork` compares branch length, which is correct on regtest only. See §4.5, and §0 for the authoritative status.
+- **Phase 2 — built.** The light client, the deposit verifier and the `solBSV` mint are built and verified on-chain — **20 tests** against the fixture, including a hostile-advancer suite and fork staging with reorg following. **Chainwork for the fork choice is built** (W1.7): `commit_fork` compares accumulated chainwork, not branch length. See §4.5, and §0 for the authoritative status.
 - **Phase 3** — the off-chain services (advancer / watcher / relayer); bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
 - **Phase 5** — monitoring. Plan only; see §11.
@@ -128,7 +128,7 @@ So neither of the two heavyweight dependencies can be installed natively here. S
 
 ### 1.6 Phase 1A — what is proven so far
 
-**Passing now (48 checks, offline, no node, ~0.8 s):**
+**Passing now (51 checks, offline, no node, ~0.8 s):**
 
 - A synthetic regtest chain: mining to the regtest target, coinbase maturity at 100 blocks, and a reorg that discards a branch.
 - The deposit transaction — a user's payment to the bridge deposit address with the Solana recipient in an `OP_RETURN`, signed and independently verified.
@@ -194,7 +194,7 @@ These are the things that are wrong-by-default and cost a day if discovered late
 - `-minminingtxfee` set low, so regtest txs are cheap.
 - A regtest genesis that is **not** Bitcoin's — header, PoW target and message differ. Any hard-coded assumption here silently breaks.
 - A funded regtest wallet: `generatetoaddress 101` for spendable coinbase.
-- Regtest has a **fixed difficulty target**, which hides the retarget defect: DAA is **actively rejected**, not stubbed behind a flag — see §4.2.
+- Regtest has a **fixed difficulty target**, which hides how the target varies on a real chain: this is why the DAA is replayed against 324/324 real mainnet headers in `difficulty-vectors/` — see §4.2.
 
 **Solana**
 
@@ -287,20 +287,22 @@ Solana's equivalent of regtest is **`solana-test-validator`** — a local single
 ### 4.1 What gets built
 
 1. **`solBSV`** — a classic SPL mint: 8 decimals, **no freeze authority**, mint authority = the bridge PDA. Asserted programmatically, not by inspection.
-2. **A BSV light client program** — a checkpoint, a rolling window of 192 header records, and instructions to push a header and to answer "is this tx in this block". **No chainwork**: `commit_fork` compares branch length (§4.5).
+2. **A BSV light client program** — a checkpoint, a rolling window of 192 header records, and instructions to push a header and to answer "is this tx in this block". **Chainwork and time are stored per record** (52 B each): `commit_fork` compares accumulated chainwork, not branch length (§4.5).
 3. **The bridge program** — deposit registry, `verify_deposit` (there is no `verify_and_mint`), the used-`(txid,vout)` set, and the authority-gated pause. **The caps are not built**: `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented (F6/A9).
 4. **The advancer** — an untrusted off-chain loop that reads headers from a BSV node and submits them. The on-chain tests drive headers directly; a standalone advancer loop is not shipped.
 5. **A hostile advancer** — the same loop, deliberately malformed. It exists only to drive the negative tests.
 
-### 4.2 The DAA decision — **not a flag: DAA is actively rejected (F7)**
+### 4.2 The DAA — **cw-144, implemented and verified** (F7 closed; X3 open)
 
-An earlier draft called DAA "a flag, not an omission" — implemented, code-pathed and unit-tested, and simply disabled on regtest. **None of that is true.** `check_daa` has **no caller** and there is **no test** for it. Worse, `push_header` requires `bits == expected_bits`, and `expected_bits` is set once at `initialize` from the checkpoint header and **never refreshed** — `set_checkpoint` does not refresh it either.
+An earlier draft called DAA "a flag, not an omission". That was wrong, and the correction was then recorded as the opposite: DAA was **actively rejected** (F7). `push_header` required `bits == expected_bits`, set once at `initialize` from the checkpoint header and never refreshed — `set_checkpoint` did not refresh it either — so on any chain whose target changes every header after a retarget was rejected `UnexpectedRetarget` and the client **halted permanently at the first difficulty change**.
 
-The consequence is a defect in built code, audit finding **F7**: on any chain whose target changes, every header after a retarget is rejected `UnexpectedRetarget` with no instruction able to fix it, so the client **halts permanently at the first difficulty retarget**. Invisible on regtest; fatal on testnet or mainnet. This was introduced by the A1 fix, which made the proof-of-work check actually bind. Implementing the retarget — or permitting `expected_bits` to advance at a retarget boundary — is item 1 in §0.4, and must happen before testnet.
+**Fixed in W1.6.** The target is now computed per block by **cw-144**, the rule in the SV Node's `src/pow.cpp`, and the implementation is replayed against **324/324 real mainnet headers** with no tolerance and no fitting (`difficulty-vectors/`). Each record stores hash, cumulative chainwork and time (52 B), because the rule consumes a work difference and a time difference across a **147-record** lookback — which is what fixes the window at 192.
+
+**The open item is X3, not F7:** the rule is hard-coded and BSV's own documentation says it will revert to 2016-block retargeting at some point, so the algorithm needs a way to change without a redeploy. Regtest's fixed target cannot exercise any of this, which is why the mainnet replay is the test that matters.
 
 ### 4.3 Test scope
 
-> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (20 on-chain tests). Cases 2.5 (DAA), 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row.
+> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (20 on-chain tests). Cases 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row. Case 2.5 (DAA) is built and is covered by the mainnet replay.
 
 | # | Case | Expected |
 |---|---|---|
@@ -415,7 +417,7 @@ A day is still the right scale for the *reasoning*: if BSV reorganises by more t
 | `bits` | 4 | — | Still derivable from the header on push and re-checked against cw-144 |
 | `nonce` | 4 | — | Never used after the proof-of-work check |
 
-`110 + 192 × 52 = 10,094 bytes`. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
+`119 + 192 × 52 = 10,103 bytes`. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
 
 Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it. The suite is now **20 passing** (§0).
 
@@ -551,7 +553,7 @@ Phase 0 ──┬─► 1A  (synthetic chain, no node)  ──┐
           └─► 1B  (real SV Node format pin) ────┘
 ```
 
-- **Phases 0, 1A, 1B and 2 are built.** The critical path is no longer Phase 2; it is the ordered list in §0.4 — **F7 first** (the client halts at the first retarget), then F6, then the vault, then per-relayer deposits / `owed_R` / consent, then peg-out.
+- **Phases 0, 1A, 1B and 2 are built.** The critical path is no longer Phase 2; it is the ordered list in §0.4 — **F6** (the replay-list ceiling), then the vault, then per-relayer deposits / `owed_R` / consent, then peg-out. (F7, the retarget, is closed; X3 remains.)
 - **Chainwork is built** (W1.7) — `commit_fork` compares accumulated chainwork, stored per header. **On regtest it cannot be distinguished from height**, since every block shares one target, so the chainwork path is exercised by the fixture replay (324/324 real mainnet headers) rather than by the on-chain suite.
 - **Phase 1B is done** — every byte format is pinned against a live SV Node, so the on-chain verifier has a measured target rather than an assumed one. It cost four corrections, all to one RPC's wire format; see [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts).
 - **Phase 3 depends on the vault and on the relayer**, but its negative tests can be specified now.
@@ -569,9 +571,9 @@ Indicative, one focused developer. Note that Phase 1 is new work that the earlie
 | **Phase 0** — environment, bootstrap, doctor | 2–3 days | ✅ **Done.** `doctor.sh`: 19 ok, 1 warning, 0 failures on the x86_64 droplet |
 | **Phase 1A** — synthetic chain + deposit proof | 3–4 days | ✅ **Done.** |
 | **Phase 1B** — real SV Node format pin | 1–2 days | ✅ **Done.** Took four live iterations, all on `getmerkleproof2`'s wire format |
-| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 20 on-chain tests. Real chainwork is still not built |
+| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 20 on-chain tests. Chainwork comparison is built (W1.7), exercised by the mainnet fixture replay |
 | **Phase 3** — burn, relayer, bond, deadline, challenge | 1–1.5 weeks | Includes the misbehaving-relayer mode |
-| **Testnet repeat** (BSV testnet + Solana devnet) | 2–3 days | **Blocked until the retarget is implemented (F7)**: DAA is actively rejected today, so the client halts at the first difficulty change — it is not a flag to switch on |
+| **Testnet repeat** (BSV testnet + Solana devnet) | 2–3 days | **Not blocked** — the retarget is implemented (W1.6, cw-144, verified 324/324). What to watch is **X3**: the rule is hard-coded, so a BSV consensus change would need a redeploy |
 | **Total to a demoable PoC** | **~5–6 weeks** | |
 
 **The trustless-mint claim alone** (Phases 0, 1 and 2, with the relayer stubbed) landed in **~2.5–3 weeks** and remains the strongest single claim in the design.

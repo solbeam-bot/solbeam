@@ -22,7 +22,7 @@ The point is not to confirm that the tests pass. The point is to **try to break 
 | **Proof producer** | The verifier: forge an inclusion proof, inflate an amount, replay a deposit | **Now** |
 | **Man in the middle (against the user)** | The address or payload the user is told to use | **Now** — and see §4, where two of these cannot be prevented |
 | **Reorg attacker** | The chain itself: undo a deposit after it is mintable | **Now** |
-| **Hostile advancer** | The header chain: feed fabricated, reordered or low-work headers | **Now** — on-chain suite (lower-work is not testable until chainwork is built) |
+| **Hostile advancer** | The header chain: feed fabricated, reordered or low-work headers | **Now** — on-chain suite. Chainwork comparison is built (W1.7), so the lower-work case shares the rule that rejects a shorter one, but it is only *exercised* on a constant-difficulty fixture |
 | **Rogue relayer** | The float, the bond, the deadline, the unbonding period | Phase 3 |
 | **Colluding user + relayer** | The refund path: claim both the payout and the refund | Phase 3 |
 
@@ -88,7 +88,7 @@ The light client and fork staging exist and pass 20 on-chain tests, so the hosti
 | Play | What you try | Expected |
 |---|---|---|
 | `hostile-advancer` | Submit fabricated headers; reorder them; submit duplicates | All rejected. The adversarial suite is part of the on-chain tests |
-| `hostile-advancer` (lower work) | Offer a *valid but lower-work* competing chain | **Not testable yet** — branch *length* is compared, not accumulated work (`chainwork` is unbuilt). Planned for testnet |
+| `hostile-advancer` (lower work) | Offer a *valid but lower-work* competing chain | **Rejected by the same rule** (W1.7): `commit_fork` compares accumulated **chainwork**, not branch length. The comparison is only *exercised* on a constant-difficulty chain, so a varying-difficulty branch choice is still unproven end to end |
 | `stall-advancer` | Simply stop advancing | No funds at risk. Mints stop; a second advancer recovers the tip. **The two-advancer recovery demo is not built.** This is the honest liveness dependency: the advancer cannot steal, it can only delay |
 
 ## 6. Plays waiting on Phase 3 — you are the relayer

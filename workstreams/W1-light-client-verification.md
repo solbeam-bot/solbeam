@@ -20,23 +20,30 @@ anything above the light client until this closes.
 
 | | Task | Status |
 |---|---|---|
-| **W1.1** | Fetch a contiguous run of real BSV mainnet headers (hash, bits, time, height) | ✅ **done** — 300 headers, 968,401–968,700, 0 linkage gaps |
+| **W1.1** | Fetch a contiguous run of real BSV mainnet headers (hash, bits, time, height) | ✅ **done** — 471 headers, 968,230–968,700, 0 linkage gaps; the first fetch was 300 (968,401–968,700) and was extended so 324 headers have a full cw-144 lookback |
 | **W1.2** | Establish empirically how often `bits` changes and by how much | ✅ **done** — **100% of blocks** |
 | **W1.3** | Identify the actual DAA and verify it predicts real headers | ✅ **done — cw-144, 324/324 exact** |
-| **W1.4** | Determine what the client must store per header, and whether the window fits the 10,240-byte cap | ✅ **done — 52 B/record, WINDOW = 192, 10,094 of 10,240** |
+| **W1.4** | Determine what the client must store per header, and whether the window fits the 10,240-byte cap | ✅ **done — 52 B/record, WINDOW = 192, 10,103 of 10,240** |
 | **W1.5** | Whether the DAA is computable from the client's own window | ✅ **done — yes, needs **147** records of lookback (not 146)** |
 | **W1.6** | Rewrite `push_header`'s difficulty check against the real algorithm, with a test using real headers | ✅ **done** — `difficulty.rs`, **324/324 mainnet headers exact** (`difficulty-vectors/`) |
 | **W1.7** | Fix **P2** — `commit_fork` does not re-anchor the staged branch — which is still unfixed and is the one defect doc 18 called the genuine forgery vector | ✅ **done** — `fork_parent_hash` recorded at `init_staging`, re-checked at `commit_fork` (`ForkPointMoved`) |
 
-## What is already known, and should not be re-litigated
+## What was known before this workstream, and should not be re-litigated
 
-- `push_header` (`lib.rs:207`) and `push_fork_header` (`:355`) require `bits == expected_bits`
-- `expected_bits` is set from the checkpoint header at `initialize` (`:175`) and never refreshed
-- `commit_fork` (`:401`) compares **height**, not chainwork
-- `LightClient::SPACE` = 9,322 (verified), against a 10,240-byte account cap
+Every item below was true when W1 opened and has since been fixed (W1.6/W1.7); the list is kept
+because it is what the work was opened against.
+
+- `push_header` (`lib.rs:207`) and `push_fork_header` (`:355`) **required** `bits == expected_bits`
+- `expected_bits` **was** set from the checkpoint header at `initialize` (`:175`) and never refreshed
+- `commit_fork` (`:401`) **compared height**, not chainwork
+- `LightClient::SPACE` **was** 9,322 (the 288-record, 32-byte layout), against a 10,240-byte account cap; it is now **10,103**
 - The window held 288 records of 32 bytes before this workstream; it is now **192 records of 52 bytes**
 
 ## What must be established, not assumed
+
+*(All four were answered below: it is **cw-144**; `bits` changes on **100%** of blocks; the rule
+**is** computable from the client's own window once 147 records are stored; and the chainwork
+baseline is checkpoint-relative. The list is kept as the questions the workstream opened with.)*
 
 1. **Which DAA.** ASERT (anchor + incoming timestamp) and a 144-block moving average imply *very*
    different storage. ASERT needs one anchor; a moving average needs 144 timestamps, which would
@@ -52,7 +59,9 @@ anything above the light client until this closes.
 
 ### W1.1 — real data
 
-**300 contiguous mainnet headers, heights 968,401–968,700**, fetched from a public BSV API and saved
+**471 contiguous mainnet headers, heights 968,230–968,700** (the first fetch was 300, heights
+968,401–968,700; it was extended once the lookback measured at 147 so the acceptance replay would
+have 324 headers with a full lookback), fetched from a public BSV API and saved
 to `workstreams/data/headers_mainnet.json`. Linkage verified: **0 gaps** — every header's
 `previousblockhash` equals its predecessor's `hash`.
 
@@ -182,23 +191,26 @@ cw-144: 324 of 324 mainnet headers predicted exactly, heights 968377..968700
 the **real on-chain target** with the aarch64 SBF platform tools —
 `cargo build --target sbpf-solana-solana --release` produces an SBF ELF (e_machine 263).
 
-**What was not.** The on-chain suite was **not run**: Agave publishes no `solana-test-validator` for
-aarch64 Linux (only x86_64 and aarch64-apple-darwin), so there is no validator on this box. The
-TypeScript tests type-check (`tsc --noEmit` clean), and the client changes are simple enough to
-reason about, but **20/20 green is an expectation here, not an observation.** It must be run on the
-x86_64 build box before this workstream is treated as closed.
+**What was not, on this box.** The on-chain suite **could not be run here**: Agave publishes no
+`solana-test-validator` for aarch64 Linux (only x86_64 and aarch64-apple-darwin). The TypeScript
+tests type-checked (`tsc --noEmit` clean), so on this box **20/20 green was an expectation, not an
+observation.**
+
+**Since run on the x86_64 droplet.** The same suite was executed there and reports **20 passing /
+0 failing** against the Phase 1A fixture. The expectation is now an observation; the earlier
+aarch64 note is kept because it is why the droplet exists.
 
 **The window is 192 records, and it is fixed by arithmetic rather than chosen.**
 
 ```
-LIGHT_CLIENT_FIXED = 110 bytes   (8 discriminator, 8+8 heights, 32 tip hash, 8 window_start,
+LIGHT_CLIENT_FIXED = 119 bytes   (8 discriminator, 8+8 heights, 32 tip hash, 8 window_start,
                                   32 authority, 4 expected_bits, 1 no_retargeting,
                                   4 pow_limit_bits, 8 last_push_slot, 1 paused, 1 bump, 4 Vec len)
 HEADER_RECORD_SIZE = 52 bytes    (32 hash + 16 chainwork u128 + 4 time)
-SPACE = 110 + 192 x 52 = 10,094  of 10,240   -> 146 bytes of margin
+SPACE = 119 + 192 x 52 = 10,103  of 10,240   -> 137 bytes of margin
 ```
 
-193 records gives 94 bytes of margin and 194 gives 42, so **192 is the largest that leaves a real
+193 records gives 85 bytes of margin and 194 gives 33, so **192 is the largest that leaves a real
 margin** — and it is 45 records above the 147 the DAA itself needs. The deposit lifetime is therefore
 **32 hours at 600 s/block**, down from the 48 the design assumed. `WINDOW_HOURS = 32`, asserted at
 compile time along with `WINDOW > difficulty::LOOKBACK`.
@@ -222,11 +234,11 @@ Three requirements fall straight out, and they contradict the previous design:
 
 1. **Per-block `chainwork` must be stored.** The target is derived from the *work difference* between
    two suitable blocks. There is no way to compute it from `bits` alone or from a single scalar.
-2. **146 blocks of lookback** (144 + 2 for the median), at *both* ends.
+2. **147 blocks of lookback** (144 + 3 for the median), at *both* ends.
 3. **`time` must be stored**, since the clamps are on the time difference.
 
 At 32 (hash) + 16 (chainwork, `u128` — the value is ~2^87 for BSV, so `u64` is too small) + 4 (time)
-= **52 bytes per record**, and 10,134 usable bytes against the 10,240 cap:
+= **52 bytes per record**, and 10,121 usable bytes against the 10,240 cap:
 
 | Per-record | Max window | Hours at 600s |
 |---|---|---|
@@ -234,12 +246,12 @@ At 32 (hash) + 16 (chainwork, `u128` — the value is ~2^87 for BSV, so `u64` is
 | 56 B (＋bits) | **180** | ~30 h |
 
 **So the window cannot be 288.** The previous design's 48-hour deposit lifetime was never achievable:
-storing what cw-144 needs forces the window down to roughly **180–194 records, about 30 hours** — and
-146 of those are consumed by the DAA's own lookback.
+storing what cw-144 needs forces the window down to roughly **180–194 records, about 30–32 hours** — and
+147 of those are consumed by the DAA's own lookback.
 
 **This is a real product consequence, not a detail:** the deposit deadline in doc 18 (P3, "48 hours
-accepted") is **already too long** and has to come down to under 30 hours, or the header store has to
-span two accounts.
+accepted") is **already too long** and has to come down. The built figure is **32 hours (192
+records)**; the alternative was to span two accounts.
 
 ### And F7 is worse than recorded, in a specific way
 
@@ -275,12 +287,12 @@ because the acceptance test is a replay of real headers.
 ```
 LIGHT_CLIENT_FIXED = 8 (discriminator) + 8 + 8 + 32 + 8 + 32 (authority)
                    + 4 (expected_bits) + 1 (no_retargeting) + 4 (pow_limit_bits)
-                   + 8 (last_push_slot) + 1 (paused) + 1 (bump) + 4 (Vec len)  = 110
+                   + 8 (last_push_slot) + 1 (paused) + 1 (bump) + 4 (Vec len)  = 119
 HEADER_RECORD_SIZE = 32 (hash) + 16 (chainwork, u128) + 4 (time)               =  52
-SPACE              = 110 + 192 × 52 = 10,094   of 10,240  ->  146 bytes margin
+SPACE              = 119 + 192 × 52 = 10,103   of 10,240  ->  137 bytes margin
 ```
 
-At 193 it is 10,146 (94 margin); at 194, 10,198 (42 margin). **192 is the largest with real margin**,
+At 193 it is 10,155 (85 margin); at 194, 10,207 (33 margin). **192 is the largest with real margin**,
 and it is **45 records of slack over the 147 the DAA itself needs.**
 
 **Deposit lifetime: 32 hours** at 600 s/block, down from the 48 the documents assumed.
