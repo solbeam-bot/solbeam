@@ -1,7 +1,8 @@
 # 12. Peg-in and peg-out: the mechanism
 
-> **Short on time? Start with [`13-decision-register`](13-decisions.md)** — the flows
-> and every open decision on one page. This document holds the full reasoning.
+> **Start with [`13-summary.md`](13-summary.md)** for a description of the system as it
+> stands, then [`14-decisions.md`](14-decisions.md) for what is still open. This document
+> holds the full reasoning.
 >
 > **Status: proposed, for review.** Nothing below is built beyond what is already
 > in Phase 2. This document exists so the mechanism can be argued about on paper

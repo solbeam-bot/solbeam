@@ -13,4 +13,5 @@
 * [10. Brand & visual language](10-brand.md)
 * [11. Markets & liquidity](11-markets-and-liquidity.md)
 * [12. Peg-in and peg-out: the mechanism](12-peg-mechanism.md)
-* [13. Decision register](13-decisions.md) — **read this first**
+* [13. The system, in summary](13-summary.md) — **start here**
+* [14. Decision register](14-decisions.md)
