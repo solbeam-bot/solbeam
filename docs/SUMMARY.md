@@ -19,3 +19,4 @@
 * [16. Documentation refresh — the worklist](16-docs-refresh.md)
 * [17. What it costs to run, and who pays](17-costs.md)
 * [18. Before we code — the critical list](18-pre-code-checklist.md)
+* [19. The vault — instruction set](19-vault.md)
