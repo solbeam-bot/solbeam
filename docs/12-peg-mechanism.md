@@ -1144,7 +1144,7 @@ current model.
 | Bounding the unbacked peg-in | D6 | Block-height expiry, or a designated initial LP address |
 | Governance generally | D7 | Absent by decision, not by accident. No vote, multisig or timelock exists |
 | The program upgrade authority | A5 | It can override every parameter. The fix is governance, possibly tied to staking |
-| An independent audit | — | The four critical defects found so far were found by our own adversarial review |
+| An independent audit | — | The critical defects found so far were found by our own adversarial review |
 | Risk-priced confirmation depth | — | Depth is a term of the bid; whether longer waits actually earn lower rates is an empirical question |
 | Differential yields per side | — | BSV-side staking carries custody risk; `solBSV`-side carries reorg-fraud risk. Pricing both the same may misprice one |
 | Fee realisation mechanics | — | Whether stakers withdraw from their own float or accrue a claim is unresolved |

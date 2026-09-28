@@ -44,7 +44,7 @@ describe them in the present tense. This is the canonical answer.
 | **The order book, staking, bonds, `owed_R`, consent** | **No** | nothing in code |
 | **All of peg-out** | **No** | nothing in code |
 | **`FLOOR` as a parameter** | **No.** Only the `MIN_CONFIRMATIONS` constant exists | `lib.rs:65` |
-| **That the four critical fixes are all tested** | **No.** A1 and A7 have tests; **A2 (authority) and A3 (mint pin) do not** | `tests/light_client.ts` |
+| **That the critical fixes are all tested** | **No.** A1 and A7 have tests; **A2 (authority) and A3 (mint pin) do not** | `tests/light_client.ts` |
 
 **The shipped program is exactly: light client + token + mint to the depositor + fork staging.**
 Everything else in this document is a specification.

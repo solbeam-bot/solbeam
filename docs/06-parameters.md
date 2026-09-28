@@ -126,7 +126,7 @@ PoC's position.** The reasons to be careful about it survive the rewrite:
 | **The `FLOOR` change mechanism** | D4 | Voting, or the stakers. `FLOOR` is fixed in code for now |
 | **Bounding the unbacked peg-in** | D6 | A peg-in may proceed with **no underwriter at all**, explicitly: whoever does so accepts the risk of a system with nobody watching while liquidity is seeded. It could be bounded later — expiring it after `n + 1000` blocks, or restricting it to a designated initial LP address. Neither is needed now; both need writing down |
 | **The open-staking upgrade path** | D1 | Specialists first; anyone-may-stake is a phase-2 goal the design must carry from the start |
-| **An independent audit** | — | The four critical defects found so far were found by our own adversarial review |
+| **An independent audit** | — | The critical defects found so far were found by our own adversarial review |
 
 The off-chain **reserve invariant** is monitored, not enforced (D8):
 `custodied BSV ≥ outstanding solBSV` is published and shown as a ratio, and the protocol cannot

@@ -133,7 +133,7 @@ These are named so they cannot be quietly forgotten. None blocks the PoC.
 | The change mechanism for `FLOOR` | D4 | Voting, or the stakers. Fixed in code for now |
 | Governance generally | D7 | Absent by decision, not by accident |
 | The program upgrade authority | A5 | Can override every parameter. The fix is governance, possibly tied to staking |
-| An independent audit | — | The four critical defects so far were found by our own adversarial review |
+| An independent audit | — | The critical defects found so far were found by our own adversarial review |
 
 ---
 
@@ -160,7 +160,7 @@ the finished system.
 | | |
 |---|---|
 | **Upgrade authority** (A5) | It can override every parameter, which makes it an unconditional mint voucher. The fix is governance — a vote, or the stakers, possibly with additional tokens granting that right. Recorded so it is not silently forgotten |
-| **Independent audit** | The four critical defects found so far were found by our own adversarial review, which is not the same as an audit by someone with no stake in the answer |
+| **Independent audit** | The critical defects found so far were found by our own adversarial review, which is not the same as an audit by someone with no stake in the answer |
 
 ## Where to read more
 
