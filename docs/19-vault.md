@@ -8,6 +8,11 @@ pending item.
 
 ---
 
+> ⚠️ **THIS DESIGN WAS AUDITED AND FOUND BROKEN. Do not build it as written.**
+> An adversarial review of the first draft found four critical defects, three of them inherent to
+> the design as described rather than merely unspecified. They are listed in §Audit findings at the
+> end and the design needs a revision pass before any code is written.
+
 ## Why a vault at all
 
 Three things follow from the tokens sitting in a program-owned account rather than a user's:
@@ -144,3 +149,77 @@ list, so there is no ceiling and no pruning.
    says, but nothing independently verifies that the vault's balance equals the sum of pending
    items. Worth a test that opens and closes many items and asserts the balance returns to zero.
 5. **Who pays the vault account's own rent**, and what happens to it at shutdown.
+
+---
+
+## Audit findings — the first draft is broken
+
+An adversarial review found these. Severity by expected loss. **None were acknowledged by the
+design**, and the first four are critical.
+
+### V1 — The nullifier *is* the pending item, and release closes it · **critical, inherent**
+
+**My error, and it defeats replay protection entirely.** Decision P5 made the nullifier a
+per-deposit PDA. This design gave that same PDA a second job — the `PendingMint` record — and then
+`release_mint` **closes it**. Close the item, and the replay entry is gone.
+
+So: deposit, wait for maturity, release, PDA closed, **submit the identical claim again**, and it
+verifies afresh because there is nothing left to say it was used. Repeat until the height leaves
+the window — perhaps thirty to forty cycles for about $0.0004 each.
+
+**Fix:** the nullifier must be a **separate account**, closed only by `burn_staged` or by a
+permissionless prune once the height leaves the window. The pending item and the replay record
+cannot be the same account. This also resolves the rent question in M1: the nullifier is what
+outlives the item.
+
+### V2 — `cancel_redeem` races `settle_redeem` · **critical, inherent**
+
+A relayer broadcasts BSV but has not yet proved it, so the item is "unsettled" — and
+`cancel_redeem` is legal the moment the deadline passes. The holder gets the escrow back; the
+relayer's BSV is gone and its proof now has nothing to settle against.
+
+**And the design's own deadlines make this certain rather than unlucky:** `D = 6 h` is *shorter*
+than the challenge window `W = 24 h`, which doc 12 places *before* settlement. A relayer can never
+both wait out the challenge and settle before cancel becomes callable.
+
+**Fix:** a **paid/claimed state that blocks cancel** once a payout proof is submitted, and deadlines
+that nest — `D ≥ W + C_payout`.
+
+### V3 — The peg-in fee is never deducted · **critical, cross-document**
+
+Doc 12 says the peg-in fee is taken in BSV, so a 100 BSV deposit mints 99.9. This design mints the
+**full amount** into the vault and records `amount` on the item. Every release is then short by the
+fee — and because the vault is commingled, it pays the shortfall out of other people's staged mints
+and escrowed redemptions, silently and without reverting.
+
+**Fix:** mint the **net** amount and store that; define the fee flow once, outside the vault.
+
+### V4 — `settle_redeem` binds neither amount nor destination · **critical, unspecified**
+
+Nothing compares the proof's output value or script against `PendingRedeem.amount` or
+`bsv_destination`, and there is no `fee` field. So a relayer can accept a 1,000 `solBSV` redemption,
+pay **1 satoshi**, prove it, settle, and keep the rest. There is no recourse — the escrow is burned
+and the liability discharged.
+
+**Fix:** verify `payout_value == amount − fee` and `payout_script == bsv_destination`, and store
+`fee`.
+
+### Also found
+
+| | | |
+|---|---|---|
+| **V5** | The third canonical row releases an item whose height left the window — so the real detection budget is **`MATURITY`, not 48 hours**, and a Solana halt *switches every staged mint to unchecked release* rather than protecting anyone | serious |
+| **V6** | `MATURITY` is stored as a Solana **slot** while canonicality is a BSV **height**. Comparing a slot count to a block count is meaningless; the predicate must be `confirmations + MATURITY_blocks ≤ WINDOW`, with slots used only for the halt property | serious |
+| **V7** | `PendingMint` has **no relayer field**, so `owed_R` cannot be attributed, incremented or decremented — the unbonded window P10 names. And `verify_deposit` takes no consent, which doc 12 argues is needed or a fraudulent mint slashes an innocent relayer | serious |
+| **V8** | **No slash instruction exists anywhere.** Four documents say the bond answers theft or abandonment; this instruction set implements the no-enforcement version | serious |
+| **V9** | The domain separator's **encoding is undefined**. A substring test would let a payload commit to two separators at once and mint on both — the exact double-backing the fix exists to prevent. A program id is also identical across devnet and mainnet, so a cluster id is needed too | serious |
+| **V10** | Rent is unclaimable (M1), bond custody is undefined and may share the vault (M2), permissionless resolution lets a third party burn a legitimate staged mint during any transient fork (M3), and `index_of` conflates "too old" with "too new" (M4) | minor |
+
+### And the summary claims do not hold as written
+
+**"Everything passes through the vault"** — true only for a subset. Bonds, the peg-in fee and the
+settlement fee leave by paths the design never defines.
+
+**"Nobody's cooperation is ever required"** — true only of *resolving an already-created item*. A
+relayer's signature is required for consent, payment needs a relayer to broadcast BSV and prove it,
+and detection needs someone unpaid to stage the honest fork.
