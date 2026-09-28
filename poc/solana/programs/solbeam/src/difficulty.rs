@@ -106,9 +106,11 @@ pub fn compute_target(first_work: u128, first_time: u32, last_work: u128, last_t
     // is monotone by construction, but if it ever were not, a wrap would hand
     // back a *harder* target rather than a panic, which is the worse failure.
     let work_delta = last_work.saturating_sub(first_work);
-    let work = U256::from(work_delta)
-        .saturating_mul(U256::from(BLOCK_SPACING))
-        .saturating_mul(U256::from(600));
+    // `work *= params.nPowTargetSpacing` — ONCE. Multiplying by 600 twice (which
+    // this did, through `saturating_mul` chained twice) makes every target 600
+    // times harder and still produces a plausible-looking number, which is why
+    // the fixture replay is asserted in exact matches and not in tolerance.
+    let work = U256::from(work_delta).saturating_mul(U256::from(BLOCK_SPACING));
 
     let mut actual = last_time as i64 - first_time as i64;
     if actual > MAX_ACTUAL_TIMESPAN {

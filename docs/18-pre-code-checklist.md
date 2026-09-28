@@ -104,11 +104,11 @@ If another fork commits in between, the stored window is spliced from two differ
 light client has.** This is a potential mint-forgery vector, not merely untidy. Fix: store the
 expected parent hash in the staging account at `init_staging` and re-verify it at commit.
 
-### P3 — A deposit has a hard ~48-hour life, and then it is unspendable · **critical, NOT previously recorded**
+### P3 — A deposit has a hard ~32-hour life, and then it is unspendable · **critical, decided: 32 h**
 `verify_deposit` requires the deposit's height to be **inside the window** (`index_of(height)`).
-The window holds 288 headers and `window_start` advances with every header pushed.
+The window holds **192** headers and `window_start` advances with every header pushed. (W1 measured this: 147 records are consumed by cw-144 itself, and 192 is the largest that fits the 10,240-byte cap with margin.)
 
-So a deposit must be minted within roughly 48 hours of its block. After that the proof can never
+So a deposit must be minted within roughly 32 hours of its block. After that the proof can never
 be verified again — **and the BSV is already with the relayer.** An honest depositor whose mint is
 delayed — because the advancer stalled, a gate closed, or they simply waited — loses the deposit
 permanently, with no on-chain refund path (A15).
@@ -118,7 +118,7 @@ permanently, with no on-chain refund path (A15).
 Four separate things get tangled here, so take them one at a time.
 
 **(a) The window advances by design.** Every BSV header pushed moves `window_start` forward. The
-window holds **288 hashes** — about 48 hours at ten-minute blocks. This is normal operation, not
+window holds **192 hashes** — about 32 hours at ten-minute blocks. This is normal operation, not
 a reorg, not an attack.
 
 **(b) So every deposit has a deadline.** `verify_deposit` asks "is the block at height H in the
@@ -144,12 +144,12 @@ hook. They never need the relayer's cooperation to be made whole; they need only
 | **Disclose the deadline** (48 h) in the UI | No | trivial | **Do it** |
 | **Publish unproven receipts** off-chain | No | low | **Do it.** This is the "24-hour rule" — monitoring and reputation, not code |
 | Historic-header bridging | By ~12 blocks (tx limit) | medium | Marginal |
-| Multiple window accounts (4 × 288 ≈ 8 days) | Yes, 4× | 4× rent (~$15) + complexity | Possible if 48 h proves too short |
+| Multiple window accounts (4 × 192) | Yes, 4× | 4× rent (~$16) + complexity | Possible if 48 h proves too short |
 | A refund path | — | — | Needs the relayer's key. A rule, not code |
 | A covenant | — | research | The structural fix: removes the relayer's discretion entirely |
 
 **The residual, stated plainly:** a depositor who does not use our app, does not mint, and does not
-watch for 48 hours can lose the deposit to a dishonest relayer. There is **no code fix for that
+watch for 32 hours can lose the deposit to a dishonest relayer. There is **no code fix for that
 while the reserve is key-controlled.** It belongs in the trust model explicitly.
 Options: size the window against `depth + maturity` with margin and state the deadline in the UI;
 allow a historic header to be supplied with a chain of headers; or add the refund path. *Decision
@@ -159,7 +159,7 @@ needed, and it interacts directly with the maturity length.*
 `push_header` requires `bits == expected_bits`, set once at `initialize` and never refreshed.
 **The client halts permanently at the first difficulty retarget.** Invisible on regtest; fatal on
 testnet or mainnet. Needs a stored difficulty-period anchor — BSV retargets every 2016 blocks and
-we store 288.
+we store 192, of which 147 are consumed by the DAA.
 
 ### P5 — The replay list is a cheap shutdown and a hard ceiling · **F6, unfixed**
 `MAX_USED = 200` with `MIN_PEG_IN` unimplemented. Two hundred dust deposits block every peg-in for
@@ -177,11 +177,11 @@ self-deposits previously cost dust; they now cost 200 BSV. That is a real deterr
 
 **But it is not a full one, and it is worth seeing why:** the attacker *receives tokens* for every
 deposit. So this is **a capital-lockup attack, not a fee attack** — the cost is the opportunity
-cost of 200 BSV tied up for up to 48 hours, plus fees and slippage if they sell on a DEX rather
+cost of 200 BSV tied up for up to 32 hours, plus fees and slippage if they sell on a DEX rather
 than waiting to redeem. Real, but not prohibitive.
 
-**(b) The 200-per-window ceiling — NOT fixed.** `MAX_USED = 200` with a 288-block window means the
-protocol can process **at most 200 peg-ins per 48 hours, with no attacker at all.** A minimum
+**(b) The 200-per-window ceiling — NOT fixed.** `MAX_USED = 200` with a 192-block window means the
+protocol can process **at most 200 peg-ins per 32 hours, with no attacker at all.** A minimum
 deposit does nothing about this; it bounds the *cost* of filling the list, not the *size* of it.
 
 And it cannot simply be raised. The account is `8 + 4 + (MAX_USED × 44) + 1` bytes against a

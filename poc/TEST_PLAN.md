@@ -14,7 +14,7 @@ described as working that are specified but not built. §1 is kept as history, n
 
 ### 0.1 Built, and passing
 
-- **The light client** — trusted checkpoint, a 288-block rolling window storing a bare block hash
+- **The light client** — trusted checkpoint, a 192-block rolling window storing a block hash, chainwork and time
   per header, linkage, and proof of work with the target taken **from the chain** rather than from
   the submitted header. 17 on-chain tests.
 - **`solBSV`** — classic SPL, 8 decimals, no freeze authority, mint authority a program PDA.
@@ -47,7 +47,7 @@ posture, not a seeded-book special case.
 | | Defect | Effect |
 |---|---|---|
 | **F7** | `expected_bits` is set at `initialize` and never updated; `check_daa` is never called | **Halts permanently at the first difficulty retarget.** Invisible on regtest, fatal on testnet or mainnet. Introduced by the A1 fix |
-| **F6** | `MAX_USED = 200` with `MIN_PEG_IN` unimplemented | **A hard ceiling of 200 peg-ins per 48-hour window**, with no attacker required |
+| **F6** | `MAX_USED = 200` with `MIN_PEG_IN` unimplemented | **A hard ceiling of 200 peg-ins per 32-hour window**, with no attacker required |
 | **C3** | `initialize` accepts any header meeting **its own** declared `bits` | The first caller picks the trusted root *and* its difficulty |
 | **A6** | One bridge-wide P2PKH deposit script | The pooled reserve the design removes |
 | **A5** | Program upgrade authority | Out of scope for the PoC; recorded so it is not forgotten |
@@ -284,7 +284,7 @@ Solana's equivalent of regtest is **`solana-test-validator`** — a local single
 ### 4.1 What gets built
 
 1. **`solBSV`** — a classic SPL mint: 8 decimals, **no freeze authority**, mint authority = the bridge PDA. Asserted programmatically, not by inspection.
-2. **A BSV light client program** — a checkpoint, a rolling window of 288 header hashes, and instructions to push a header and to answer "is this tx in this block". **No chainwork**: `commit_fork` compares branch length (§4.5).
+2. **A BSV light client program** — a checkpoint, a rolling window of 192 header records, and instructions to push a header and to answer "is this tx in this block". **No chainwork**: `commit_fork` compares branch length (§4.5).
 3. **The bridge program** — deposit registry, `verify_deposit` (there is no `verify_and_mint`), the used-`(txid,vout)` set, and the authority-gated pause. **The caps are not built**: `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented (F6/A9).
 4. **The advancer** — an untrusted off-chain loop that reads headers from a BSV node and submits them. The on-chain tests drive headers directly; a standalone advancer loop is not shipped.
 5. **A hostile advancer** — the same loop, deliberately malformed. It exists only to drive the negative tests.

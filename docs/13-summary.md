@@ -33,7 +33,7 @@ describe them in the present tense. This is the canonical answer.
 
 | Capability | Built? | Evidence |
 |---|---|---|
-| Light client: checkpoint, 288-block hash window, linkage, proof of work | **Yes** | 17 passing tests |
+| Light client: checkpoint, header window, linkage, proof of work | **Partly** | Window is 192; the difficulty check is being replaced (W1) |
 | `solBSV` — classic SPL, 8 decimals, no freeze authority | **Yes** | 17 passing tests |
 | The mint, against a verified deposit | **Yes** | 17 passing tests |
 | Fork staging and strictly-heavier commit | **Yes** | 17 passing tests |

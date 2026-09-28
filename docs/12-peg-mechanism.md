@@ -1165,7 +1165,7 @@ The design implies these changes to the implemented program:
   expose the regression, catch-up and staleness signals.
 - **The mint path** gains the gate checks, and mints into the vault rather than to the
   depositor; **the redemption path** gains both the gate and the capacity check.
-- **The header window** (currently 48 h / 288 blocks) is a *liveness* parameter for
+- **The header window** (currently 32 h / 192 blocks, set by what cw-144 needs) is a *liveness* parameter for
   following reorgs and should not be conflated with `RECENT_REORG_WINDOW`, which is
   a *safety* parameter (P5). They are currently the same idea in two places and must be
   named apart.

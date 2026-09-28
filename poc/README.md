@@ -84,7 +84,7 @@ Decisions baked into this sketch (change them if you disagree):
 | Piece | Where it lives | Who pays | Who can write to it |
 |---|---|---|---|
 | **The verification code** | A **Solana program** (BPF) deployed to the cluster — devnet, then mainnet | one-off deploy fee | nobody; it's code |
-| **The header state** | **Solana accounts** owned by that program (a checkpoint and a rolling window of 288 header hashes; **no chainwork yet**) | rent, paid by whoever initialises/extends it | only via the program's instructions |
+| **The header state** | **Solana accounts** owned by that program (a checkpoint and a rolling window of 192 header recordsshes; **no chainwork yet**) | rent, paid by whoever initialises/extends it | only via the program's instructions |
 | **The advancer** | An **off-chain bot**, planned (in the PoC, the same process as the watcher/relayer) | its own SOL for fees | anyone — it is permissionless |
 
 So the flow is: the advancer reads headers from a **BSV node's JSON-RPC** and submits them in a Solana transaction; the program checks proof-of-work, chaining and the **fixed target** before storing them. It does not yet follow a difficulty retarget (F7).
@@ -174,9 +174,9 @@ solbeam-poc/
 
 ### P1 — BSV light client on Solana (~1–2 weeks, the long pole)
 
-- [ ] `initialize` / `set_checkpoint` — accept a checkpoint, check chaining and PoW against the target, store the 288-hash window. **Chainwork is not stored**
+- [ ] `initialize` / `set_checkpoint` — accept a checkpoint, check chaining and PoW against the target, store the 192-hash window. **Chainwork is not stored**
 - [ ] `push_header(header)` — append one header, verify `prev_hash` links to the tip, verify PoW
-- [ ] Rolling window: keep **288** headers, prune older ones (the built storage model)
+- [ ] Rolling window: keep **192** records, prune older ones (the built storage model)
 - [ ] Merkle verification: given txid, branch, index and height, fold to the stored root
 - [ ] Reorg handling: **built as fork staging** — `init_staging` / `push_fork_header` / `commit_fork` / `abandon_staging`, strictly-heavier commit, not a walk-back-and-replace
 - [ ] Off-chain `advancer` pushes real regtest headers every block

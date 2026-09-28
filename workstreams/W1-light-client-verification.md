@@ -34,7 +34,7 @@ anything above the light client until this closes.
 - `expected_bits` is set from the checkpoint header at `initialize` (`:175`) and never refreshed
 - `commit_fork` (`:401`) compares **height**, not chainwork
 - `LightClient::SPACE` = 9,322 (verified), against a 10,240-byte account cap
-- The window holds 288 records of 32 bytes
+- The window held 288 records of 32 bytes before this workstream; it is now **192 records of 52 bytes**
 
 ## What must be established, not assumed
 
