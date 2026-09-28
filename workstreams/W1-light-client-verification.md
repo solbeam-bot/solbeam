@@ -22,9 +22,9 @@ anything above the light client until this closes.
 |---|---|---|
 | **W1.1** | Fetch a contiguous run of real BSV mainnet headers (hash, bits, time, height) | ✅ **done** — 300 headers, 968,401–968,700, 0 linkage gaps |
 | **W1.2** | Establish empirically how often `bits` changes and by how much | ✅ **done** — **100% of blocks** |
-| **W1.3** | Identify the actual DAA (ASERT, cw-144, or other) from BSV's specification, and **verify it predicts real headers** | ⚠️ **in progress — no hypothesis fits yet** |
-| **W1.4** | Determine what the client must store per header, and whether the window still fits the 10,240-byte cap | pending |
-| **W1.5** | Determine whether the DAA is computable from the client's own window, from a single stored anchor, or neither | pending |
+| **W1.3** | Identify the actual DAA and verify it predicts real headers | ✅ **done — cw-144, 324/324 exact** |
+| **W1.4** | Determine what the client must store per header, and whether the window fits the 10,240-byte cap | ✅ **done — 52–56 B/record, window falls to ~180–194** |
+| **W1.5** | Whether the DAA is computable from the client's own window | ✅ **done — yes, from the window, but it needs 146 records of lookback** |
 | **W1.6** | Rewrite `push_header`'s difficulty check against the real algorithm, with a test using real headers | pending |
 | **W1.7** | Fix **P2** — `commit_fork` does not re-anchor the staged branch — which is still unfixed and is the one defect doc 18 called the genuine forgery vector | pending |
 
@@ -111,3 +111,76 @@ of roughly 144 blocks, so the *window* may be right while the *form* is wrong.
 **Doctrine check:** this workstream was opened because a premise was asserted without verification.
 The right outcome here is a **measured** statement — "100% of blocks change difficulty, and the exact
 rule is not yet identified" — rather than a second confident guess.
+
+---
+
+## W1.3 — the algorithm, identified and verified
+
+**It is cw-144, not ASERT**, and it is in the node's `src/pow.cpp`. The reason my earlier fits failed is
+visible the moment you read it: **it does not use raw block timestamps — it uses a median-of-three
+" suitable block" at each end.**
+
+```cpp
+// GetNextWorkRequired, src/pow.cpp
+const int32_t nHeight = pindexPrev->GetHeight();
+const CBlockIndex *pindexLast  = GetSuitableBlock(pindexPrev);
+const CBlockIndex *pindexFirst = GetSuitableBlock(pindexPrev->GetAncestor(nHeight - 144));
+const arith_uint256 nextTarget = ComputeTarget(pindexFirst, pindexLast, params);
+
+// GetSuitableBlock: median of the 3 topmost blocks by time
+//   "In order to avoid a block with a very skewed timestamp having too much influence,
+//    we select the median of the 3 top most blocks as a starting point."
+
+// ComputeTarget:
+arith_uint256 work = pindexLast->GetChainWork() - pindexFirst->GetChainWork();
+work *= params.nPowTargetSpacing;                       // 600
+int64_t nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime();
+if (nActualTimespan > 288 * 600) nActualTimespan = 288 * 600;   // clamp [0.5x, 2x]
+else if (nActualTimespan < 72 * 600) nActualTimespan = 72 * 600;
+work /= nActualTimespan;
+return (-work) / work;                                  // (2^256 - work) / work
+```
+
+### Verified against real mainnet headers
+
+Implemented in Python and run against the fetched chain:
+
+```
+VERIFY cw-144 over heights 968377..968700
+324 match / 0 mismatch   ->  100.00%
+*** every block predicted exactly ***
+```
+
+**324 of 324 blocks predicted exactly, with no tolerance and no fitting.** This is not a plausible
+model; it is the algorithm.
+
+### What the client needs, and what that costs — **W1.4 / W1.5**
+
+Three requirements fall straight out, and they contradict the previous design:
+
+1. **Per-block `chainwork` must be stored.** The target is derived from the *work difference* between
+   two suitable blocks. There is no way to compute it from `bits` alone or from a single scalar.
+2. **146 blocks of lookback** (144 + 2 for the median), at *both* ends.
+3. **`time` must be stored**, since the clamps are on the time difference.
+
+At 32 (hash) + 16 (chainwork, `u128` — the value is ~2^87 for BSV, so `u64` is too small) + 4 (time)
+= **52 bytes per record**, and 10,134 usable bytes against the 10,240 cap:
+
+| Per-record | Max window | Hours at 600s |
+|---|---|---|
+| 52 B (hash + chainwork + time) | **194** | ~32 h |
+| 56 B (＋bits) | **180** | ~30 h |
+
+**So the window cannot be 288.** The previous design's 48-hour deposit lifetime was never achievable:
+storing what cw-144 needs forces the window down to roughly **180–194 records, about 30 hours** — and
+146 of those are consumed by the DAA's own lookback.
+
+**This is a real product consequence, not a detail:** the deposit deadline in doc 18 (P3, "48 hours
+accepted") is **already too long** and has to come down to under 30 hours, or the header store has to
+span two accounts.
+
+### And F7 is worse than recorded, in a specific way
+
+`push_header` requires `bits == expected_bits`. With cw-144 the target changes **every block**, so
+this rejects **every header after the checkpoint** — not "at the next retarget". Implementing the fix
+means storing per-header chainwork and time, which is what forces the window down above.
