@@ -768,6 +768,33 @@ The covenant track in [`04-trust-model.md`](04-trust-model.md#the-roadmap-to-a-s
 in-script verification — removes the spending key entirely. That is the destination;
 per-relayer deposits are the path that does not depend on it landing.
 
+## `owed_R` — definition
+
+Used throughout documents 04, 05, 12 and 13 and previously defined nowhere. It is the
+quantity the bond is measured against, so it needs to be exact.
+
+> **`owed_R` is the total `solBSV` that relayer `R` has been credited with and has not yet
+> discharged — accumulated only from deposits the program has itself verified, and reduced as
+> each is discharged.**
+
+It includes, and this is the part that matters:
+
+- **Released mints** — `solBSV` the depositor now holds, which `R` must redeem in BSV if asked.
+- **Staged mints still in the vault.** A depositor whose mint is still maturing has paid BSV
+  and holds no tokens. If `R` disappears at that moment the depositor has lost the whole
+  deposit, so it must be covered. Omitting staged mints would leave exactly that window
+  unbonded, which is audit finding **F4**.
+- **Escrowed redemptions `R` has accepted** but not yet paid, since `R` holds the obligation.
+
+It excludes `R`'s own float, which is `R`'s capital and not a system liability. The bond is
+sized against `owed_R`, not against everything `R` holds — and separating the two is what makes
+`bond_R ≥ k × owed_R` meaningful rather than arbitrary.
+
+**Why it is the right unit.** `owed_R` is derived from proofs the program verified itself, not
+from an attestation by anyone. That is what makes the inequality **checkable on-chain**
+(audit A4), and it is why the buffer is a protocol quantity on the per-relayer design rather
+than a promise about off-chain BSV.
+
 ## Is the buffer a protocol input? — yes, and it can be checked
 
 Review asked whether the buffer must be a protocol input, and whether mint and redeem

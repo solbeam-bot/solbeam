@@ -2,7 +2,7 @@
 
 **Atomic wrapper on Solana for BSV.**
 
-`solBSV` is a 1:1 wrapper for native BSV on Solana: minting is verified by a BSV light client running on Solana, and redemption is permissionless and bonded.
+`solBSV` is a 1:1 wrapper for native BSV on Solana: minting is verified by a BSV light client running on Solana, and redemption is permissionless and bonded. In the finished design every mint lands in a **program-owned vault** first and is released only after maturity. A relayer is a role **anyone may run** — there is no privileged operator — and the program consults **no oracle**: it reacts only to BSV headers and Solana slots.
 
 | | |
 |---|---|
@@ -28,17 +28,23 @@
 
 **Trustless in, trust-minimised out.**
 
-A BSV deposit is minted against proof of work and proof of inclusion. There is no attestor to bribe, no oracle to spoof, and no committee to capture.
+A BSV deposit is proved against proof of work and proof of inclusion, and the mint lands in the program's vault rather than with the depositor. There is no attestor to bribe, no oracle to spoof, and no committee to capture — the program reacts only to BSV headers and Solana slots, and external metrics are published on the website and never consulted by it.
 
-Redemption needs a BSV signature, and BSV Script cannot verify Solana's consensus — so a key must exist somewhere. SOLBEAM makes that key **small**, **collateralised in `solBSV`** (the same asset as the exposure, so no price move can shrink it relative to what it protects) and **punishable**.
+Redemption needs a BSV signature, and BSV Script cannot verify Solana's consensus — so a key must exist somewhere. There is no pooled hot wallet: each relayer holds its own deposits and posts a bond in `solBSV` (the same asset as the exposure, so no price move can shrink it relative to what it protects). A relayer is a role anyone may run, so the design has **no privileged operator**, and the bond makes cheating **punishable**.
 
-Bonding can make cheating unprofitable. It cannot make it impossible, and it does nothing against someone who steals the hot key and never posted a bond. That is stated plainly, with its mitigations, in [`docs/04-trust-model.md`](docs/04-trust-model.md#the-naked-option-attack).
+Bonding can make cheating unprofitable. It cannot make it impossible, and it does nothing against someone who takes a relayer's key and never posted a bond. That is stated plainly, with its mitigations, in [`docs/04-trust-model.md`](docs/04-trust-model.md#the-naked-option-attack).
+
+**One limit worth naming here.** Trading is outside the protocol's control: if a fraudulent mint ever succeeded, the loss would land on whoever bought the unbacked token, and the protocol cannot compensate them — which is why the design stages every mint in the vault instead of releasing it at once.
 
 ---
 
-## Status
+## Status — built vs designed
 
-**Early.** The documentation is written. The proof of concept has Phase 1A passing — peg-in on the BSV side, offline, with a portable mint instruction, 136 checks — and needs an x86_64 host before the Solana and SV Node work can start. See [`poc/TEST_PLAN.md`](poc/TEST_PLAN.md) for exactly what is proven and what is not.
+**Early, and the split matters.**
+
+**Built and tested:** the light client, the `solBSV` token and the mint — **17 on-chain tests**, plus 21/21 checks against a live SV Node and the full Python checker suite. The shipped program mints straight to the depositor's token account.
+
+**Designed, not built:** the vault and its two gates, the order book, staking and bonds, per-relayer deposits, and **all of peg-out**. Those are a specification at this point, not a property of the code. See [`poc/TEST_PLAN.md`](poc/TEST_PLAN.md) §0 for the honest baseline and [`docs/14-decisions.md`](docs/14-decisions.md) for the settled decisions.
 
 Nothing here is audited. Do not put money in it.
 

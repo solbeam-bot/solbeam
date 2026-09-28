@@ -4,17 +4,19 @@
 
 The peg is the **slow, safe rail**. Markets are the **fast one**.
 
-Nobody has to wait two hours to get `solBSV`, or up to six hours to get back to BSV, because they never have to touch the peg at all. They trade. The peg exists to define the floor and ceiling of the price and to let arbitrageurs keep it honest — not to be the thing every user walks through.
+Nobody has to wait on the peg's confirmation depth to get `solBSV`, or on a redemption deadline to get back to BSV, because they never have to touch the peg at all. They trade. The peg exists to define the floor and ceiling of the price and to let arbitrageurs keep it honest — not to be the thing every user walks through.
 
 ```
    FAST  ──────────────────────────────────────────────────────►  SLOW
    AMM pool      P2P atomic swap      market maker      peg redemption
-   seconds       ~10–60 min          minutes           up to 6 hours
+   seconds       ~10–60 min          minutes           hours
    no counter-   named counter-       spread, but       cheapest, no
    party risk    party, trustless    instant           counterparty
 ```
 
 A user picks their point on that line: speed, cost, or trust.
+
+> **Built or designed?** The light client, the token and the mint are built and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built**, so the peg plumbing described below is the finished specification; the shipped program mints straight to the depositor. The market layer is external (pools, orderbooks, market makers) and is not SOLBEAM's to build.
 
 ---
 
@@ -40,7 +42,7 @@ Because the two assets live on different chains, the orderbook needs a settlemen
 - **Solana leg:** an escrow program with the same hashlock and an expiry enforced by the `Clock` sysvar.
 - The secret-holder claims one leg, revealing the secret, which lets the counterparty claim the other.
 
-Latency is **~10–60 minutes** (a few BSV confirmations) rather than six hours, and there is **no third party** — neither side can be cheated, only delayed. The trade-off: it needs a counterparty with the opposite asset, and both sides (or a watchtower) must act inside the timelock.
+Latency is **~10–60 minutes** (a few BSV confirmations) rather than the peg's full depth and deadline, and there is **no third party** — neither side can be cheated, only delayed. The trade-off: it needs a counterparty with the opposite asset, and both sides (or a watchtower) must act inside the timelock.
 
 **b) Market-maker settlement.** The app matches the order and a market maker settles it instantly, bearing the peg latency. Faster and simpler for users; the cost is a spread.
 
@@ -51,24 +53,28 @@ This is where the earlier atomic-swap work earns its place: it was never needed 
 These are the bigger, more liquid participants, and they exist to **absorb latency**.
 
 - **Market makers** hold inventory of both BSV and `solBSV`. A user selling `solBSV` gets BSV **immediately** from the maker's inventory; the maker later replenishes from the peg or nets it against the opposite flow. The user never waits — the maker does.
-- **Bonded relayers** are the ones who actually process peg redemptions: pay BSV from the hot wallet, prove the payout, settle. They are bonded because they hold the float.
+- **Bonded relayers** are the ones who actually process peg redemptions: they pay BSV from their own deposits — there is no pooled hot wallet — prove the payout against the light client, and settle. They post a bond in `solBSV` that the program can seize.
 
-They are related but distinct: a market maker is a liquidity business, a relayer is a bonded settlement role, and one operator can be both.
+They are related but distinct: a market maker is a liquidity business, a relayer is a bonded settlement role, and one operator can be both. **A relayer is a role anyone may run, not a privileged operator**, and minting has no trusted participant at all.
 
-**Relaying is competitive.** Fees are market-driven, and any bonded participant can fulfil a redemption:
+**Relaying is competitive, and fees are discovered rather than set.** Instead of a governance vote or a published fee schedule, an **order book** prices the service:
 
-- The redeemer offers a fee (or a maximum fee).
-- Relayers compete to fulfil — the first to present a valid payout proof wins, or the cheapest bid wins if the redemption is auctioned.
+- Stakers post bids — a **liquidity amount**, a **fee**, and a **confirmation depth** — and the book matches them **by price, then time**, filling partially.
+- The redeemer takes the best available bid rather than naming a fee.
 - Competition pushes fees toward marginal cost: BSV transaction fee, Solana fee, the cost of bond capital, and a risk premium.
 - When demand spikes, fees rise; when liquidity is plentiful, they fall.
 
-The **automatic refund path is the backstop**: if no relayer is willing at the offered fee, the holder gets their `solBSV` back after the deadline. That caps how expensive relaying can get, and it is why the fee is a market — not a policy — parameter.
+**Fees are paid in the asset staked.** A BSV-side staker earns BSV; a `solBSV`-side staker earns `solBSV`. No cross-asset conversion, and nobody has to pay anybody out.
+
+The **refund path is the backstop**: if no bid is willing, the holder gets their `solBSV` back after the deadline. That caps how expensive relaying can get, and it is why the fee is a market — not a policy — parameter.
 
 ## Layer 4 — Exchanges
 
 Centralised exchanges give mainstream access: a user buys BSV with a bank transfer, trades `solBSV` against BSV or USDT internally, and withdraws either. Internal settlement is instant; custody sits with the exchange.
 
 This is a **business dependency**, not a technical one — it requires listings, market-maker arrangements, and compliance work. It is also how most users will first meet `solBSV`, so it belongs on the roadmap. Note the pleasing symmetry: a BSV holder can now withdraw `solBSV` to Solana in minutes instead of waiting on a BSV withdrawal queue, which is the exchange-confirmation problem this project set out to solve.
+
+**An honest caveat.** A DEX or exchange exit is **outside the protocol's control** — it is someone else's market. If a fraudulent mint ever succeeded, the loss would land on whoever bought the unbacked token, and **the protocol cannot compensate them.** That is a further reason the design stages every mint in the vault instead of releasing it at once: a token still in the program's custody cannot be sold into a pool.
 
 ---
 
@@ -78,14 +84,14 @@ This is a **business dependency**, not a technical one — it requires listings,
 
 | Component of the basis | Effect |
 |---|---|
-| Redemption latency (up to 6 hours) | Holder is out of pocket while waiting |
+| Redemption latency (the bid's depth plus the deadline) | Holder is out of pocket while waiting |
 | Redemption fee | Direct cost |
 | Peg and smart-contract risk | Small discount demanded |
 | Liquidity depth | Thinner pools widen the gap |
 
 **Arbitrage bounds the basis.** If `solBSV` trades above BSV by more than the cost of minting, traders mint and sell — pushing it down. If it trades below by more than the cost of redeeming, traders buy and redeem — pushing it up. That is the mechanism that keeps the wrapper honest, and it is why permissionless minting matters more than any price policy could.
 
-What widens the basis: a throttled peg during a price shock, thin liquidity, or a redemption-fee increase. What narrows it: more market makers, atomic-swap P2P liquidity, and deep AMM pools. **The basis is a live health metric** and should be published and watched.
+What widens the basis: an exhausted side of the book, thin pools, or a higher discovered fee. What narrows it: more market makers, atomic-swap P2P liquidity, and deep AMM pools. **The basis is a live health metric** and should be published and watched — but it is a human metric, not a program input. The design consults **no oracle**: the program reacts only to BSV headers and Solana slots, and external figures like the basis are published on the website and never read by code.
 
 ---
 
@@ -97,7 +103,7 @@ What widens the basis: a throttled peg during a price shock, thin liquidity, or 
 | **P2P trader** | A counterparty leg | Price improvement | No (~10–60 min) |
 | **App / orderbook (Twetch-style)** | Matching, UI | Fees / engagement | No |
 | **Market maker** | Both-side inventory | Spread | Yes — they absorb it |
-| **Bonded relayer** | Hot float + bond | Competitive fee | Yes — it is their job |
+| **Bonded relayer** | Own BSV deposits + `solBSV` bond | Discovered fee, paid in the asset staked | Yes — it is their job |
 | **Arbitrageur** | Directional flow | Basis | Partly |
 | **Challenger / watchtower** | Gas | Slashed-bond share | No |
 | **Exchange** | Custody + order book | Fees | No (internally) |
@@ -119,7 +125,7 @@ What widens the basis: a throttled peg during a price shock, thin liquidity, or 
 |---|---|
 | Thin pools at launch | Seed liquidity; incentivise market makers; start with one deep pair rather than many shallow ones |
 | Market makers withdraw | Multiple makers; atomic-swap P2P as a fallback that needs no inventory; publish depth |
-| Basis blows out during a shock | Redemption throughput is capped by the hot float and tranche schedule, not by a price governor — a price shock no longer triggers throttling, because bond and exposure are both `solBSV`. Expect a wider basis only if the float is exhausted; say so publicly |
+| Basis blows out during a shock | Redemption throughput is capped by the liquidity stakers have posted to the book, not by a price governor — a price shock does not trigger throttling, because bond and exposure are both `solBSV`. Expect a wider basis only if posted liquidity is exhausted; say so publicly |
 | Exchange listings stall | Do not depend on them for launch; AMM + P2P + market makers work permissionlessly |
 | Atomic-swap leg complexity (no P2SH on BSV) | Reuse the bare-script covenant toolchain; audit before enabling P2P swaps |
 

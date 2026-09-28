@@ -2,23 +2,28 @@
 
 **Atomic wrapper on Solana for BSV.**
 
-SOLBEAM brings native BSV to Solana as `solBSV` — a 1:1 wrapper you can hold, trade and use, and redeem back to real BSV. No federation, no committee, no trusted custodian. Minting is verified by a BSV light client running on Solana; redemption is permissionless and bonded.
+SOLBEAM brings native BSV to Solana as `solBSV` — a 1:1 wrapper you can hold, trade and use, and redeem back to real BSV. No federation, no committee, no trusted custodian. Minting is verified by a BSV light client running on Solana; redemption is permissionless and bonded. In the finished design a mint lands in a **program-owned vault** first, a relayer is a role **anyone may run**, and the program consults **no oracle** — only BSV headers and Solana slots.
 
 ---
 
-## Step 1 — Accumulate
+## Step 1 — Choose your terms
 
 You hold BSV. You want it to be useful at Solana speed.
 
-## Step 2 — Wait
+Take terms from the order book — how much liquidity, at what fee, and at what confirmation depth — or deposit with no underwriter at all and accept that risk explicitly.
 
-Send it to your SOLBEAM deposit address. After **12 BSV confirmations** (about two hours), `solBSV` appears in your Solana wallet. That's it.
+## Step 2 — Send, then wait the agreed depth
+
+Send BSV to the named deposit script, attaching an `OP_RETURN` that carries your Solana address. After **the depth the bid named** — a term of the trade, not a fixed constant — `solBSV` is minted into the program's **vault**, not to you, and released to your wallet once a maturity window passes with the deposit still canonical. If a reorg is followed in the meantime, the staged tokens are burned and you end exactly where you started.
 
 ```
    STEP 1                 STEP 2                    RESULT
- accumulate   ──────►      wait 12 conf   ──────►    solBSV
-   (BSV)                  (~2 hours)                (Solana)
+ choose terms   ──────►   wait the bid's  ──────►    solBSV
+ (liquidity,              depth, then the            (Solana)
+  fee, depth)             maturity window
 ```
+
+> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The shipped program mints straight to the depositor's token account, so the vault and maturity steps above are a specification today, not shipped behaviour.
 
 ---
 
@@ -34,17 +39,17 @@ BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals 
 
 | | |
 |---|---|
-| **Minting is trustless** | A BSV light client on Solana verifies your deposit. No attestor approves it, no oracle signs off. The proof *is* the authorisation |
+| **Minting is trustless** | A BSV light client on Solana verifies your deposit. No attestor approves it, no oracle signs off. The proof *is* the authorisation, and the mint lands in the program's vault |
 | **Redemption is permissionless and optimistic** | Anyone can become a bonded "relayer" who pays out BSV. If a payout doesn't happen in time, the holder is automatically made whole |
-| **No federation** | No named signer set, no validator committee, no governance body holding funds |
-| **Reserve is tiered and covenant-locked** | A small hot float covered by bonds, and a large cold reserve locked by a BSV covenant that can only pay the hot wallet |
-| **Market layer is external** | Liquidity comes from Raydium / Orca, P2P orderbooks and market makers. SOLBEAM is the wrapper, not an exchange |
+| **No federation, no operator** | No named signer set, no validator committee, no governance body holding funds. A relayer is a role anyone may run, not a privileged party |
+| **No pooled reserve** | Deposits pay individual relayers. There is no pooled hot wallet and no covenant-locked cold reserve to trust — aggregation is what creates a single key worth stealing |
+| **Market layer is external** | Liquidity comes from Raydium / Orca, P2P orderbooks and market makers. SOLBEAM is the wrapper, not an exchange — and once `solBSV` is on a market, that exit is outside the protocol's control |
 | **Trading is instant** | Only the peg has latency. Traders on a pool, a P2P swap or a market maker never wait for it — see [Markets & liquidity](11-markets-and-liquidity.md) |
-| **Exit is slower than entry** | Minting is trustless and lands in ~2 hours. Redemption waits on a bonded relayer and a 6-hour deadline, and relayer capital unbonds on a notice period. The fast direction is the one that needs no trusted party |
+| **Exit is slower than entry** | Minting is trustless and stages the mint through the vault. Redemption waits on a bonded relayer and a slot-measured deadline, and relayer capital unbonds on a notice period. The fast direction is the one that needs no trusted party |
 | **Bonds are in `solBSV`** | A relayer's collateral is the same asset as the exposure, so no BSV price move can shrink it relative to what it protects — and no oracle is needed to keep the two matched |
 | **FOSS** | The light client, programs and relayer software are open source |
 
-**Honest limits.** Minting is trustless. Redemption is *trust-minimised*: a bonded relayer must hold a key to the small hot float, and the bond plus on-chain fraud proofs are what keep them honest. Bonding can make cheating unprofitable; it cannot make it impossible, and it does nothing against someone who steals the hot key and never posted a bond — which is why the float is capped and never left idle. We call that what it is, in [Trust model](04-trust-model.md#the-naked-option-attack). A signerless design — where the cold reserve releases funds against a zero-knowledge proof of the Solana burn, verified inside BSV Script — is the roadmap target, not the launch product.
+**Honest limits.** Minting is trustless. Redemption is *trust-minimised*: a bonded relayer holds a key to its own deposits, and the bond plus on-chain fraud proofs are what keep it honest. Bonding can make cheating unprofitable; it cannot make it impossible, and it does nothing against someone who takes a relayer's key and never posted a bond. There is no pooled hot wallet to drain and no privileged operator to compromise. We call that what it is, in [Trust model](04-trust-model.md#the-naked-option-attack). And a DEX or exchange exit is outside the protocol's control: if a fraudulent mint ever succeeded, the loss would land on whoever bought the unbacked token, and the protocol cannot compensate them.
 
 ---
 

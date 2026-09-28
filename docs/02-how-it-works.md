@@ -1,14 +1,31 @@
 # 2. How it works
 
-## The two steps
+> **Built or specified?** The light client, the `solBSV` token and the mint exist today and pass
+> 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
+> designed, not built.** The program that ships mints straight to the depositor, so every step
+> below that depends on the vault is a specification rather than a description of running code.
+> [`13-summary.md`](13-summary.md) is the authoritative account; the reasoning is in
+> [`12-peg-mechanism.md`](12-peg-mechanism.md).
+
+## The two directions
 
 ```
-   STEP 1                 STEP 2                     RESULT
- accumulate   ──────►      wait 12 conf   ──────►     solBSV
-   (BSV)                  (~2 hours)                 (Solana)
+   PEG IN — BSV to solBSV                  PEG OUT — solBSV to BSV
+
+   1  send BSV + OP_RETURN                 1  escrow solBSV + a BSV address
+   2  wait the agreed depth                2  a relayer pays BSV and proves it
+   3  mint into the VAULT                  3  a challenge window follows
+   4  MATURE: release to you               4  success: burn the escrow, the
+      reorg first: burn the staged           relayer keeps the fee
+      tokens. Your BSV went with           failure: return the escrow.
+      the reorg, so you end where          Supply never changes.
+      you started.
 ```
 
-That is the whole user experience. Everything below is what happens underneath.
+Both directions have the same shape: **enter the vault, then leave it either to the
+counterparty or back to the sender.** A failure is a return, never a new mint.
+
+That is the whole of the user experience. Everything below is what happens underneath.
 
 ---
 
@@ -50,7 +67,7 @@ Every BSV block needs one header pushed, so the client costs **144 transactions 
 
 **Base fees are trivial; priority fees are the real variable.** Under congestion this is the number that matters, and it is beyond the protocol's control.
 
-Two mitigations exist. Headers can be **batched**, since about 13 fit in one transaction: that cuts base fees to **$1.56/year**, at the cost of the client lagging about two hours behind the chain — acceptable, because minting already waits twelve confirmations. Batching does not reduce priority fees, which dominate.
+Two mitigations exist. Headers can be **batched**, since about 13 fit in one transaction: that cuts base fees to **$1.56/year**, at the cost of the client lagging about two hours behind the chain — acceptable, because a mint already waits out the confirmation depth the depositor chose, and then the maturity window on top. Batching does not reduce priority fees, which dominate.
 
 ### Being parsimonious: what the window stores, and why it is now one word long
 
@@ -69,62 +86,75 @@ A further step is possible — store only every Nth hash and have the claimant s
 
 ---
 
-## Mint — BSV → solBSV (trustless, permissionless)
+## Peg-in — BSV → `solBSV` (trustless, permissionless)
 
 ```
   YOU                    BSV CHAIN                    SOLANA
    │                         │                           │
-   │  1. send BSV + OP_RETURN│                           │
+   │  1. take terms from the book                        │
+   │     (liquidity, fee, depth)                         │
+   │  2. send BSV + OP_RETURN│                           │
    │     (your Solana addr)  │                           │
    ├────────────────────────►│                           │
-   │                         │  2. 12 confirmations      │
+   │                         │  3. wait the agreed depth │
    │                         │                           │
-   │                         │  3. light client verifies │
+   │                         │  4. light client verifies │
    │                         │     header + PoW + Merkle │
    │                         ├──────────────────────────►│
-   │                         │                           │  4. mint solBSV
-   │◄────────────────────────────────────────────────────┤     to you
+   │                         │                           │  5. mint into the VAULT
+   │                         │                           │     (not to you)
+   │                         │                           │
+   │                         │                           │  6. still canonical after
+   │                         │                           │     maturity?
+   │◄────────────────────────────────────────────────────┤     yes: released to you
+   │                         │                           │     no:  staged tokens burned
 ```
 
-1. **You send BSV** to the reserve address, attaching an `OP_RETURN` that carries your Solana address. (BSV's data-carrier limit is effectively unlimited, so this is a normal transaction.)
-2. **Twelve confirmations** pass — about two hours on BSV.
-3. **The light client proves it.** A BSV light client running on Solana verifies the 80-byte header, its proof-of-work against the difficulty target, the header chain linkage, and the Merkle branch showing your transaction is in that block.
-4. **`solBSV` is minted** to the address you specified.
+1. **You take terms from the book.** An order book of underwriting lists what stakers will serve: how much liquidity, at what fee, waiting how many confirmations. You pick a bid. **Depth is a term of the trade, not a fixed number** — accept a longer wait and you should get a better rate, because that wait is less risk for whoever fronts the mint.
+2. **You send BSV** to that relayer's own script, attaching an `OP_RETURN` that carries your Solana address and the depth you agreed. There is **no shared bridge address**: each relayer receives its own deposits, so there is no single key whose theft drains the system. (BSV's data-carrier limit is effectively unlimited, so this is a normal transaction.)
+3. **The agreed depth passes**, measured in block time from the BSV headers — never against a wall clock.
+4. **The light client proves it.** A BSV light client running on Solana verifies the 80-byte header, its proof-of-work against the difficulty target, the header chain linkage, and the Merkle branch showing your transaction is in that block.
+5. **`solBSV` is minted into the vault, not to you.** The tokens exist, but they are not yet yours to spend: they sit in a token account the program owns.
+6. **The vault releases after maturity.** Once a maturity window passes with your deposit's block still canonical, the tokens are released to the address you named. If a reorg is followed first, the staged tokens are **burned** instead — and your BSV went back with the reorg, so you end exactly where you started.
 
 No one approves this. There is no oracle, no attestor, no committee vote. **The proof is the authorisation.** Anyone can do it, for anyone, at any time.
 
 ---
 
-## Redeem — solBSV → BSV (permissionless, optimistic)
+## Peg-out — `solBSV` → BSV (permissionless, optimistic)
 
 ```
   YOU                    SOLANA                       BSV CHAIN
    │                         │                           │
-   │  1. burn solBSV         │                           │
+   │  1. escrow solBSV       │                           │
+   │     into the VAULT      │                           │
    │     + BSV destination   │                           │
    ├────────────────────────►│                           │
-   │                         │  2. redemption request    │
-   │                         │     recorded, 6h deadline │
+   │                         │  2. a relayer whose bond  │
+   │                         │     covers it accepts     │
    │                         │                           │
-   │                         │  3. a relayer pays you BSV│
-   │                         │◄──────────────────────────┤
+   │                         │  3. the relayer pays BSV  │
+   │                         ├──────────────────────────►│
+   │                         │     and proves the payout │
+   │                         │     against the light     │
+   │                         │     client                │
    │                         │                           │
-   │                         │  4. relayer submits SPV   │
-   │                         │     proof of the payout   │
-   │◄────────────────────────┤     → program verifies    │
-   │  5. tokens burned,      │                           │
-   │     BSV received        │                           │
+   │                         │  4. a challenge window    │
+   │                         │     follows; a reorged    │
+   │                         │     payout is caught here │
    │                         │                           │
-   │  6. no payout in 6h?    │                           │
-   │     solBSV re-minted ◄──┤  relayer bond slashed     │
+   │  5. success: escrow     │                           │
+   │     burned, relayer     │                           │
+   │     keeps the fee       │                           │
+   │     failure: escrow ◄───┤                           │
+   │     returned to you     │                           │
 ```
 
-1. **You burn `solBSV`** and name the BSV address you want paid. The burn and the destination are recorded in the bridge program — this is native Solana state, so nothing needs proving.
-2. **A redemption request** is created with a **6-hour deadline**.
-3. **A relayer pays you BSV** from its hot wallet.
-4. **The relayer proves the payout.** It submits the BSV transaction with an SPV proof; the Solana program verifies it against the light client and checks the amount and destination match your request.
-5. **Your redemption closes.** The relayer keeps the fee.
-6. **If no valid payout arrives by the deadline**, the program **re-mints your `solBSV` automatically** and the bond is slashed. **You cannot lose.**
+1. **You escrow `solBSV` into the vault** and name the BSV address you want paid. The escrow and the destination are recorded in the bridge program — native Solana state, so nothing needs proving.
+2. **A relayer whose bond covers the amount accepts the request.** Any relayer may; this is underwriting rather than permission, and it is why the bond is denominated in `solBSV`.
+3. **The relayer pays you BSV and proves it.** It has a deadline measured in Solana slots — so a cluster halt freezes the clock rather than burning a relayer that could not act. It then submits the BSV transaction with an SPV proof; the program verifies the payout against the light client and checks the amount and destination match your request.
+4. **A challenge window follows**, during which a payout that a later reorg removes can be caught.
+5. **Settlement.** On success the escrowed `solBSV` is **burned** and the relayer keeps the fee. On failure the escrow is **returned to you**. Supply is unchanged either way: no failure path mints.
 
 ---
 
@@ -132,20 +162,22 @@ No one approves this. There is no oracle, no attestor, no committee vote. **The 
 
 | | |
 |---|---|
-| **Mint latency** | ~2 hours (12 BSV confirmations) |
-| **Redeem latency** | Up to 6 hours (settlement window), usually much less |
-| **Fees** | A percentage of the redeemed amount, set by governance and published |
-| **Who approves you** | Nobody |
+| **Peg-in latency** | The agreed depth — 12 BSV blocks minimum, about two hours — plus the maturity window |
+| **Peg-out latency** | The relayer's deadline, in slots, plus the challenge window; usually much less |
+| **Fees** | Discovered on the order book, published, and paid to whoever underwrites the trade |
+| **Who approves you** | Peg-in: nobody. Peg-out: any relayer may take the request — underwriting, not permission |
 | **What you need** | A BSV wallet and a Solana wallet |
 
 ## Why the wait exists
 
-Twelve confirmations and a six-hour redemption window are not arbitrary. Both exist to make **reorgs** a non-issue:
+The waits are not arbitrary, and they now come from the market rather than a constant:
 
-- **On the way in**, the wait means a BSV reorg cannot un-mint you.
-- **On the way out**, the window gives the network time to see a payout and for any challenge to be raised before settlement is final.
+- **On the way in**, depth is what makes a reorg expensive — an attacker has to out-mine it — while maturity is what makes a reorg visible. The tokens are staged in the vault long enough for honest headers to be pushed and an orphan noticed. Detect it and the staged tokens are burned; the deposit itself already went back with the reorg.
+- **On the way out**, the challenge window gives the network time to see a payout and for any challenge to be raised before settlement is final.
 
-If you want speed without a wrapper, the market layer handles it: `solBSV` trades on Raydium/Orca, so you can buy and sell at Solana speed while mint and redeem handle the edges.
+`FLOOR` — twelve blocks — remains as a backstop under the book, so no trade can commit to a depth so shallow that the attack is cheap. Everything is measured on a chain: depth and block time from BSV headers, deadlines from Solana slots.
+
+If you want speed without a wrapper, the market layer handles it: `solBSV` trades on Raydium/Orca, so you can buy and sell at Solana speed while peg-in and peg-out handle the edges.
 
 ---
 

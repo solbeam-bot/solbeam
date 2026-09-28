@@ -1,5 +1,10 @@
 # 10. Brand & visual language
 
+> **Built or specified?** The light client, the `solBSV` token and the mint exist today and pass
+> 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
+> designed, not built.** [`13-summary.md`](13-summary.md) is the authoritative account.
+
+
 ## Name
 
 **SOLBEAM** — *Atomic wrapper on Solana for BSV.*
@@ -75,28 +80,33 @@ The clearest expression of the product is two panels:
  ┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
  │                  │        │                  │        │                  │
  │   STEP 1         │  ───►  │   STEP 2         │  ───►  │    solBSV        │
- │   ACCUMULATE     │        │   WAIT           │        │    on Solana     │
- │                  │        │   12 confs       │        │                  │
+ │   CHOOSE         │        │   WAIT           │        │    on Solana     │
+ │   TERMS          │        │   the bid names  │        │                  │
  └──────────────────┘        └──────────────────┘        └──────────────────┘
-      BSV wallet               ~2 hours                  Solana wallet
+      BSV wallet              depth is a term of           Solana wallet
+                              the bid, priced by
+                              the market
 ```
 
 - Left panel: BSV mark.
-- Middle panel: a simple progress ring or the beam disc mid-rotation, with "12 confirmations" beneath.
+- Middle panel: a simple progress ring or the beam disc mid-rotation, with the confirmation depth beneath. **Depth is a term of the bid** — a staker names the depth it will accept, and the market prices it. `FLOOR` (12 blocks) is only a backstop, never a promise about any particular deposit, so never put a clock or a fixed number here.
 - Right panel: Solana mark with the `solBSV` ticker.
 
 This graphic is the social-friendly summary and should appear on the landing page, in the litepaper header, and on relayer-app onboarding.
 
+> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The bid depth described here is part of that specification, not shipped behaviour.
+
 ## Voice
 
 - **Plain, not promotional.** State what is trustless and what is trust-minimised, every time.
-- **No overclaiming.** Avoid "fully trustless", "risk-free", "instant" for redemption, or "guaranteed" yields.
-- **Precise words:** mint, redeem, bond, tranche, deadline, proof.
-- **Say the numbers.** 12 confirmations. 6 hours. Percentage fees. Published caps.
+- **No overclaiming.** Avoid "fully trustless", "risk-free", "instant" for redemption, or "guaranteed" yields. **Never present a confirmation time as a guarantee:** depth is a term of the bid, the market prices it, and `FLOOR` is only a backstop.
+- **No oracle.** The program reacts only to BSV headers and Solana slots. External metrics — price, hashrate, reorg cost — are published on the website and never consulted by the program, so copy must not imply it watches a market.
+- **Precise words:** mint, redeem, bond, liquidity, depth, bid, deadline, proof.
+- **Say the numbers.** The bid's liquidity, fee and confirmation depth; published caps. Depth is a term of the bid rather than a fixed constant, so quote it as a term, not a promise.
 
 ## Naming note
 
-The word **"relayer"** can read as a trusted intermediary. In user-facing copy prefer **"bonder"** or **"redemption fulfiller"**, with "relayer" reserved for technical documentation. The role is bonded and permissionless; the language should say so.
+The word **"relayer"** can read as a trusted intermediary. In user-facing copy prefer **"bonder"** or **"redemption fulfiller"**, with "relayer" reserved for technical documentation. The role is bonded and permissionless — **anyone may run a relayer, and there is no privileged operator** — and the language should say so.
 
 ## Colour and type (directional)
 

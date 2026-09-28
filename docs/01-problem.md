@@ -1,5 +1,10 @@
 # 1. The problem
 
+> **Built or specified?** The light client, the `solBSV` token and the mint exist today and pass
+> 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
+> designed, not built.** [`13-summary.md`](13-summary.md) is the authoritative account.
+
+
 ## BSV is fast to mine, slow to move
 
 A BSV block arrives roughly every ten minutes. That is not the bottleneck. The bottleneck is **confirmation policy**: because a chain can reorganise, every custodian (exchanges especially) chooses how many confirmations a block requires before they treat it as final, and how long a withdrawal must sit before they broadcast it. For BSV, those windows are long.
@@ -29,9 +34,11 @@ Existing bridges for Bitcoin-family assets on Solana are **federated or custodia
 SOLBEAM takes a different starting point: **make the peg in trustless, and enforce honesty on the peg out.**
 
 - **Peg-in is trustless** because Solana can verify BSV directly: BSV uses double-SHA-256 over an 80-byte header, and Solana has a native SHA-256 syscall. A light client can check proof-of-work, the header chain and transaction inclusion without trusting anyone.
-- **Peg-out cannot be trustless today** for a reason that is mathematical rather than architectural: releasing native BSV requires a BSV signature, and BSV Script cannot verify Solana's ed25519 consensus. So a key must exist somewhere. SOLBEAM makes that key **small, bonded, and fraud-punishable** — and treats eliminating it as the long-term research goal.
+- **Peg-out cannot be trustless today** for a reason that is mathematical rather than architectural: releasing native BSV requires a BSV signature, and BSV Script cannot verify Solana's ed25519 consensus. So a key must exist somewhere. **But no privileged operator does.** There is no company, no signer set and no appointed custodian in SOLBEAM: the key belongs to whichever **relayer** takes the job — a role anyone may run, drawn from an open order book and bonded in `solBSV` so the program can seize the bond when a payout fails or is reversed. The way in asks nobody at all: a deposit is proved against the light client, and the mint is staged in a program-owned vault, so a reorg is reversed by burning the staged tokens rather than by compensating anyone.
 
-That asymmetry — trustless in, trust-minimised out.
+That asymmetry — trustless in, trust-minimised out, and nobody in charge.
+
+> **Built or designed?** The light client, `solBSV` and the mint exist and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The shipped program mints straight to the depositor's token account, so the staged mint and the bond machinery described here are still a specification rather than shipped behaviour.
 
 ---
 

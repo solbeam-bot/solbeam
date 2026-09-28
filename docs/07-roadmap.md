@@ -1,27 +1,44 @@
 # 7. Roadmap
 
-The order is deliberate: **ship the half that is trustless first**, then the half that needs bonds and adjudication.
+The order is deliberate: **make the built system survive a real chain first**, then build the
+component the rest of the design rests on, then the parts that need bonds and adjudication.
 
-| Phase | What ships | Why this order |
+> **Built or designed?** The light client, `solBSV` and the mint are built and pass 17 on-chain
+> tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and
+> not built.** The two steps that come first are open defects in the code that does exist; every
+> step from *the vault* onward is a specification.
+
+| Step | What ships | Why this order |
 |---|---|---|
-| **P0 — Design & vectors** | Chain constants frozen; header-state cost model (checkpoint / rolling window / sharding / rent); golden test vectors for headers, difficulty adjustment, Merkle proofs and BSV signature hashing; mint confirmation depth fixed at 12 | Compute is cheap (~2,842 CU per SPV proof); the open question is *state*, so it is modelled before code |
-| **P1 — Mint only** | BSV light client on Solana; `solBSV` token; `mint`. Devnet → public testnet. Permissionless: anyone can mint | This half is **trustless** and delivers most of the value on its own. It can launch before redemption exists |
-| **P2 — Redeem** | `burn`, redemption requests, `fulfil`, `challenge`, `slash`; relayer bonds; 6-hour deadlines; automatic refunds | Turns a one-way wrapper into a two-way peg |
-| **P3 — Apps & hardening** | Desktop relayer app; mobile app; watchtower tooling; audits of the light client and bridge program; proof-of-reserves; capped mainnet | Opens the relayer role to the public and scales usage |
-| **P4 — Raise limits & research** | Conservative parameter raises as bonds grow; begin the signerless research track (BSV covenant verifying a zero-knowledge proof of the Solana burn) | Removes the hot key, the bond and the price mismatch if successful |
+| **F7 — the difficulty retarget** | `expected_bits` advances at a difficulty boundary and `check_daa` is called | The one defect that **halts the built system permanently at the first retarget**. Invisible on regtest, fatal on testnet or mainnet, so nothing later can be tested on a real chain until it is fixed |
+| **F6 — the replay-list ceiling** | `MIN_PEG_IN` enforced, and `MAX_USED = 200` sized or replaced | A hard ceiling of **200 peg-ins per 48-hour window**, with no attacker required |
+| **The vault** | Every mint lands in a program-owned token account; release after maturity, burn if a reorg is followed | The component the rest of the design rests on. It gives reversibility without a freeze authority and removes the window in which a fraudulent mint could be sold |
+| **Per-relayer deposits and `owed_R`** | Each relayer's own deposit script; `bond_R ≥ k × owed_R` from proofs the program verified; relayer consent | Turns a fraud from something holders absorb into something the relayer is charged for, and removes the pooled reserve |
+| **Peg-out** | Escrow into the vault, deadlines in Solana slots, the payout proof against the light client, challenge, settlement and refunds | Turns a one-way wrapper into a two-way peg. Supply is unchanged on every path: no failure mints |
+| **The website** | Order entry, published parameters, the external metrics and live status | **No consensus role.** Last because it exposes a system rather than completing one |
 
 ## Launch sequencing
 
-1. **Testnet, mint only.** Prove the light client against real BSV blocks. No real value.
-2. **Mainnet, mint only, small caps.** Deposits proven end-to-end; redemption handled manually and transparently while P2 is finished.
-3. **Mainnet, redeem live, small caps.** Bonds posted, deadlines active, refund path exercised in production.
-4. **Raise caps.** Only after audits and after the invariants hold in production for a sustained period.
+1. **Testnet, mint only — after F7 and F6.** The retarget and the replay ceiling have to be fixed
+   before a real chain will run the built program for long. No real value.
+2. **Testnet, vault and book.** Mints stage, mature and release; per-relayer deposits and `owed_R`
+   carry the liability. Still no real value.
+3. **Mainnet, mint only, small caps.** Deposits proven end to end. Redemption handled manually and
+   transparently while peg-out is finished.
+4. **Mainnet, peg-out live, small caps.** Escrow, deadlines, payout proofs and the refund path
+   exercised in production.
+5. **Website, then raise caps.** Order entry published once the flows it exposes exist; caps raised
+   only after audits and after the invariants hold in production for a sustained period.
 
 ## Milestones
-- Light client verifies mainnet BSV headers and DAA against independent reference data.
-- A deposit is minted on mainnet with no human in the loop.
-- A redemption completes end-to-end: burn → BSV payout → proof → settlement.
-- The refund path fires in production (deliberately triggered test).
+- The light client verifies mainnet BSV headers, **including the difficulty retarget**, against
+  independent reference data.
+- A deposit is minted on mainnet with no human in the loop: staged in the vault, then released
+  after maturity.
+- A reorg followed inside the maturity window burns the staged tokens, and the depositor ends
+  exactly where they started.
+- A redemption completes end-to-end: escrow → BSV payout → proof → settlement.
+- A failed redemption returns the escrow: supply unchanged, the relayer's bond charged.
 - A permissionless challenger successfully slashes a deliberately misbehaving test relayer.
 - The reserve invariant is published continuously and matches the on-chain supply.
 

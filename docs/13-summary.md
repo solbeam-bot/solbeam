@@ -126,6 +126,7 @@ Deliberately short.
 | **The BSV reserve keys** | BSV sits under keys that can spend it. There is no covenant, and BSV has no timelocks to fall back on |
 | **The program upgrade authority** | It can override every parameter. Out of scope for the proof of concept, and recorded rather than hidden |
 | **That honest headers get pushed within the maturity window** | A liveness condition anyone can satisfy, not a trust assumption — and one with a built-in incentive |
+| **That the code is correct** | **It is not independently audited.** Our own adversarial review found four critical defects in it — a vacuous proof-of-work check, an unauthenticated checkpoint path, an unconstrained mint, and a replay key that double-minted after a reorg. All four are fixed and tested, which is not the same as correct |
 
 Everything else — deposits, backing, minting, reorg detection and the payout proof — is
 enforced by code.
