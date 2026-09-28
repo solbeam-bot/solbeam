@@ -6,6 +6,22 @@ because that is the useful question now.
 
 ---
 
+## Status at a glance — read this first
+
+**Nothing on this page is fixed.** Every item is either *decided* (the approach is agreed, no
+code written) or *open* (needs a decision). The code is unchanged from the A1/A2/A3/A7 fixes.
+
+| | Item | Status | What it needs |
+|---|---|---|---|
+| **P1** | Checkpoint race + self-declared difficulty | **Decided** — race accepted | Deploy privately; address-link later if wanted. No code |
+| **P2** | `commit_fork` does not re-anchor | **Specified** | Store `fork_parent_hash` at init; link from it; re-check at commit |
+| **P3** | Deposits have a hard ~48 h life | **Open** — needs a decision | See the breakdown below |
+| **P4** | Retarget halts the client (F7) | **Specified** | Store the difficulty-period anchor; compute and check the new target. Testable on regtest |
+| **P5** | Replay-list shutdown and hard ceiling | **Open** | Enforce `MIN_PEG_IN`; size or replace the list |
+| **P6–P10** | Vault-era items | **Design-in** | Depend on the vault, which is unbuilt |
+
+Only **P1** is closed by a decision rather than by work. Everything else is work still to do.
+
 ## 1. Live in shipped code — fix or decide before writing anything new
 
 ### P1 — The checkpoint race · **critical, unfixed**
@@ -36,7 +52,44 @@ be verified again — **and the BSV is already with the relayer.** An honest dep
 delayed — because the advancer stalled, a gate closed, or they simply waited — loses the deposit
 permanently, with no on-chain refund path (A15).
 
-This is the sharpest gap found, and it is a **timing trap on honest users rather than an attack.**
+### P3 broken down
+
+Four separate things get tangled here, so take them one at a time.
+
+**(a) The window advances by design.** Every BSV header pushed moves `window_start` forward. The
+window holds **288 hashes** — about 48 hours at ten-minute blocks. This is normal operation, not
+a reorg, not an attack.
+
+**(b) So every deposit has a deadline.** `verify_deposit` asks "is the block at height H in the
+window?" After ~288 blocks the answer is permanently no. The proof can never be verified again.
+
+**(c) The BSV does not come back.** The deposit sits in the relayer's own script. Moving it needs
+a BSV transaction signed by **that relayer's key**. The protocol is on Solana and cannot sign it,
+and **BSV has no timelocks** — `OP_CLTV` and `OP_CSV` are no-ops — so "refundable after 24 hours"
+cannot be written into the script. A refund is therefore a **rule, not a guarantee**.
+
+**(d) The incentive points the wrong way.** Until a deposit is *proven*, `owed_R` is zero: the
+relayer holds the BSV, carries no liability, and its bond is untouched. **The relayer profits by
+never minting.**
+
+**What protects the depositor is that minting is permissionless — and that minting is itself the
+enforcement.** Proving the deposit is what creates `owed_R` and makes the bond bind. So the
+depositor's own action is simultaneously the remedy and the thing that puts the relayer on the
+hook. They never need the relayer's cooperation to be made whole; they need only to act.
+
+| Option | Extends the deadline? | Cost | Verdict |
+|---|---|---|---|
+| **Automate the mint** in the app | No — but the deadline stops mattering | trivial | **Do it.** The primary answer |
+| **Disclose the deadline** (48 h) in the UI | No | trivial | **Do it** |
+| **Publish unproven receipts** off-chain | No | low | **Do it.** This is the "24-hour rule" — monitoring and reputation, not code |
+| Historic-header bridging | By ~12 blocks (tx limit) | medium | Marginal |
+| Multiple window accounts (4 × 288 ≈ 8 days) | Yes, 4× | 4× rent (~$15) + complexity | Possible if 48 h proves too short |
+| A refund path | — | — | Needs the relayer's key. A rule, not code |
+| A covenant | — | research | The structural fix: removes the relayer's discretion entirely |
+
+**The residual, stated plainly:** a depositor who does not use our app, does not mint, and does not
+watch for 48 hours can lose the deposit to a dishonest relayer. There is **no code fix for that
+while the reserve is key-controlled.** It belongs in the trust model explicitly.
 Options: size the window against `depth + maturity` with margin and state the deadline in the UI;
 allow a historic header to be supplied with a chain of headers; or add the refund path. *Decision
 needed, and it interacts directly with the maturity length.*
