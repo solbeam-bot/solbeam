@@ -78,10 +78,16 @@
     <h2>Implementation plan</h2>
 
     <p class="note" style="margin:0 0 18px">
-      <strong>Status reset.</strong> An adversarial audit found these pages had drifted ahead of the
-      code — describing a vault, a two-gate maturity process and a staking book that are
-      <em>specified but not built</em>. The program mints straight to the depositor's token account.
-      Below, "Done" means done and tested; everything described as designed is a specification.
+      <strong>What this page is.</strong> A proof of concept measured against reality rather than
+      asserted — and the most useful thing it has produced is a correction. The light client, the one
+      component we believed finished, was built on a difficulty rule <em>that does not exist</em>: BSV
+      does not retarget every 2016 blocks, it recalculates every block, so the client would have
+      rejected its first real header. It was found by replaying <strong>324 real mainnet headers</strong>
+      against the implementation, and it is now correct on all 324.
+      <br><br>
+      Below, <strong>"Done" means done and tested</strong>; everything described as designed is a
+      specification. The vault, the two gates and the staking book are <em>specified but not built</em> —
+      the program still mints straight to the depositor's token account.
     </p>
 
     <div class="phase">
@@ -91,7 +97,7 @@
         <span class="phase__state">Complete</span>
       </div>
       <ul>
-        <li>One x86_64 VM, provisioned by a single script. <code>doctor</code> reports <strong>19 passing, 0 failing</strong>.</li>
+        <li>One x86_64 VM, provisioned by a single script. <code>doctor</code> reports <strong>19 ok, 1 warning, 0 failures</strong>.</li>
         <li>SV&nbsp;Node v1.1.1 in regtest, Rust, Solana CLI 4.1.2, Anchor and <code>solana-test-validator</code> — all installed and running.</li>
       </ul>
     </div>
