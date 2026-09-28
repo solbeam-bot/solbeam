@@ -38,7 +38,6 @@ SOLBEAM takes a different starting point: **make the peg in trustless, and enfor
 
 That asymmetry — trustless in, trust-minimised out, and nobody in charge.
 
-> **Built or designed?** The light client, `solBSV` and the mint exist and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The shipped program mints straight to the depositor's token account, so the staged mint and the bond machinery described here are still a specification rather than shipped behaviour.
 
 ---
 

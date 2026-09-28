@@ -94,7 +94,6 @@ The clearest expression of the product is two panels:
 
 This graphic is the social-friendly summary and should appear on the landing page, in the litepaper header, and on relayer-app onboarding.
 
-> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The bid depth described here is part of that specification, not shipped behaviour.
 
 ## Voice
 

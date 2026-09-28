@@ -518,8 +518,8 @@ row is listed first.
 |---|---|---|
 | **Depth-aware + block-time signals** ✅ | Matches the actual risk; no false freezes from tip churn; no external oracle | Three signals to tune; block-time thresholds need generous tolerance |
 | Wall-clock window only (12 h) | Trivial to implement | Freezes on harmless tip reorgs; measures time, not risk |
-| Wall-clock **and** depth | Simple, conservative | Still freezes on `R < C`; the wall-clock part adds nothing once depth is checked |
-| No detection — rely on `C` alone | Simplest; `C` is the real security | No protection against a *catching-up* client; exits stay open during instability |
+| Wall-clock **and** depth | Simple, conservative | Still freezes on `R < FLOOR`; the wall-clock part adds nothing once depth is checked |
+| No detection — rely on `FLOOR` alone | Simplest; depth is the real security | No protection against a *catching-up* client; exits stay open during instability |
 
 ### 2. Response mid-transfer
 
@@ -541,7 +541,7 @@ row is listed first.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Staking pool: anyone stakes BSV on either side and shares a fixed 10 bp in / 10 bp out fee** ✅ | Simple; permissionless; losses land on volunteers rather than on every holder; nothing to attest | A fixed fee cannot price risk, so capacity is procyclical; operator incentives inside a passive pool are unresolved |
+| **Order book of staked bids: stakers post liquidity, fee and depth; matched by price then time, partially filled** ✅ | The fee is discovered and depth is a term, so reorg risk is priced; permissionless; losses land on volunteers rather than on every holder | Capacity can be procyclical when risk is mispriced; bids need consent and a seizable bond to be credible |
 | Single nominated relayer | Simplest | No fee competition; nomination is a trusted choice |
 | Bonded set, open entry | Better liveness | Capital fragmented across bonds; coordination on who pays |
 | Fully permissionless | Best liveness | Anyone can attempt payout; no bond means no recourse |
@@ -550,26 +550,29 @@ row is listed first.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Mixed: BSV in timelocked multisig, topped up in solBSV** ✅ | The BSV leg does not depeg with the thing it insures | More moving parts to operate |
-| `solBSV` only | Relayer had to lock BSV to acquire it, so it is BSV-backed; slashing burns supply | **Procyclical** — on default `solBSV` depegs, so the bond is worth least exactly when it is called on. `k` must absorb an expected depeg |
-| SOL or stables | Uncorrelated with the peg | Not BSV-denominated; the relayer must source it separately |
+| **`solBSV` only** ✅ | The same unit as the exposure, so no price move can shrink it relative to what it protects; the program holds it and can seize it; a slash is deflationary | Procyclical only if `solBSV` itself depegs — the case `k = 1` accepts because `solBSV` and BSV are the same asset and any deviation is an arbitrage |
+| Mixed: BSV in a timelocked multisig, topped up in `solBSV` | The BSV leg does not depeg with the thing it insures | More moving parts; only the Solana leg is seizable (A16); reintroduces a signer set |
+| Stablecoin or SOL | Uncorrelated with the peg | Not BSV-denominated; a stablecoin bond against a BSV liability is a **written call option** on the reserve, struck at `bond ÷ float` — see doc 04 |
 
 ### 6. Peg-out capacity control
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Per-window cap = f(hot float, bond/k); per-tx max secondary** ✅ | The only control that matches what can actually be paid; prevents a race the relayer cannot win | Capacity must be tracked and published |
-| Per-transaction max only | Trivial | Several large redemptions can all pass and collectively exceed the float → mass re-mint and an unfairly slashed relayer |
+| **Per-relayer capacity: a redemption is refused unless some relayer's `bond_R ≥ k × owed_R` covers it; per-tx max secondary** ✅ | Matches what can actually be paid; the check is on-chain from verified proofs; prevents a race the relayer cannot win | Capacity must be tracked and published; a relayer's own float still limits what it can pay in practice |
+| Per-transaction max only | Trivial | Several large redemptions can all pass and collectively exceed the available float, so escrows are returned rather than paid |
 | No cap | Maximum freedom | The float is drainable in one transaction |
 
 ### 7. Parameter governance
 
+**There is no governance mechanism in the PoC at all (D7).** No vote, multisig or
+timelock exists. The options below are recorded for the deferred design, not chosen:
+
 | Option | Pros | Cons |
 |---|---|---|
-| **Multisig + timelock for economic; safety increase-only** ✅ | Fee/limit agility without a mint-voucher key; timelock lets users exit | Two paths to reason about |
-| Single multisig, all parameters | Simple | A key compromise can set `C = 0` and mint against unconfirmed blocks |
+| **No governance; parameters fixed in code** ✅ *(the PoC position)* | Nothing to capture; `FLOOR` cannot be voted down | Nothing can be adjusted without shipping a new program |
+| Multisig + timelock for economic; safety increase-only | Fee/limit agility without a mint-voucher key; timelock lets users exit | Two paths to reason about; not the PoC's position |
+| Single multisig, all parameters | Simple | A key compromise can set `FLOOR = 0` and mint against unconfirmed blocks |
 | Token vote | Legible | **Safety parameters should not be votable** — a majority can strip its own protection |
-| Fully immutable | Maximum safety | No fee tuning, no response to changing conditions |
 
 ### 8. Exit gating for fresh supply
 
@@ -589,25 +592,25 @@ row is listed first.
    does not depend on any one participant, which is the point of keeping the loop
    open. The single-relayer model in §Considerations is superseded on this point.
 
-2. **Bond `k` — assume no persistent depeg.** `solBSV` and BSV are the same asset,
-   so any deviation is an arbitrage and closes; `k = 1` is defensible rather than
-   having to absorb a standing discount. The consequence of that assumption is
-   recorded in decision 3, because it is what makes the compensation rule coherent.
+2. **Bond `k` — settled: `k = 1` (D5).** `solBSV` and BSV are the same asset, so any
+   deviation is an arbitrage and closes; `k = 1` is defensible rather than having to
+   absorb a standing discount. Self-dealing stakers are an accepted risk: at `k = 1` a
+   self-dealing attack is roughly break-even, so what makes it unprofitable is **the
+   mining cost of the reorg**, not the bond. The bond's job is covering an honest
+   relayer's shortfall.
 
-3. **Slashing destination — the redeemer, in `solBSV`, supply-conservingly.** The BSV
-   never reached the end user, so compensating them in BSV is not available; the
-   slashed `solBSV` transfers to them instead and they hold the same *amount* on the
-   wrong chain. Because the bond's tokens move rather than new ones being minted,
-   **total supply is unchanged wherever the bond covers the redemption** — see
-   §Who gets slashed, and who gets paid for the settlement order and the shortfall.
-   This is the honest consequence of refusing a freeze authority: **holders keep
-   their balance through a default and absorb any shortfall as a discount rather
-   than a confiscation.** The bond protects against the relayer absconding — it
-   does **not** protect against the reserve being short, and it should not be
-   described as if it does.
+3. **A failed redemption — return the escrow, and nothing else moves.** The holder's
+   `solBSV` is still in the vault, so the settlement is to return it: the holder is
+   made whole and **supply is unchanged**. The bond is **not additionally transferred**
+   to the holder, because the return has already made them whole. This is the honest
+   consequence of refusing a freeze authority: **holders keep their balance through a
+   default and absorb any shortfall as a discount rather than a confiscation.** The bond
+   protects against a relayer's deliberate theft or abandonment — **not** against the
+   reserve being short, **not** against a failed redemption, and **not** against a reorg
+   — and it should not be described as if it does.
 
-4. **`C` is a policy parameter, not a derived one.** Sizing it from the cost of
-   reorging `C` blocks needs a **BSV price feed** to value what is at risk and a
+4. **`FLOOR` is a policy parameter, not a derived one.** Sizing it from the cost of
+   reorging `FLOOR` blocks needs a **BSV price feed** to value what is at risk and a
    **hashpower-rental feed** to price the attack.
 
    The reason it is rejected is **not** that those quantities are unknowable — they
@@ -625,40 +628,35 @@ row is listed first.
    >
    > **Display anything; decide on nothing external.**
 
-   So `C` is set **high and conservatively as a policy choice**, changed by vote, and
-   **disclosed before someone transacts**. It does not need to be dynamic. What
-   matters is that it is *visible*, not that it is computed.
+   So `FLOOR` is set at **12 blocks, fixed in code** for the PoC (D4), and **disclosed
+   before someone transacts**. It does not need to be dynamic. What matters is that it
+   is *visible*, not that it is computed. The mechanism to change it is deferred (D4,
+   D7); there is nothing to vote with yet.
 
-5. **`RECENT_REORG_WINDOW` — monitoring first, not a gate.** Block times are
-   directly available: the header carries a Unix timestamp at offset 68, so the
-   observed mining rate over the window is computable on-chain, and a mean spacing
-   far below ten minutes is worth **warning** users about. Whether it becomes a gate
-   (delay or RTS) is deferred, because a genuine hashpower surge looks identical to
-   an attack. Note the variance is real — a dozen blocks is a small sample.
+5. **`RECENT_REORG_WINDOW` — a safety parameter (P5), with one open item.** It is
+   classed **safety**, and the depth rule it expresses is settled: a reorg of depth
+   `R ≥ FLOOR` is the signal, and `R < FLOOR` is ordinary tip churn and is ignored.
+   Whether the program **enforces it as an on-chain gate** or merely **monitors and
+   publishes it** is a known open item. Block times are directly available — the header
+   carries a Unix timestamp at offset 68, so the observed mining rate over the window is
+   computable on-chain, and a mean spacing far below ten minutes is worth warning users
+   about — but a genuine hashpower surge looks identical to an attack, so the choice is
+   not free. Note the variance is real: a dozen blocks is a small sample.
 
 ## Resolved and still open
 
-5. **Fee mechanism — the user sets the fee, or the right is exclusive.** Two
-   shapes, neither of which needs a winner attested on-chain:
+6. **Fee mechanism — settled: the order book.** Fees are discovered on the book, matched
+   by price then time (see §The book). The reason no winner has to be attested on-chain
+   survives from the earlier discussion: competition is continuous rather than at an
+   epoch boundary, so there is no off-chain auction winner whose identity must be
+   proven. The alternatives once considered — a user-set fee with open fulfilment, or an
+   exclusive epoch right that starts at zero — are recorded as rejected.
 
-   - **User-set fee, open fulfilment.** The redemption carries a fee and any bonded
-     relayer may claim it if it clears their bar. There is no winner to attest,
-     because competition is continuous rather than at an epoch boundary.
-   - **Exclusive right, transaction starts at 0 fee.** One relayer holds the epoch,
-     so the user-facing fee can be zero — their compensation is what they paid for
-     the right.
-
-   This **dissolves** the attestation question rather than answering it. Attestation
-   is only needed when an off-chain auction produces a winner whose identity must be
-   proven on-chain; under open fulfilment there is no such winner, and under
-   exclusivity the obligation is on the holder rather than on a claim.
-
-6. **Reserve invariant.** Does `custodied BSV ≥ outstanding solBSV` hold
-   *continuously*, or only after settlement? Re-mints make it transiently false, and
-   decision 3 sharpens the question: a shortfall is absorbed as a discount by holders
-   rather than covered from the bond, so the invariant may be better stated as a
-   **target with an explicit failure mode** than as a hard assertion. This is the one
-   genuinely unresolved item.
+7. **Reserve invariant — settled (D8): monitored, not enforced.** `custodied BSV ≥
+   outstanding solBSV` is published and monitored, and **the protocol cannot enforce
+   it**, because the reserve is off-chain BSV the program cannot read. The earlier worry
+   that re-mints make it transiently false is gone: no failure path mints, so supply
+   only changes when the vault burns a staged mint or settles a redemption.
 
 ### The aggregate mint cap, restated as policy
 
@@ -668,31 +666,29 @@ per-transaction limit. The bound that works is an **aggregate cap per window**.
 
 But decision 4 applies to it too: it is **set conservatively as policy, not derived**,
 because deriving it needs the same two oracles we have excluded. It is a coarse
-backstop beneath `C`, not a calibrated constant — and it is secondary to the two
+backstop beneath `FLOOR`, not a calibrated constant — and it is secondary to the two
 bounds that need no oracle at all:
 
-- **`C` set high**, which is what makes out-mining the honest chain expensive;
+- **`FLOOR` set at 12 blocks**, which is what makes out-mining the honest chain expensive;
 - **the hot float cap**, which limits what a *successful* attack can actually extract.
 
-All of these are **votable and disclosed**. The disclosure matters more than the
-value: a user should be able to see `C`, the cap and the float limit before they
-transact.
+All of these are **published and disclosed**. The disclosure matters more than the
+value: a user should be able to see `FLOOR`, the cap and the float limit before they
+transact. There is nothing to vote with in the PoC (D7).
 
 Monitoring is also where the **external metrics** belong — the ones that must never
 enter consensus. A user deciding whether to peg in is better served by seeing the
-BSV price, an estimated cost to reorg `C` blocks, the current hashrate and the
+BSV price, an estimated cost to reorg `FLOOR` blocks, the current hashrate and the
 observed block rate alongside the parameters than by seeing the parameters alone.
 Published, none of it is a trust assumption; consulted by the program, all of it
 would be.
 
-**One qualification on *votable*.** It should not mean freely *loosenable*. Whoever
-can vote `C` down toward zero holds a mint voucher, and no amount of deliberation
-makes that safe. The reconciling rule is **increase-only under governance**: a vote
-can make the protocol more conservative at any time, while making it *less*
-conservative means shipping a new program. That gives the change mechanism the
-review asked for without turning the vote itself into the attack path — and it is
-the one place where the two positions in this document genuinely differ, so it is
-flagged rather than quietly settled.
+**One qualification on a future vote.** It should not mean freely *loosenable*. Whoever
+can vote `FLOOR` down toward zero holds a mint voucher, and no amount of deliberation
+makes that safe. The proposed rule for the deferred governance design is **increase-only
+under governance**: a vote can make the protocol more conservative at any time, while
+making it *less* conservative means shipping a new program. That is a proposal for the
+deferred design (D7), not a shipped power — there is nothing to vote with yet.
 
 ## O1 — Yield is paid in the asset staked
 
@@ -701,7 +697,7 @@ paid in what they staked, because that is what they are providing:
 
 | Side | Stakes | Earns | When |
 |---|---|---|---|
-| BSV | BSV in the reserve or a relayer's float | **BSV** | Deducted at peg-in, realised at once |
+| BSV | BSV in a relayer's float | **BSV** | Deducted at peg-in, realised at once |
 | Solana | `solBSV` | **`solBSV`** | Deducted at peg-out, realised at once |
 
 Both fees are deducted where the payment happens and accrue to that side's stakers, so
@@ -713,10 +709,11 @@ thing the gates exist to prevent. So a fee is credited at once and *released* on
 same schedule. That costs nothing in practice: the window is hours and the accounting
 is continuous.
 
-**The arithmetic still lands at 1:1.** A peg-in of 100 BSV mints 99.9 to the user and
-leaves 0.1 on the reserve side, so `custody == supply == 99.9` for that deposit. A
-peg-out of 100 `solBSV` burns 99.9 and pays 99.9, so both fall together. Neither leg
-creates a claim on nothing.
+**The arithmetic still lands at 1:1.** A peg-in of 100 BSV mints `100 − fee` into the
+vault and credits `fee` to that side's stakers, so custody and supply move together for
+the deposit; the fee is a transfer between the parties, not new backing. A peg-out burns
+the escrowed amount and pays out the same amount less the fee, so both sides fall
+together. Neither leg creates a claim on nothing.
 
 **This also collapses "staking" into "relaying".** The BSV-side staker *is* the party
 who pays BSV on redemption; the `solBSV`-side staker *is* the party who fronts `solBSV`
@@ -739,7 +736,7 @@ work rather than one hash.
 
 **Redemption's trust is bounded, and already specified elsewhere:** the bond is `solBSV`
 held by the program and therefore seizable; the naked-spend residual is answered by
-holding no idle float and by a veto-only cosigner; and the covenant track removes the hot
+per-relayer isolation and by holding no idle float; and the covenant track removes the hot
 key outright. See docs 04 and 05 — this document should not restate them.
 
 ### How maturity stops a reorg mint, with no oracle and nobody to trust
@@ -882,11 +879,13 @@ check a relayer's capacity if you never asked it whether it was willing.
 ### The bootstrap path
 
 The gate has a chicken-and-egg problem: nothing can mint until a bond exists, and the bond
-is funded by staking, which in turn has nothing to earn from until mints happen. So there
-must be an explicit **initialisation path** that is not a normal peg-in — a genesis stake
-that seats the first relayer and its bond, after which the ordinary path takes over. It
-needs to be a separate instruction with its own rules and its own test, not a special case
-buried in the mint. **Owed a design pass; recorded here rather than invented in passing.**
+is funded by staking, which in turn has nothing to earn from until mints happen. **D3
+settles this as G2, the vault-gated genesis mint:** the genesis mint lands in the program
+vault and is released only once a matching BSV deposit is verified, so supply exists but is
+never liquid until it is backed — no unbacked window to attack, and nothing to keep quiet
+about. The first relayer is the team. It needs to be a separate instruction with its own
+rules and its own test, not a special case buried in the mint. See §D3 and
+[`05-relayers.md`](05-relayers.md).
 
 ### On the reserve: do not pool it, rather than securing a pool
 
