@@ -131,8 +131,10 @@ precise:
 
 - **The bond answers deliberate theft or abandonment.** A relayer that takes an accepted
   redemption and then steals or abandons it is caught by the deadline: the escrow is returned to
-  the holder, supply is unchanged, and the bond is slashed. That path is *self-reporting* — no
-  watcher required. This is doc 04's argument, and it is why `k = 1` is defensible for the
+  the holder, supply is unchanged, and **the bond is slashed as a penalty** — but *not* paid to the
+  holder, who the escrow return has already made whole; paying both would compensate twice. Where
+  a slashed bond goes (burned, or returned to the reserve) is a separate and unsettled question.
+  That path is *self-reporting* — no watcher required. This is doc 04's argument, and it is why `k = 1` is defensible for the
   bonded liability.
 - **Only detection answers a released fraudulent mint.** A reorg fraud that has already released
   a mint into circulation has no deadline and no victim to complain. If nobody pushes the honest
