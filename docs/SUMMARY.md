@@ -15,3 +15,5 @@
 * [12. Peg-in and peg-out: the mechanism](12-peg-mechanism.md)
 * [13. The system, in summary](13-summary.md) — **start here**
 * [14. Decision register](14-decisions.md)
+* [15. Second audit — who loses funds](15-audit-2.md)
+* [16. Documentation refresh — the worklist](16-docs-refresh.md)
