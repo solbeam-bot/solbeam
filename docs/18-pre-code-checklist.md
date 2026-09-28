@@ -22,6 +22,25 @@ code written) or *open* (needs a decision). The code is unchanged from the A1/A2
 
 Only **P1** is closed by a decision rather than by work. Everything else is work still to do.
 
+## What is materially outstanding
+
+After the decisions on P1–P7, four things carry real weight, in order:
+
+1. **P2 — window splicing.** The one genuine forgery vector. Code, light client, testable on
+   regtest.
+2. **P4 — the retarget halt.** Blocks testnet; self-contained; testable on regtest.
+3. **The vault has no instruction set designed.** Release, burn, escrow and return do not exist
+   even on paper, so there is nothing to audit and P8/P10 depend on it. **This is the largest
+   design gap left.**
+4. **Cross-deployment replay.** Nothing binds a BSV deposit to *this* Solana deployment. If
+   SOLBEAM is ever deployed twice, the same deposit could mint on both — the recipient address is
+   a Solana pubkey and would resolve identically. **Not previously recorded anywhere.**
+
+Plus three smaller items: who pays the **first-time ATA rent** (~$0.11 per new user, the largest
+per-user cost and the only one that does not come back on its own); **A7's missing test**; and the
+**five unexamined areas** in section 4, of which the order book's economics matter most because
+D2's auto-approve rests on reasoning that has never been adversarially tested.
+
 ## 1. Live in shipped code — fix or decide before writing anything new
 
 ### P1 — The checkpoint race · **critical, unfixed**
@@ -172,9 +191,29 @@ system and it needs no attacker.
 
 </details>
 
-### P7 — Detection has no reward · **F3**
+### P7 — Largely dissolves · **was F3**
 
-**Context: this is a Solana-side job.** The light client lives on Solana and stores BSV block
+**Downgraded after review, because the framing was wrong.** P7 was written as though the risk were
+that someone relays *wrong* information. That was never the risk: the relayer is entirely
+untrusted and the program **verifies every header**. A header that does not link to the tip, that
+declares its own difficulty, or that misses the target is rejected outright, and the relayer pays
+the fee for the privilege. Relaying bad information does not work.
+
+What remained was **liveness** — whether anyone bothers to deliver headers at all — and that is
+much smaller than it looked:
+
+- The cost is about **$0.39 a week**.
+- **Anyone who wants to mint needs the tip current**, because a deposit is proven against it.
+- On the unbacked path, which is the **initial liquidity provision**, the party with a pending
+  deposit is exactly the party motivated to advance the chain, and at genesis there is nothing
+  worth attacking yet.
+
+So this is a chore nobody minds doing, not a design flaw. **No bounty is needed for the PoC.**
+The genuine residual is narrower and already covered by P2: a *valid fork* block can be pushed and
+taken as the tip, and it is replaced only by a strictly heavier branch — which is where window
+splicing becomes possible.
+
+**Context, for the record: this is a Solana-side job.** The light client lives on Solana and stores BSV block
 hashes in its account. For it to know a new BSV block exists, **someone must submit a Solana
 transaction calling `push_header`.** That is what "pushing headers" means — one Solana
 transaction per BSV block, ~$0.0004 each, about **$0.39 a week** in total.
