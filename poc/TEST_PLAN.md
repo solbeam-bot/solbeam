@@ -394,43 +394,33 @@ cannot be what refuses it; the check was verified by removing it and watching th
 
 ### 4.7 How large the rolling window should be
 
-The window was **64 headers** because 64 was a number that worked. Nothing justified it, and 64 headers is only about ten hours — a duration nobody chose. **The window should be sized by time, not by an arbitrary count**, and it is now **48 hours** (288 headers at BSV's ten-minute target).
+The window was **64 headers** because 64 was a number that worked. Nothing justified it, and 64 headers is only about ten hours — a duration nobody chose. **The window should be sized by time, not by an arbitrary count**, and it is now **32 hours — 192 records** at BSV's ten-minute target.
 
-A day is the right scale because of what a deeper reorg would mean. If BSV reorganises by more than a day, the problem is not that the window should have been larger — it is that BSV is broken, and the peg has far larger problems than its header history. Sizing the window against that case is defending the wrong thing. Forty-eight hours leaves a full day of margin over that line.
+**It is not 48 hours, and the reason is worth recording, because the first answer was wrong.** The window has to hold enough history for the difficulty rule to verify the *next* header: cw-144 looks back `nHeight - 144` and takes a median of three blocks at each end, so it needs **147 records** before it can check a single header. The window must therefore be **at least 147**, which rules out anything measured against a shorter horizon. Above that floor it is bounded by the account cap, and 192 is the largest that fits with real margin. **147 of the 192 are consumed by the difficulty rule itself.**
 
-**The change was nearly a trap, and the reason is worth recording.** Solana caps account creation at **10,240 bytes**: `init` allocates the whole `LightClient` in one instruction, and exceeding the cap makes `initialize` revert. It does not degrade, truncate or warn. With the original 116-byte `HeaderRecord`, a window of this length is **33,478 bytes**, so the obvious change would have failed outright. The window is only affordable because the record was cut twice — first by storing what verification uses and deriving the rest, then by dropping the one field that was derivable from data already present:
+A day is still the right scale for the *reasoning*: if BSV reorganises by more than a day, the problem is not that the window should have been larger — it is that BSV is broken, and the peg has far larger problems than its header history. But 32 hours is what the arithmetic allows rather than what the argument would prefer, and the deposit deadline is set by the window, not by the argument.
+
+> **This is the section where a wrong premise survived longest.** It previously said the record needed only a hash, because "`bits` … read once on push, dead afterwards". That is true of Bitcoin's 2016-block difficulty and false of BSV's, which recalculates **every block** (see [`W1`](../workstreams/W1-light-client-verification.md)). Chainwork and time are needed on every header, and the record is 52 bytes, not 32.
+
+**The change was nearly a trap, and the reason is worth recording.** Solana caps account creation at **10,240 bytes**: `init` allocates the whole `LightClient` in one instruction, and exceeding the cap makes `initialize` revert. It does not degrade, truncate or warn. With the original 116-byte `HeaderRecord`, a window of this length is far past the cap, so the obvious change would have failed outright. The window is only affordable because the record was cut, then had to grow again:
 
 | Field | Original | Now | Why |
 |---|---|---|---|
 | `height` | 8 | — | Derived from a single `window_start`; the window is contiguous, so a per-record height is implied |
-| `hash` | 32 | 32 | Linkage, and the tip. The only thing that has to be stored |
+| `hash` | 32 | **32** | Linkage, and the tip |
 | `prev` | 32 | — | Linkage already uses the stored `tip_hash`; records link by position |
 | `merkle_root` | 32 | — | **Redundant**: the root is a field inside the header, so the header's hash already commits to it. The claim supplies the header and the program reads the root out of it |
-| `time` | 4 | — | Read once on push, dead afterwards |
-| `bits` | 4 | — | Read once on push, dead afterwards |
+| `chainwork` | — | **16** | **cw-144's numerator.** The target is derived from the *work difference* between two suitable blocks; it cannot be recomputed from `bits` alone |
+| `time` | 4 | **4** | The clamps are on the time difference, so it must be stored |
+| `bits` | 4 | — | Still derivable from the header on push and re-checked against cw-144 |
 | `nonce` | 4 | — | Never used after the proof-of-work check |
 
-`288 × 32 + overhead = 9,322 bytes` — the same account size the earlier 144-header layout needed, now covering twice the time. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
+`110 + 192 × 52 = 10,094 bytes`. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
 
-Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it. The suite is now 17 passing (§0).
+Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it. The suite is now **20 passing** (§0).
 
 Two latent bugs on the reorg path were fixed while the fields were being reshaped: `push_fork` never advanced `window_start` when it pruned the rebuilt window, and it indexed `headers[fork_idx]` directly — which would **panic** in the one state that is genuinely empty, immediately after `initialize`.
 
-**The trade-off this leaves open.** A larger window also survives longer advancer outages: a stalled client is safe but stops minting, so more history means more slack before a checkpoint reset is needed. The cost is rent (linear in the window) and compute on the mint path, because **the whole account is deserialised on every instruction**. At 9,322 bytes that is comfortable against the 200,000 CU budget, but it is the constraint that will bind first if the window grows much further — not rent. The running cost is analysed in [`docs/02-how-it-works.md`](../docs/02-how-it-works.md#what-it-costs-to-run).
-
-## 5. Phase 3 — peg out
-
-> **The mechanism these tests must implement is specified in
-> [`docs/12-peg-mechanism.md`](../docs/12-peg-mechanism.md)** — the peg-in and
-> peg-out flows, the reorg gates, the relayer and bond model, and the parameter
-> classes. That document is the source of truth; where it and this plan disagree,
-> it wins and this plan is updated. The tests below have been aligned with the
-> current model — `bond_R ≥ k × owed_R` with `k = 1`, and every failure path a
-> return rather than a mint — but `docs/12` remains authoritative.
-
-**Goal: the enforcement path works — burn, pay, prove, settle — and cheating is bounded, punished, or both.**
-
-This is where the trust-minimised machinery lives, and where the recent trust-model corrections ([`docs/04-trust-model.md`](../docs/04-trust-model.md#the-naked-option-attack)) turn into tests. The bond is **denominated in `solBSV`** and sized **`bond_R ≥ k × owed_R` with `k = 1`** (D5), where `owed_R` is the per-relayer liability the program accumulated from proofs it verified itself — **including staged mints still in the vault** (F4). A relayer's own float is **not** covered by the bond. The reserve invariant `custodied BSV ≥ outstanding solBSV` is **monitored and published, not enforced** (D8): the reserve is off-chain BSV the program cannot read.
 
 ### 5.1 What gets built
 
