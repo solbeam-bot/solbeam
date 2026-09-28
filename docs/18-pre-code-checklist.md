@@ -41,6 +41,48 @@ per-user cost and the only one that does not come back on its own); **A7's missi
 **five unexamined areas** in section 4, of which the order book's economics matter most because
 D2's auto-approve rests on reasoning that has never been adversarially tested.
 
+### P11 — Cross-deployment replay · **fix defined, cheap now and awkward later**
+
+**Yes — redeploying the same code is the bug.** Nothing in a deposit commits to *which* Solana
+deployment it is for.
+
+Concretely: the `OP_RETURN` carries the **recipient's Solana pubkey**. A second deployment of the
+same program — a fresh program id, its own light client, its own checkpoint — would verify the
+same BSV deposit, because the proof is against the BSV chain and the recipient pubkey resolves
+identically on both. The same BSV would then back `solBSV` on **two** deployments.
+
+It is not a double-spend of one token: the two deployments have **different mint addresses**, so
+they are different tokens. It is worse in a quieter way — **two tokens each claiming the same
+backing**, and only one of them is backed. The standard wrapped-asset failure.
+
+**The fix, and it is small:** bind the deployment into the deposit. The `OP_RETURN` carries a
+**domain separator** — the program id, or a short hash of it — alongside the recipient, and
+`verify_deposit` rejects a claim whose separator is not this deployment's. A deposit made for
+deployment A then cannot mint on B, because B sees a commitment to A.
+
+**Why now rather than later:** the separator has to be in the *deposit*, which is written by the
+depositor. Adding it after launch means every depositor must change what they sign, and every
+deposit made before the change stays replayable forever. **Cheap to add while `verify_deposit` is
+being touched for P5; painful to retrofit.**
+
+### The first-time ATA rent · **decision needed**
+
+A recipient who has never held `solBSV` needs an associated token account created, which costs
+**0.00149 SOL (~$0.11)** in rent. It is the **largest per-user cost in the system** — against
+$0.0004 for the mint that triggers it — and the only one that does not come back on its own; it
+is recoverable only by closing the account.
+
+Against a 1 BSV minimum deposit (~$30) that is about **0.37%**, comparable to the fee itself.
+
+| Option | Effect |
+|---|---|
+| **Submitter pays (status quo)** ✅ | Minting is permissionless, so whoever submits pays. The app absorbs ~$0.11 per new user as an onboarding cost, and the depositor can reclaim it by closing the account |
+| Protocol reimburses | Cleaner for users; adds accounting and a withdrawal path |
+| Depositor pre-creates the account | Shifts the cost and the rent-reclaim to them, and adds a step before the first deposit |
+
+**Recommended: submitter pays, and say so in the docs.** It is small, it is recoverable, and it
+avoids inventing a reimbursement mechanism for eleven cents.
+
 ## 1. Live in shipped code — fix or decide before writing anything new
 
 ### P1 — The checkpoint race · **critical, unfixed**
