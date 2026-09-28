@@ -1,30 +1,23 @@
 # 12. Peg-in and peg-out: the mechanism
-> ⚠️ **PARTLY SUPERSEDED — the body of this document predates the current design.**
-> It was written before the two-gate vault, the order book and the settled decisions, and
-> parts of it describe a model that was replaced. **Where this document and
-> [`13-summary.md`](13-summary.md) or [`14-decisions.md`](14-decisions.md) disagree, they win.**
->
-> Known-superseded in the body: the bond formula `bond ≥ k × (hot float + tranche)`
-> (now `bond_R ≥ k × owed_R`); a fixed 10 bp fee (now discovered on the order book);
-> failure paths that re-mint (now the escrow is returned, so supply never changes);
-> minting to the depositor (now into the program vault); D2 as an open question (now
-> settled: auto-approve); D5 and D8 as unresolved (now settled); and governance or voting
-> over `FLOOR` (now fixed in code, with no governance in the PoC).
->
-> Sections written after the change — `owed_R`, the order book, the buffer, the audit
-> findings — are current. **A full refresh of this document is outstanding.**
 
-
-
-> **Start with [`13-summary.md`](13-summary.md)** for a description of the system as it
-> stands, then [`14-decisions.md`](14-decisions.md) for what is still open. This document
-> holds the full reasoning.
+> **Start with [`13-summary.md`](13-summary.md)** for the system as it stands, then
+> [`14-decisions.md`](14-decisions.md) for the decisions and what they defer. This
+> document holds the full reasoning.
 >
-> **Status: proposed, for review.** Nothing below is built beyond what is already
-> in Phase 2. This document exists so the mechanism can be argued about on paper
-> — with the trade-offs written down rather than rediscovered — before any of it
-> is coded. **§Recommended state is the thing to review.** The tables in
-> §Considerations record why each choice was made and what was rejected.
+> **Built or designed?** The shipped program is exactly **light client + `solBSV` token +
+> the mint + fork staging**, and it passes 17 on-chain tests. **The vault, the two gates,
+> maturity, release, burn, the order book, staking, bonds, `owed_R`, consent, per-relayer
+> deposit scripts, all of peg-out, `FLOOR` as a distinct parameter, and the difficulty
+> retarget are designed and not built.** The shipped mint goes straight to the depositor's
+> token account, so nothing is staged yet and most of this document is a specification
+> rather than a property of the code.
+>
+> One exception to "not built" is worth stating sharply: **DAA is not merely
+> unimplemented, it is actively rejected.** `check_daa` has **no caller** and
+> `expected_bits` is set once at `initialize` and never refreshed, while `push_header`
+> requires `bits == expected_bits`. The client therefore **halts permanently at the first
+> difficulty retarget** (F7). On regtest that is invisible because the target never
+> changes; on testnet or mainnet the bridge stops minting.
 
 ---
 
@@ -51,7 +44,7 @@ otherwise have appeared and what replaced it:
 
 | Would have needed | Replaced by |
 |---|---|
-| A hashpower or price feed to compute a "safe" confirmation depth | A voted `FLOOR`, plus a depth the depositor chooses and relayers price |
+| A hashpower or price feed to compute a "safe" confirmation depth | A `FLOOR` fixed in code, plus a depth the depositor chooses and relayers price on the book |
 | A feed to price reorg risk | Relayers pricing it into the fee; the website publishing the metrics |
 | A price feed to value the bond | `1 BSV = 1 solBSV` by construction. A deviation is an arbitrage, not an input |
 | An external source for *has BSV reorged, and how deep?* | **The BSV headers themselves.** Chain data, not external data |
@@ -70,54 +63,62 @@ substitution work. The depositor commits their chosen depth in the deposit's
 `OP_RETURN`, so the program **enforces** a market-negotiated term while never
 knowing an external price. It does not need to understand *why* the depth is what
 it is — only that the commitment is honoured and sits at or above `FLOOR`.
+*(Designed, not built: the shipped mint uses the fixed `MIN_CONFIRMATIONS` constant and
+does not parse a committed depth — A14.)*
 
-**The one residual judgement is `FLOOR` itself.** It is a voted policy value rather
-than a measurement: governance, not an oracle. The design has no oracles; it does
-have a parameter somebody has to choose, and *that* is the thing worth arguing
-about.
+**The one residual judgement is `FLOOR` itself.** It is a policy value rather than a
+measurement — 12 BSV blocks, **fixed in code** for the PoC (D4), not a vote: there is
+**no governance mechanism in the PoC at all** (D7), and the mechanism to change `FLOOR`
+is a named gap. The design has no oracles; it does have a parameter somebody had to
+choose, and *that* is the thing worth arguing about.
 
 ## Recommended state
 
 ### Peg-in — BSV → solBSV
 
 ```
-  1. SEND          user pays ≥ MIN_PEG_IN to the bridge P2PKH,
+  1. SEND          user pays ≥ MIN_PEG_IN to a relayer's script,
                    OP_RETURN carries their Solana address
-  2. MATURE        C confirmations, measured in block time
-  3. GATE          no reorg of depth ≥ C seen recently       ─┐
+  2. DEPTH         wait the depth the bid named, measured in block time
+  3. GATE          no reorg of depth ≥ FLOOR seen recently    ─┐
                    tip not stale                               │ any gate fails
                    client not catching up                      │ -> DELAY, not refund
-  4. MINT          solBSV issued to the stated address       ─┘
+  4. MINT          solBSV issued into the program's vault      │ — not to the depositor
+  5. MATURE        no reorg followed -> the vault releases, fee to the stakers
+                   reorg followed    -> the staged tokens are burned. Nobody loses
 ```
 
 **The gates delay; they do not refund.** A deposit that clears is valid — the only
 question is *when* it can be credited. So a gated deposit waits for the gates to
-clear and is then minted normally. The funds stay with the bridge throughout.
+clear and is then minted normally. The funds stay with the bridge throughout, and the
+mint is not liquid when it is credited: it lands in the vault and is released only
+after maturity.
 
 ### Peg-out — solBSV → BSV
 
 ```
-  1. BURN          user burns solBSV, names a BSV destination
-  2. GATE          no reorg of depth ≥ C seen recently       ─┐
-                   outstanding redemptions ≤ capacity          │ any gate fails
-  3. DEADLINE      D hours for a bonded relayer to pay       ─┘ -> request refused,
-  4. PAY           relayer pays BSV from its hot float            burn not taken
-  5. PROVE         relayer submits SPV proof, C_payout deep
-  6. CHALLENGE     W hours to dispute; a reorged payout is caught here
-  7. SETTLE        fee to relayer — or, on failure, RE-MINT and slash the bond
+  1. ESCROW    solBSV moves into the program's vault; a BSV destination is named
+  2. GATE      no reorg of depth ≥ FLOOR seen recently         ─┐ any gate fails
+               outstanding redemptions ≤ capacity               │ -> request refused,
+  3. ACCEPT    a relayer whose bond covers it takes the request  │    escrow not taken
+  4. DEADLINE  D, measured in slots, so a Solana halt freezes the clock
+  5. PAY       the relayer pays BSV from its own float and proves it against the light client
+  6. CHALLENGE W slots for a reorged payout to be caught
+  7. SETTLE    burn the escrowed solBSV, pay the fee
+               or on failure, return the escrow to the holder. Supply never changes
 ```
 
-**Peg-out is gated even though the burn is final.** A reorg cannot invalidate a
-Solana burn, so the naive reading is that peg-out needs no reorg protection. It
-does — but for a smaller reason than it first appears. Peg-out is one exit among
-several, and **gating it is a speed bump rather than the defence.** See
+**Peg-out is gated even though a Solana escrow cannot be reorged.** A BSV reorg
+cannot invalidate Solana state, so the naive reading is that peg-out needs no reorg
+protection. It does — but for a smaller reason than it first appears. Peg-out is one
+exit among several, and **gating it is a speed bump rather than the defence.** See
 §Where the loss actually lands.
 
 ### Parameters
 
 | ID | Parameter | Proposed | Class | Notes |
 |---|---|---|---|---|
-| **P1** | `FLOOR` — minimum deposit confirmations | 12 (~2 h) | **safety** | The hard bound. Depositors may commit to *more*, never less |
+| **P1** | `FLOOR` — minimum deposit confirmations | 12 (~2 h) | **safety** | The hard bound. Depositors may commit to *more*, never less. **Fixed in code for the PoC** (D4). In the shipped program this is the `MIN_CONFIRMATIONS` constant, not a distinct parameter |
 | **P2** | `C_payout` — payout confirmations | 12 | **safety** | Depth before a relayer may claim |
 | **P3** | `D` — redemption deadline | 6 h | liveness | Measured in **slots**, not wall-clock |
 | **P4** | `W` — challenge window | 24 h | **safety** | Must exceed reorg risk on the payout |
@@ -126,13 +127,15 @@ several, and **gating it is a speed bump rather than the defence.** See
 | **P7** | `MIN_PEG_IN` | 10 BSV | economic | Fee economics and dust/spam |
 | **P8** | `MAX_PEG_IN` | 10,000 BSV | economic | Per *transaction* only; see §aggregate mint cap |
 | **P9** | `MAX_PEG_OUT` | 10,000 BSV | economic | **Also bounded by live capacity** |
-| **P10** | `HOT_FLOAT_CAP` | config | **safety** | The real bound on a drain |
-| bond `k` | config | **safety** | `bond ≥ k × (hot float + releasable tranche)` |
+| **P10** | `HOT_FLOAT_CAP` | config | **safety** | The real bound on what a *successful* fraudulent mint can extract. With per-relayer deposits it is each relayer's own float, not a system hot wallet |
+| bond `k` | 1 (D5) | **safety** | **`bond_R ≥ k × owed_R`**, where `owed_R` accumulates only from proofs the program verified itself. Since `bond_R` is `solBSV` the program holds, the inequality is checkable on-chain |
 
-**Safety parameters may only be moved in the conservative direction by
-governance.** Whoever can set `C = 0` or `RECENT_REORG_WINDOW = 0` holds a
-mint voucher; that is categorically different from whoever sets a fee. Loosening
-a safety parameter should require shipping a new program, not flipping a flag.
+**Safety parameters are not freely loosenable, and nothing can loosen them yet.**
+Whoever can set `FLOOR = 0` or `RECENT_REORG_WINDOW = 0` holds a mint voucher; that is
+categorically different from whoever sets a fee. Loosening a safety parameter should
+require shipping a new program, not flipping a flag. There is **no governance mechanism in
+the PoC at all** (D7): `FLOOR` is fixed in code, and the change mechanism is a named gap in
+the deferred design rather than a shipped power.
 
 **Test overrides are compile-time, not config.** "Remove the minimum during
 testing" must be a `#[cfg(feature = …)]`, never a runtime value — a runtime value
@@ -160,8 +163,8 @@ downstream.
 
 | Layer | Lives in | Role |
 |---|---|---|
-| **`FLOOR`** | Consensus — voted, increase-only | The hard protection. Binds every mint regardless of who asks |
-| **Committed depth** | The deposit's `OP_RETURN` | The depositor's own risk choice, enforced by the program |
+| **`FLOOR`** | Consensus — **fixed in code at 12 blocks** (D4) | The hard protection. Binds every mint regardless of who asks. Its change mechanism is deferred (D7) |
+| **Committed depth** | The deposit's `OP_RETURN` | The depositor's own risk choice, enforced by the program — *designed, not built* (A14) |
 | **Relayer preferences** | Off-protocol advert | Preferred depth and size for their best rate |
 | **Recommendation** | The website | An adaptive suggestion with no consensus role |
 
@@ -230,32 +233,34 @@ closes it must close **both ways** — and the secondary market is then free to
 price the risk, which is the honest outcome and the reason the pause is not
 patronising. We stop the protocol, not the market.
 
-### Staking, and a fixed fee
+### Staking, and a discovered fee
 
-**The model is deliberately simple, and the simplicity is the point.** Anyone may
-stake BSV on either side of the fence and earns a share of transfer fees, fixed at
-**10 bp in and 10 bp out**. If it works at that level, price discovery and
-risk-pricing can be layered on afterwards. Building them first would mean tuning a
-market that has not yet been shown to function.
+**The fee is discovered, not set.** Underwriting is an **order book**: stakers post sell
+orders — how much liquidity, at what fee, at what confirmation depth — and incoming
+requests match them **by price, then by time**, partially filled. There is no protocol fee
+parameter to argue about, and the fee in a bid is what the staker asks for the risk it is
+taking. See §The book, below.
 
 Stakers underwrite the system, so a fraudulent mint lands on **people who chose to
 bear that risk** rather than diluting every holder as a discount.
 
-**What a fixed fee makes clear.** With the fee pinned, the *yield* is the clearing
-variable: stakers enter while it beats their cost of capital and leave when it does
-not, so the amount staked settles where the two meet.
+**Depth is a term of the bid, not a protocol constant.** A staker who wants 24 blocks says
+so and the book quotes it; `FLOOR` remains a backstop beneath the market term rather than
+the price itself. A depositor can see the liquidity and the price before committing, which
+is the disclosure the website was already going to provide.
 
-> Daily fees = 0.002 × daily volume, so annual fees = 0.73 × daily volume.
-> At a 10% cost of capital, equilibrium staked capital ≈ **7.3 × daily volume**.
+**A book with no bids is a coherent state, not a broken one.** That is what dissolves the
+bootstrap circularity: the genesis path (D3) seats the first relayer and its bond, after
+which the ordinary path takes over.
 
-That is the number that decides whether the model is practical, and it is worth
-measuring rather than arguing about.
+**What the book fixes about a fixed fee.** A fixed fee cannot price risk: the round trip
+costs the same whether BSV is calm or mid-reorg, so when risk rises stakers want more than
+the fee can pay and they leave — precisely when the most backing is wanted. Pricing the fee
+and the depth **per bid** is the answer to that, and it is why the fixed-fee model was
+replaced rather than layered on later.
 
-**What 10 bp cannot do is price risk.** The round trip costs the same whether BSV is
-calm or mid-reorg. So when risk rises, stakers want more than the fee can pay and
-they leave — precisely when the most backing is wanted. That is the accepted price
-of simplicity here rather than an oversight, and it is the first thing to revisit
-once the loop works end to end.
+**Yield is paid in the asset staked** — BSV for a BSV-side staker, `solBSV` for a
+`solBSV`-side one. See §O1.
 
 ## The attack this defends against
 
@@ -268,27 +273,34 @@ one sequence:
      │ 1. mine a competing branch containing a fake
      │    deposit to themselves (needs hashpower)
      ├─────────────────────────►│
-     │                          │ 2. 12 confirmations on the
+     │                          │ 2. FLOOR confirmations on the
      │                          │    FAKE branch
-     │                          │ 3. mint ───────────────────►│ unbacked solBSV
+     │                          │ 3. mint ───────────────────►│ solBSV staged in the vault
+     │                          │                             │    (not liquid, not sellable)
+     │ 4. release after maturity ─────────────────────────────►│ (only if detection fails)
+     │ 5. peg out ◄───────────────────────────────────────────┤
      │                          │                             │
-     │ 4. peg out ◄───────────────────────────────────────────┤
-     │                          │                             │
-     │ 5. honest chain overtakes the fake branch
-     │                          │  → the mint is now unbacked, but the
-     │                          │    attacker already holds real BSV
+     │ 6. honest chain overtakes the fake branch
+     │                          │  → if still staged, the mint is burned and the
+     │                          │    liability is reversed. If already released and
+     │                          │    sold, the loss lands on the buffer
 ```
 
-Three things make this expensive, and **none of them is detection**:
+The vault is what makes a detected fraud reversible. Three further things make an
+undetected one expensive, and **none of them is detection**:
 
-1. **Proof of work.** Forging `C` blocks must out-mine the honest chain for the
-   duration. `C` is the security parameter that makes this cost more than it pays.
-2. **The hot float cap.** Even a *successful* fraudulent mint cannot drain the
-   whole reserve — only what a relayer can pay out before the cap binds.
-3. **The bond.** `bond ≥ k × hot float` means the relayer's stake covers what
-   the float can lose.
+1. **Proof of work.** Forging `FLOOR` blocks must out-mine the honest chain for the
+   duration. Depth is the security parameter that makes this cost more than it pays.
+2. **The vault and maturity.** A staged mint is not liquid; a followed reorg burns it
+   and reverses the liability, so the fraud never reaches a market.
+3. **The hot float cap.** Even a *successful* fraudulent mint cannot drain more than
+   each relayer's own float can pay before its capacity binds.
 
-Detection — the gates above — is the *fourth* layer. It reduces the window of
+The **bond** does not belong on that list: it is sized against `owed_R`, a relayer's
+measured liability, and it is not reorg insurance. It answers a relayer's deliberate theft
+or abandonment, not the mint.
+
+Detection — the gates above — is a further layer. It reduces the window of
 opportunity and it protects honest users from being caught mid-flight. It is not
 what makes the peg safe, and it should not be sold as such: **a gate that
 depends on someone submitting a competing branch is a liveness assumption, not a
@@ -307,6 +319,11 @@ custodied. The invariant is
 
 and a successful reorg attack violates it by creating supply with nothing behind it.
 The reverse (more BSV than supply) is the *safe* direction, merely inefficient.
+
+**The invariant is monitored, not enforced** (D8). `custodied BSV ≥ outstanding solBSV`
+is published and shown as a ratio on the website, and **the protocol cannot enforce it**,
+because the reserve is off-chain BSV the program cannot read. The program does not check
+it.
 
 ### A fraudulent mint has more than one exit
 
@@ -328,25 +345,29 @@ document previously came close to saying that it was.
 
 Only one mechanism attacks the fraud itself rather than its exit:
 
-- **`C`, the confirmation depth.** It is what makes out-mining the honest chain cost
-  more than the fraud is worth. Every other control silently assumes the fraudulent
-  mint has already happened.
-- **The hot float cap** bounds what the *protocol* can lose once it has.
-- **The bond** covers the protocol's loss, and guarantees the relayer honours
-  redemptions at all.
+- **`FLOOR`, the minimum confirmation depth.** It is what makes out-mining the honest
+  chain cost more than the fraud is worth. Every other control silently assumes the
+  fraudulent mint has already happened.
+- **The vault and maturity**, which make a detected fraud reversible rather than merely
+  bounded.
+- **The hot float cap** bounds what a *successful* attack can extract before a relayer's
+  own float runs dry.
+- **The bond** is sized against `owed_R` and covers a relayer's deliberate theft or
+  abandonment — not the float, not a failed redemption, and not reorg insurance.
 
 The honest consequence, which belongs in the document rather than in a footnote:
-**if `C` is too low, the loss lands on DEX LPs and exchanges, and the protocol cannot
+**if depth is too low, the loss lands on DEX LPs and exchanges, and the protocol cannot
 compensate them.** They are not identifiable from on-chain state, they never
 interacted with the bridge, and there is nothing to re-mint them with. That is a
-stronger argument for setting `C` conservatively than anything about the exit gate.
+stronger argument for setting `FLOOR` conservatively than anything about the exit gate.
 
 ### The staking buffer closes the hole
 
-**Stakers bear the fraud loss**, and what makes that work is *where the stake sits*:
-**in the reserve, as over-collateralisation**. The reserve then holds more BSV than
-there is `solBSV` outstanding, and a fraudulent mint eats the surplus rather than
-anyone's backing.
+**Stakers bear the fraud loss**, through two things: the **bond** the program holds and can
+seize, and each relayer's own **float** of BSV. When detection fails and a fraudulent mint
+releases, the surplus those stakers hold absorbs it rather than anyone's backing — and
+because deposits pay individual relayers, that surplus is per-relayer rather than one
+pooled reserve.
 
 | | Custody | Supply | Peg holds? |
 |---|---|---|---|
@@ -364,14 +385,14 @@ people who never chose it.
 
 > `staked buffer  ≥  maximum mintable within one reorg window`
 
-**But this is not checkable on-chain, and an earlier draft of this section wrongly
-said it was.** The buffer is BSV under a BSV key: the program can count stake deposits
-it has verified, but it cannot read the reserve, spend it, or slash it. The buffer's
-integrity rests on the custodian honouring it — exactly like the rest of the reserve.
-So it is *tracked*, not *verified*, and `S` is an attestation rather than a chain
-fact. The design is not wrong for that, but the buffer is **not** the oracle-free
-guarantee this section previously implied, and "stakers bear the fraud loss" reduces
-in the worst case to "the custodian chooses to honour it".
+**But only part of the buffer is a protocol quantity, and an earlier draft of this section
+wrongly treated the whole of it as checkable on-chain.** Per relayer, `owed_R` is derived
+from proofs the program verified itself and `bond_R` is `solBSV` the program holds, so
+`bond_R ≥ k × owed_R` is checkable and seizable on-chain. The relayer's BSV float is
+off-chain, and the program cannot read, spend or slash it. So the buffer as a whole is
+**tracked and published, not verified** (D8), and "stakers bear the fraud loss" reduces in
+the worst case to each relayer honouring what it holds. The design is not wrong for that —
+it is the honest boundary of what a Solana program can see.
 
 **Three tiers, in order:**
 
@@ -384,34 +405,41 @@ That ratio is the number worth watching.
 
 **This creates one new requirement: unstaking must be delayed.** If stakers can leave
 at will, the first to notice a fraud exits before it is confirmed, leaving a buffer
-sized for a calmer day. An unbonding period is not a nicety — it is what keeps the
-buffer present when it is needed, and it belongs with the same family of parameters as
-the redemption deadline.
+sized for a calmer day. An **unbonding period** — longer than the redemption deadline
+plus the challenge window — is not a nicety: it is what keeps the buffer present when it
+is needed, and it belongs with the same family of parameters as the redemption deadline.
 
 **And the practical tension, stated plainly:** the buffer has to be large enough to
-matter, and whether a fixed 10 bp attracts capital *at that size* is exactly what the
-simple model has to prove. It is measurable, which is the argument for building it.
+matter, and whether the book clears at a fee that attracts capital *at that size* is
+exactly what the model has to prove. It is measurable, which is the argument for
+building it.
 
-### Who gets slashed, and who gets paid
+### What the bond answers — and what it does not
 
-The bond is a **performance bond**. It guarantees the relayer pays valid redemptions.
-It is *not* reorg insurance: a relayer paying out against a fraudulent mint has done
-nothing wrong, because they cannot tell it from a real one.
+The bond is a **performance bond sized against `owed_R`**, the liability the program
+measured. It answers a relayer's **deliberate theft or abandonment**: it makes taking what
+it owes punishable. It is a chain fact rather than an attestation, because `owed_R` is
+accumulated only from proofs the program verified itself.
 
-When a redemption fails, the **supply-conserving** settlement is:
+It is **not** the answer to a failed redemption, and it is **not reorg insurance**:
 
-1. **slash the bond and transfer that `solBSV` to the redeemer**, and
-2. only if the bond is short, **mint the remainder**.
+- **A failed redemption returns the escrow.** The holder's `solBSV` is still in the
+  vault, so on failure it goes back to them and **supply never changes**. Returning the
+  escrow makes the holder whole, so the bond is **not additionally transferred** to them.
+  What the failure exposes is the relayer's abandonment, which is what the bond is for.
+- **The relayer's own float is not covered.** `bond_R ≥ k × owed_R` is sized against the
+  liability, not against everything the relayer holds; the float is its own capital.
+  Separating the two is what makes the inequality meaningful (F4).
+- **A reorged payout is not a slashing matter.** A relayer paying out against a
+  fraudulent mint has done nothing wrong, because it cannot tell that mint from a real
+  one. A payout later reorged away is handled by the challenge window and the return
+  path, not by slashing.
 
-This makes the redeemer whole while **leaving total supply unchanged** wherever the
-bond covers it. Re-minting alone would inflate supply and dilute every holder;
-slashing and transferring moves existing tokens instead. Where the bond is short, the
-shortfall *is* dilution — which is exactly what `k` exists to bound.
-
-**Return-to-sender is a different mechanism and does not apply here.** RTS is for a
-*real* deposit the bridge declines to mint: the funds go back to the address that
-funded the deposit transaction. In a fraudulent mint there is no aggrieved sender —
-the victims are whoever ends up holding the unbacked tokens, which is the market.
+**Return-to-sender is a different mechanism again**, and it does not apply here. RTS is
+for a *real* deposit the bridge declines to mint: the funds go back to the address that
+funded the deposit transaction, derived from that transaction's own inputs. In a
+fraudulent mint there is no aggrieved sender — the victims are whoever ends up holding the
+unbacked tokens, which is the market. RTS is not built (A15).
 
 ## Reorg detection
 
@@ -421,13 +449,15 @@ The trigger compares two depths, not "did anything reorg in the last N hours":
 
 | Observed reorg depth `R` | Response |
 |---|---|
-| `R < C` (e.g. 2-block tip reorg) | **Nothing.** Confirmations already cover it |
-| `R ≥ C` | Pause; re-examine mints credited within the last `R − C` blocks |
+| `R < FLOOR` (e.g. 2-block tip reorg) | **Nothing.** Confirmations already cover it |
+| `R ≥ FLOOR` | The reorg response applies: re-examine mints credited within the last `R − FLOOR` blocks, and stop crediting new ones |
 
 A uniform 12-hour freeze on *any* reorg would stall the bridge through ordinary
 tip churn — a 2-block reorg is normal BSV behaviour and is harmless to a deposit
 that is already 12 deep. The wall-clock window is a convenience bound (12 h ≈ 72
-BSV blocks); **depth is the number that means something.**
+BSV blocks); **depth is the number that means something.** Whether that response is
+enforced by the program as an on-chain gate or merely monitored and published is the one
+open item here — see Decision 5.
 
 ### Rule 2 — read the time from the headers
 
@@ -452,21 +482,23 @@ is the mismatch between **arrival rate and block-time spacing** — signal 2.
 
 | # | Scenario | Handling | Who loses |
 |---|---|---|---|
-| S1 | Clean peg-in | Mint after `C` | Nobody |
-| S2 | Reorg **below** the deposit block, before mint | Proof fails (`HeaderMismatch`); tx is either re-included in the new branch and re-proven, or reorged out and the UTXO is unspent again | Nobody |
-| S3 | Reorg **after** a mint is credited, depth ≥ `C` | Already-minted tokens are **not** reversed — no freeze authority, by design. Pause new activity; rely on `C` having made it uneconomic | Reserve, if `C` was too low |
-| S4 | Clean peg-out | Relayer pays, proves, challenge expires, settles | Nobody |
-| S5 | Payout reorged during the challenge window | Challenge succeeds → bond slashed, user re-minted | Relayer (and the bond) |
-| S6 | Relayer down at the deadline | Deadline expires → automatic re-mint | Relayer, via the bond |
-| S7 | **The attack** — fraudulent mint then peg-out | Gates + hot float cap + bond bound the loss; ≥`C` reorg pauses the exit | Reserve up to the cap; relayer's bond |
-| S8 | Deposit valid but a gate is closed | **Delayed, not refunded.** Funds stay with the bridge; mint proceeds once gates clear | Nobody |
+| S1 | Clean peg-in | Mint after the bid's depth, into the vault; release after maturity | Nobody |
+| S2 | Reorg **below** the deposit block, after the mint was staged | The staged tokens are burned. Re-inclusion does **not** restore the mint by itself: the deposit identity stays in the replay list, so the depositor cannot mint again until burning a staged mint also removes its replay entry (**F1**). With that entry removed, the re-mined deposit mints normally | Depositor, until F1 is fixed |
+| S3 | Reorg **after** a mint, depth ≥ `FLOOR` | If the mint is **still staged in the vault**, it is burned and the liability reversed. Only a mint that has already **released** cannot be reversed — no freeze authority, by design. Pause new activity; rely on depth and the buffer | The buffer, if depth was too low and release had happened |
+| S4 | Clean peg-out | Relayer pays, proves, challenge expires, settles; the escrow is burned and the fee paid | Nobody |
+| S5 | Payout reorged during the challenge window | The challenge catches it; the redemption does not settle and the **escrow is returned to the holder**. Supply is unchanged. The relayer has lost the BSV it paid — the bond is not reorg insurance | Relayer (its own float) |
+| S6 | Relayer down at the deadline | Deadline expires → the **escrow is returned** to the holder. Nothing mints; supply is unchanged | Nobody loses tokens; the relayer is the party at fault |
+| S7 | **The attack** — fraudulent mint then peg-out | The vault stages the mint; gates, the hot float cap and the bond bound the loss; a reorg of depth ≥ `FLOOR` burns the staged mint and pauses the exit | The buffer, if detection fails and the mint released; otherwise nobody |
+| S8 | Deposit valid but a gate is closed | **Delayed, not refunded.** Funds stay with the bridge; the mint proceeds into the vault once the gates clear | Nobody |
 
 ### If a refund is ever needed
 
 Refunds are the exception, and the rule is absolute: **return to sender.** The
 destination is the address that funded the deposit transaction, derived from that
 transaction's own inputs — never a relayed or user-supplied destination. Anything
-else turns "refund" into a way to redirect someone else's coins.
+else turns "refund" into a way to redirect someone else's coins. This is **not built**
+(A15), and it is not the vault's return path, which moves tokens the program already
+holds.
 
 The UX must show this before it can happen, so it is never a surprise: a
 **greyed-out box reading "if refunded, it goes back to the sender address"**,

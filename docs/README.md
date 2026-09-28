@@ -14,7 +14,7 @@ Take terms from the order book — how much liquidity, at what fee, and at what 
 
 ## Step 2 — Send, then wait the agreed depth
 
-Send BSV to the named deposit script, attaching an `OP_RETURN` that carries your Solana address. After **the depth the bid named** — a term of the trade, not a fixed constant — `solBSV` is minted into the program's **vault**, not to you, and released to your wallet once a maturity window passes with the deposit still canonical. If a reorg is followed in the meantime, the staged tokens are burned and you end exactly where you started.
+Send BSV to the named deposit script, attaching an `OP_RETURN` that carries your Solana address. After **the depth the bid named** — a term of the trade, not a fixed constant — `solBSV` is minted into the program's **vault** — as designed, not to you — and released to your wallet once a maturity window passes with the deposit still canonical. If a reorg is followed in the meantime, the staged tokens are burned and you end exactly where you started.
 
 ```
    STEP 1                 STEP 2                    RESULT
@@ -39,13 +39,13 @@ BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals 
 
 | | |
 |---|---|
-| **Minting is trustless** | A BSV light client on Solana verifies your deposit. No attestor approves it, no oracle signs off. The proof *is* the authorisation, and the mint lands in the program's vault |
+| **Minting is trustless** | A BSV light client on Solana verifies your deposit. No attestor approves it, no oracle signs off. The proof *is* the authorisation, and the design stages the mint in a program-owned vault |
 | **Redemption is permissionless and optimistic** | Anyone can become a bonded "relayer" who pays out BSV. If a payout doesn't happen in time, the holder is automatically made whole |
 | **No federation, no operator** | No named signer set, no validator committee, no governance body holding funds. A relayer is a role anyone may run, not a privileged party |
 | **No pooled reserve** | Deposits pay individual relayers. There is no pooled hot wallet and no covenant-locked cold reserve to trust — aggregation is what creates a single key worth stealing |
 | **Market layer is external** | Liquidity comes from Raydium / Orca, P2P orderbooks and market makers. SOLBEAM is the wrapper, not an exchange — and once `solBSV` is on a market, that exit is outside the protocol's control |
 | **Trading is instant** | Only the peg has latency. Traders on a pool, a P2P swap or a market maker never wait for it — see [Markets & liquidity](11-markets-and-liquidity.md) |
-| **Exit is slower than entry** | Minting is trustless and stages the mint through the vault. Redemption waits on a bonded relayer and a slot-measured deadline, and relayer capital unbonds on a notice period. The fast direction is the one that needs no trusted party |
+| **Exit is slower than entry** | Minting is trustless; as designed it stages the mint through the vault. Redemption waits on a bonded relayer and a slot-measured deadline, and relayer capital unbonds on a notice period. The fast direction is the one that needs no trusted party |
 | **Bonds are in `solBSV`** | A relayer's collateral is the same asset as the exposure, so no BSV price move can shrink it relative to what it protects — and no oracle is needed to keep the two matched |
 | **FOSS** | The light client, programs and relayer software are open source |
 

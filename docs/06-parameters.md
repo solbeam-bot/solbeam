@@ -1,8 +1,10 @@
 # 6. Parameters & governance
 
-> **Specification, not shipped behaviour.** The light client, the token and the mint are
-> **built and tested** (17 on-chain tests). **The vault, the order book, per-relayer deposits
-> and all of peg-out are designed and not built.** The shipped program mints straight to the
+> **Specification, not shipped behaviour.** The light client, the token, the mint and fork
+> staging are **built and tested** (17 on-chain tests). **The vault, the two gates, maturity, the
+> order book, staking, bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a
+> distinct parameter and all of peg-out are designed and not built.** DAA is **actively rejected
+> in the built client** (F7), not merely absent. The shipped program mints straight to the
 > depositor's token account, so the parameters below that depend on the vault or on a book are,
 > at this moment, a specification rather than a property of the code.
 
@@ -20,7 +22,7 @@ parameters.
 | **P2** | `C_payout` — payout confirmations | **12 BSV blocks** | **safety** | Depth a relayer must reach before it may claim a redemption was paid |
 | **P3** | `D` — redemption deadline | **6 h of Solana slots** | liveness | Measured in **slots**, not wall-clock, so a cluster halt freezes the clock rather than burning the relayer who could not act |
 | **P4** | `W` — challenge window | **24 h** | **safety** | Must exceed the reorg risk on the payout; a reorged payout is caught here |
-| **P5** | `RECENT_REORG_WINDOW` | **12 h** | **safety** | Depth-aware: a reorg of depth `R ≥ FLOOR` pauses, `R < FLOOR` is ordinary tip churn and is ignored. The wall-clock window is only a convenience bound |
+| **P5** | `RECENT_REORG_WINDOW` | **12 h** | **safety** | Intended as depth-aware: a reorg of depth `R ≥ FLOOR` would pause releases, `R < FLOOR` is ordinary tip churn and is ignored. **Whether it is enforced as an on-chain gate or merely monitored and published is a known open item** — it is a safety parameter either way, and this document does not assert which until that is decided |
 | **P6** | `TIP_STALENESS` | **2 h** | **safety** | Pause if the tip stops advancing. The one signal that needs a wall clock, and only for "now" |
 | **P7** | `MIN_PEG_IN` | **10 BSV** | economic | Fee economics, dust and spam. Unimplemented (A9) |
 | **P8** | `MAX_PEG_IN` | **10,000 BSV** | economic | Per *transaction* only. It does **not** bound a reorg — see §The limit that does not bound a reorg |
@@ -35,7 +37,8 @@ failure to slip through. `FLOOR` is a backstop beneath a market term, not a pric
 deposit actually waits is a **term of the bid**, committed in the deposit's `OP_RETURN`, and the
 program enforces both `confirmations ≥ committed_depth` and `committed_depth ≥ FLOOR`.
 
-**Safety parameters may only be moved in the conservative direction.** Whoever can set
+**Safety parameters may only be moved in the conservative direction** — a rule for the deferred
+governance design, not a description of anything that exists (D7). Whoever can set
 `FLOOR = 0` or `RECENT_REORG_WINDOW = 0` holds a mint voucher; that is categorically different
 from whoever sets a fee. Loosening a safety parameter should require shipping a new program, not
 flipping a flag.
@@ -80,7 +83,9 @@ The second error was the **pooled hot float and covenant tranche** the old formu
 against. That object no longer exists: deposits pay a relayer's own script, so there is no shared
 reserve to bound, and the constraint moved to `bond_R ≥ k × owed_R` per relayer. `k = 1` is
 defensible because `solBSV` and BSV are the same asset, so any deviation is an arbitrage and
-closes. The recorded consequence is that at `k = 1` a self-dealing attack is roughly break-even,
+closes — no price margin is needed. `k` is a **sizing multiple on `owed_R`**, not a discount for a
+hoped-for detection probability: the measured liability is what sets the required collateral. The
+recorded consequence is that at `k = 1` a self-dealing attack is roughly break-even,
 and what makes it unprofitable is the **mining cost of the reorg**, not the bond (D5). The bond's
 job is covering an honest relayer's shortfall.
 

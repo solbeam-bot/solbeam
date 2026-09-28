@@ -2,15 +2,18 @@
 
 SOLBEAM is deliberately asymmetric: **trustless in, trust-minimised out.** This chapter states exactly what you are trusting, and why.
 
-> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain
-> tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and
-> not built.** The shipped program mints straight to the depositor's token account, so nothing
-> is staged and no relayer holds a bonded float yet. Every property below is therefore one of
-> three things, and they are labelled:
+> **Built or designed?** The light client, the token, the mint and fork staging exist and pass 17
+> on-chain tests. **The vault, the two gates, maturity, the order book, staking, bonds, `owed_R`,
+> consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all of peg-out are
+> designed and not built.** DAA is worse than absent — it is **actively rejected in the built
+> client** (F7), not merely unimplemented. The shipped program mints straight to the depositor's
+> token account, so nothing is staged and no relayer holds a bond yet. Every property below is
+> therefore one of three things, and they are labelled:
 >
-> - **built** — the light client, the token and the mint, as they stand;
-> - **designed** — the vault, maturity, per-relayer deposits, `owed_R` and `bond_R`, and all of
->   peg-out. Specified, not coded;
+> - **built** — the light client, the token, the mint and fork staging, as they stand;
+> - **designed** — the vault, the two gates, maturity, the order book, staking, bonds, `owed_R`,
+>   consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter (the shipped mint uses a
+>   fixed `MIN_CONFIRMATIONS = 12`), and all of peg-out. Specified, not coded;
 > - **trusted** — off-chain, and not enforceable by the program at all.
 
 ## Summary
@@ -21,7 +24,7 @@ SOLBEAM is deliberately asymmetric: **trustless in, trust-minimised out.** This 
 | Backing (1 `solBSV` = 1 BSV) | **Trustless accounting** for what the program has verified. The BSV itself is held by relayers, off-chain, and is counted rather than read |
 | Reserve custody at large | **No pooled reserve.** Deposits pay each relayer's own BSV script, so there is no single key worth stealing. *Designed, not built* |
 | Redemption payout | **Trust-minimised** — a bonded relayer holds its own float and owes what the program has credited against it |
-| The bond | `bond_R ≥ k × owed_R`, **with `k = 1`**, in seizable `solBSV`. Both sides are protocol quantities, so the inequality is checkable on-chain. *Designed, not built* |
+| The bond | `bond_R ≥ k × owed_R`, **with `k = 1`**, in seizable `solBSV`. It answers a relayer's deliberate theft or abandonment of what it owes (`owed_R`, including staged mints still in the vault) — **not a reorg, not a failed redemption, and not the relayer's own float**. Both sides are protocol quantities, so the inequality is checkable on-chain. *Designed, not built* |
 | Reversibility | **The vault** — a program-owned account, so a staged mint can be burned or returned with no freeze authority. *Designed, not built* |
 | Censorship of mints | **None** — anyone can mint, for anyone |
 | Censorship of redemptions | **Bounded** — a relayer may decline, but the deadline returns the escrow and supply never changes |
@@ -34,7 +37,7 @@ SOLBEAM is deliberately asymmetric: **trustless in, trust-minimised out.** This 
 **Solana can verify BSV.** BSV uses double-SHA-256 proof-of-work over an 80-byte header, and Solana exposes a native SHA-256 syscall. So a BSV light client on Solana can check, from first principles:
 
 - the header chain links correctly,
-- each header meets its difficulty target (including BSV's difficulty adjustment),
+- each header meets its difficulty target — **with a caveat: DAA is actively rejected in the built client, not merely absent.** `check_daa` is a stub with no caller and `push_header` requires `bits` to equal the value fixed at initialization, so the client **halts permanently at the first retarget** (F7). Following BSV's difficulty adjustment is designed, not built;
 - a given transaction is included in a given block via its Merkle branch.
 
 Minting is authorised by that proof alone. There is no attestor to bribe, no oracle to spoof, no committee to capture, and no way to censor a mint.
@@ -51,7 +54,7 @@ So at the instant of redemption, *some key must exist*. This is a property of th
 - **isolated** — deposits pay individual relayers, so a theft reaches one relayer's float and not the system's;
 - **bonded in the same unit as the exposure** — the bond is `solBSV`, so no BSV price move can shrink it relative to what it protects;
 - **bonded against a measured liability** — `owed_R` is accumulated from proofs the program verified itself, so the number the bond must cover is a protocol quantity rather than an attestation;
-- **fraud-punishable** — a payout that is not made, or is reorged away, is provable on Solana and slashes the bond;
+- **fraud-punishable** — a relayer that absconds with what it owes is provable on Solana and its bond is seizable; a failed redemption is **not** a bond transfer, because returning the escrow already makes the holder whole;
 - **consented to** — a mint is credited to a relayer only with that relayer's signature accepting the liability, so no relayer is slashed for an attack it never agreed to underwrite.
 
 Bonding can make theft *unprofitable*. It cannot make it *impossible*, and it does nothing at all against an attacker who never posted a bond. The rest of this chapter is about how much that actually costs.
@@ -63,8 +66,8 @@ Bonding can make theft *unprofitable*. It cannot make it *impossible*, and it do
 | Burn / redemption request | The Solana program — native state, nothing to prove. *Designed, not built* |
 | Deposit (BSV → mint) | The Solana program, against the BSV light client |
 | Payout (BSV → redeem) | The Solana program, against the BSV light client. *Designed, not built* |
-| Failed redemption | Automatic — the program returns the escrow after the deadline, and slashes the bond. Supply is unchanged. *Designed, not built* |
-| Unauthorised spend of a relayer's float | **Nobody can, on-chain.** `owed_R` measures what a relayer *owes*, not what it *holds*; the BSV is off-chain and the program cannot read it. The failure that is visible is a missed redemption, and that is what the bond answers |
+| Failed redemption | Automatic — the program returns the escrow to the holder after the deadline. Supply is unchanged and **the bond is not additionally transferred**, because the returned escrow already makes the holder whole. *Designed, not built* |
+| Unauthorised spend of a relayer's float | **Nobody can, on-chain.** `owed_R` measures what a relayer *owes*, not what it *holds*; the BSV is off-chain and the program cannot read it. A missed redemption is answered by returning the escrow, **not by the bond**; the bond answers `owed_R`, the liability the relayer has been credited and not discharged, and the float itself is not covered by it (F4) |
 
 Verification is always done by deterministic on-chain code, and it is only as complete as the paths that exist. The deposit path is built; the redemption path is not. On the built path, no committee is needed and no watcher is needed at all — the program checks every deposit proof itself.
 
@@ -76,7 +79,7 @@ That last point carries more weight than it first appears, and it is a **correct
 2. **Exposure.** `bond_R ≥ k × owed_R` — **with `k = 1`** (decision D5) — **with both sides protocol quantities in `solBSV`**: `owed_R` is what the program has credited relayer `R` from proofs it verified itself, and `bond_R` is `solBSV` the program holds and can seize. Because the bond and the exposure are the same asset, the inequality holds at every BSV price — no oracle, no governor, no reaction window. Because *both* quantities are known to the program, the inequality is **checkable on-chain**: a mint naming `R` is refused unless the check passes. *Designed, not built.*
 3. **No pooled reserve.** There is no shared bridge address and no single key whose theft drains everything. Deposits pay the relayer's own script, so exposure is per-relayer and bounded by that relayer's bond. This removal is *designed, not built*: today the mint path is the only path, and there is no relayer registry.
 4. **Reversibility without a freeze authority.** Every mint lands in a program-owned vault, released after a maturity window, or **burned** if a reorg is followed. Because the tokens are in the program's own account, burning and returning them is disposing of what it holds rather than confiscation. *Designed, not built.*
-5. **Solvency after a failed redemption.** With `bond_R ≥ k × owed_R`, the slashed bond covers the liability: at `k = 1` the redeemer is made whole and the shortfall is bounded at zero, and the program never mints a failure path. **Solvency must therefore not depend on anyone submitting a proof** — which is what invariant 2 is for.
+5. **Solvency after a failed redemption.** The escrow is **returned to the holder** and supply is unchanged, so the redeemer is made whole **without touching the bond** — the bond is not additionally transferred, because the returned escrow already does the job. The bond's own job is `owed_R`: the liability the program has credited and the relayer has not discharged, **including staged mints still in the vault**. **Solvency must therefore not depend on anyone submitting a proof** — which is what invariant 2 is for.
 6. **Holder protection.** Every redemption either completes or the escrow is automatically returned after the deadline. Supply is unchanged either way. *Designed, not built.*
 7. **Bonds lock.** A bond withdrawable on demand is not a bond. Release requires settling outstanding commitments and waiting out the unbonding period, which outlasts both the redemption deadline and the challenge window.
 
@@ -84,11 +87,11 @@ That last point carries more weight than it first appears, and it is a **correct
 
 | Threat | Answer |
 |---|---|
-| Relayer takes the deposit and never pays | The redemption's deadline passes, the escrow is returned to the holder, and the bond is slashed. Self-reporting, no watcher required |
-| Relayer spends its own float (naked spend, no redemption outstanding) | This is the relayer's own money, and no holder is out of pocket — but see §The naked-option attack for why the residual still sets a constraint. Structurally reduced by **per-relayer isolation** and by **holding no idle float** |
+| Relayer takes the deposit and never pays | The redemption's deadline passes and the escrow is **returned to the holder**, which makes them whole; supply is unchanged and the bond is **not additionally transferred**. Self-reporting, no watcher required |
+| Relayer spends its own float (naked spend, no redemption outstanding) | This is the relayer's own money, and no holder is out of pocket — but see §The naked-option attack for why the residual still sets a constraint. **The bond does not cover it**; structurally reduced by **per-relayer isolation** and by **holding no idle float** |
 | A relayer's float is stolen by an outsider | The thief never posted a bond, so the slash compensates nothing directly — but the loss is confined to that one relayer's float, not a pooled reserve. Mitigated by per-relayer isolation and key hygiene |
 | Nobody fulfils redemptions | Escrows are returned to holders after the deadline; open redemption is a public race, and the discovered fee attracts relayers |
-| Fake deposit proof | Rejected by the light client (PoW / DAA / Merkle) |
+| Fake deposit proof | Rejected by the light client (proof of work and Merkle inclusion). The difficulty-retarget check is a stub, so a retargeted chain **halts the client** rather than being followed — DAA is actively rejected, not merely absent (F7) |
 | Mint staged, then a reorg is followed | The vault **burns** the staged tokens. The depositor's BSV is reorged away with the deposit, and they end where they started. Nobody else is affected. *Designed, not built* |
 | Reorg after the vault has released | Depth, maturity and `FLOOR` are what make out-mining the honest chain cost more than the fraud is worth. Depth is a term of the bid; `FLOOR` is the backstop |
 | Self-dealing at `k = 1` | An accepted risk (D5). The attacker is underwriting their own deposit, so it is roughly break-even — and what makes it unprofitable is **the mining cost of the reorg**, not the bond. It is unprofitable only to the extent detection works |
@@ -100,39 +103,24 @@ That last point carries more weight than it first appears, and it is a **correct
 
 ## The naked-option attack
 
-The most important attack on this design needs no redemption at all, and it is worth stating in its simplest form because it is what sets the shape of the bond.
+The residual this design cannot close with collateral needs no redemption at all, and it is worth stating in its simplest form because it is what the float cap is for.
 
-Anyone holding a relayer's key can:
-
-1. Spend that relayer's float to themselves.
-2. Accept the slash, if it comes.
-
-No burn, no redemption, no deadline, no victim. That position is a **naked option**: pay the bond `B`, receive the float `H`. It pays exactly when `H > B` — and it is *strictly easier* than attaching the theft to a redemption, because a redemption is what creates the deadline that slashes with certainty.
+Anyone holding a relayer's key can spend that relayer's BSV float. No burn, no redemption, no deadline, no victim. But this is **not a claim on the bond**: the float is the relayer's own money and the bond does not cover it (F4). What the bond covers is `owed_R`, and a relayer that has spent BSV it owes has failed that liability. A relayer that spends its own idle float, owing nothing, has taken nothing the program can reach — which is why the float should be small, and why the bond is sized against `owed_R` rather than against a quantity the program cannot read.
 
 **The burn is not the attack; the burn is the liability.** The enforcement path that fires automatically is precisely the one an intelligent attacker avoids.
 
-**The reasoning is unchanged. The object it bounds is not.** It used to be one pooled hot wallet operated by a relayer; it is now **each relayer's own float**, and the liability the bond answers is `owed_R` rather than the float itself. Two things follow, and they cut in opposite directions:
+**The reasoning is unchanged. The object it bounds is not.** It used to be one pooled hot wallet operated by a relayer; it is now **each relayer's own float**, and the liability the bond answers is `owed_R` rather than the float itself. Two things follow:
 
 - **Better than before.** The object is *distributed*. There is no single key whose compromise is everyone's loss, and no pooled reserve contract to write, audit or trust. A relayer can only lose its own float, and its liability is a number the program derives from proofs it checked.
-- **Still bounded by detection.** The program cannot see the off-chain BSV, so it cannot size the bond against a float it cannot read. What it *can* do is size the bond against `owed_R` — what it has credited — and require consent, so a relayer only owes what it agreed to underwrite. The residual attack is a relayer spending its own float and accepting that it must still pay what it owes, or not.
+- **Still not readable on-chain.** The program cannot see the off-chain BSV, so it cannot size the bond against a float it cannot read. What it *can* do is size the bond against `owed_R` — what it has credited — and require consent, so a relayer only owes what it agreed to underwrite. The residual is a relayer spending its own float; that is operating discipline and a float cap, not a bond claim.
 
-### The cost, and why `k` is a detection parameter
+### What `k` is for
 
-The attacker's cost is not `B`. It is:
+**`k` is a sizing multiple on `owed_R`, nothing more.** The constraint is `bond_R ≥ k × owed_R`, and because `owed_R` is derived from proofs the program verified itself, both sides are quantities it can compare on-chain. **`k = 1`** (D5) means the bond covers the credited liability in full. There is no detection probability in the formula and no discount for one.
 
-```
-expected cost  =  B × P(slashed)
-```
+It is not a price hedge. The bond is denominated in `solBSV`, the same asset as the exposure, so the price position is *removed* rather than hedged — there is no price job for `k` to do. Raising `k` would buy margin against the liability `owed_R` already measures, not against a guess about who is watching.
 
-because a naked spend is punished only if the theft strands a commitment someone can prove. Deterrence therefore requires:
-
-```
-B  >  H / P
-```
-
-This is the honest meaning of the safety factor `k`: **`k` is roughly `1/P` — a guess at detection probability wearing a number.** Sizing a bond on an assumption about human vigilance is the weakest link in the model.
-
-**What per-relayer deposits do to `k` is replace the guess with a measurement, for the part of the exposure the program can see.** `owed_R` is derived from verified proofs, and a missed redemption reports itself at its deadline, so for the bonded liability `P` is effectively 1 and `k = 1` is defensible (decision D5). `k` has no price job left — the bond is `solBSV` either way — so its only remaining job is the part the program *cannot* see, which is the relayer's own idle float. That is the residual, and the fix is structural rather than a larger number.
+The part the program *cannot* measure — the relayer's own idle float — is not something any value of `k` reaches, because the float is not owed. That residual is bounded structurally: per-relayer isolation, a float cap, and holding no idle float.
 
 ### Closing it, strongest first
 
@@ -140,11 +128,11 @@ This is the honest meaning of the safety factor `k`: **`k` is roughly `1/P` — 
 2. **Hold no idle float.** If a relayer carries little beyond what it owes, a naked spend has little to take. This is operating discipline rather than a chain guarantee — the program cannot read the BSV — and it should be described as such.
 3. **Bond against `owed_R`, and require consent.** The gate is checkable on-chain: a mint naming relayer `R` is refused unless `bond_R ≥ k × (owed_R + this mint)`, and it needs `R`'s signature accepting the liability. Consent is what makes slashing `R` for a shortfall defensible rather than arbitrary, and it converts reorg risk from an externality into a term `R` prices.
 4. **An unbonding period.** Release of the bond must outlast the redemption deadline plus the challenge window, or a relayer can take a job, withdraw, and be gone before anyone can respond.
-5. **Size `k` against the residual.** With `solBSV` denomination, `k` has no price job left. Once steps 1–4 land, `k` can stay at `1` for the bonded liability and any operational margin above it is a choice rather than a requirement.
+5. **Keep `k` sized against `owed_R`.** `k = 1` already covers the bonded liability, and the float is not owed, so it is not a `k` question at all. Any operational margin a relayer keeps above the bond is its own business decision, not a protocol requirement.
 
 ### Why the bond is `solBSV` and not a stablecoin
 
-A stablecoin bond against a BSV liability is not a bond. It is a **written call option on the reserve, struck at `bond ÷ float`**. Post `$500k` against a `10,000 BSV` reserve and the relayer is short `5,000 BSV`. Move BSV from `$50` to `$100` and the option is in the money: absconding becomes the *rational* trade. The attacker does not even need to time it well, because a large holder can help the price along and manufacture the strike.
+A stablecoin bond against a BSV liability is not a bond. It is a **written call option on the reserve, struck at the ratio of the stablecoin bond to the BSV exposure it must cover**. Post `$500k` against a `10,000 BSV` reserve and the relayer is short `5,000 BSV`. Move BSV from `$50` to `$100` and the option is in the money: absconding becomes the *rational* trade. The attacker does not even need to time it well, because a large holder can help the price along and manufacture the strike.
 
 A price governor cannot fix a written option. It is reactive by construction, it needs an oracle — a new trust assumption and a new manipulation surface — and there is always a window between the move and the throttle. That window *is* the trade.
 
@@ -154,9 +142,9 @@ The per-relayer version sharpens this rather than weakening it. The bond is now 
 
 ### A slashed theft is deflationary
 
-Because the bond is `solBSV`, a slash removes supply while the reserve falls by the stolen amount. With `B ≥ H`, backing per remaining token **rises**. Honest holders are not merely protected — they end up marginally better collateralised. A stablecoin bond has the opposite property: it has to be sold at a price to make holders whole, so the system absorbs the theft *and* the market move.
+Because the bond is `solBSV`, a slash removes supply while the reserve falls by the stolen amount. Where the bond covers the liability (`bond_R ≥ owed_R`), backing per remaining token **rises**. Honest holders are not merely protected — they end up marginally better collateralised. A stablecoin bond has the opposite property: it has to be sold at a price to make holders whole, so the system absorbs the theft *and* the market move.
 
-**The same property bounds the damage in the two later variants, and the distinction is worth stating rather than blurring.** When the theft is caught while the mint is still staged, the vault **burns** it: supply falls, nothing was sold, and the backing behind every remaining token is strictly better. When the theft is instead a failed redemption covered by the bond, the settlement is a **transfer** — the slashed `solBSV` moves to the redeemer rather than being burned or re-minted. Supply is then unchanged rather than reduced, which is the supply-conserving outcome: the failure is not a dilution event, because no new tokens were created to cover it. Holding the bond in `solBSV` is what makes both variants work without a sale. Had the bond been a stablecoin, the program would have had to sell it at a market price, and the system would have absorbed the theft *and* the market move together.
+**The same property bounds the damage in the two cases the bond actually answers, and the distinction is worth stating rather than blurring.** When the theft is caught while the mint is still staged, the vault **burns** it: supply falls, nothing was sold, and the backing behind every remaining token is strictly better. When the theft is instead a relayer absconding with BSV it owes, the seizable `solBSV` bond answers `owed_R` and can be burned, so supply falls against a reserve that also fell. A **failed redemption is not one of these cases**: the escrow is returned to the holder and supply is unchanged, and **the bond is not additionally transferred**, because the returned escrow already makes the holder whole. Holding the bond in `solBSV` is what makes both seizure paths work without a sale. Had the bond been a stablecoin, the program would have had to sell it at a market price, and the system would have absorbed the theft *and* the market move together.
 
 ## The roadmap to a signerless reserve
 

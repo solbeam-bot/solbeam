@@ -14,20 +14,26 @@ is fine, the code does not exist yet — peg-out and the vault are proposals, no
 | Scenario | Who loses | How much | What stops it |
 |---|---|---|---|
 | Deposit reorged out before anything is staged | **Nobody** | — | The UTXO is unspent. The sender still has their BSV |
-| Deposit re-included at a new height, after a mint was staged and burned | **The depositor, permanently** | **The whole deposit** | **Nothing — F1** |
-| Mint already released, then a deeper reorg orphans the deposit | **Every `solBSV` holder** | Pro-rata dilution | The buffer, if one exists. Otherwise nothing |
-| Peg-out payout reorged mid-challenge | **The relayer** | The payout | The challenge window; the bond covers the user |
+| Deposit re-included at a new height, after a mint was staged and burned | **The depositor, permanently — but staging is not built, so this cannot happen in the shipped code** | **The whole deposit** | **Nothing — F1 (unimplemented)** |
+| Mint already released, then a deeper reorg orphans the deposit | **The underwriter's bond first**; holders only if the bond is short, or if the mint took the D6 unbacked path | Up to `owed_R`, then pro-rata dilution | The released mint stays in `owed_R` and the **bond** is seizable, so the underwriter takes the first loss ahead of holders — reaching it still requires the reorg to be noticed. The **buffer** is off-chain over-collateralisation and is *not* slashable, so it is not a first loss-bearer |
+| Peg-out payout reorged mid-challenge | **The relayer, for its own costs and the lost fee** — the holder is made whole | The relayer's costs, not the holder's principal | On failure the escrow is **returned to the holder** and supply is unchanged. The bond answers deliberate theft or abandonment, **not** a failed redemption |
 
-### F1 — Burning a staged mint does not release its replay entry · **inherent · serious**
+### F1 — Burning a staged mint does not release its replay entry · **unimplemented · serious once built**
 
 The deposit identity is `(txid, vout)` and **nothing removes it**. Pruning is by height only,
 and a lightweight reorg does not remove a transaction — it puts it back in the mempool to be
 mined again at a slightly different height.
 
-So the ordinary case is: the block is orphaned, the vault correctly burns the staged mint, the
-transaction is re-mined, and the depositor **can never mint again** because their key is still
-in the used list. Their BSV sits in the reserve and their tokens are gone. This is the most
-likely way for an honest user to lose money, and it needs no attacker at all.
+So once staging exists, the ordinary case would be: the block is orphaned, the vault correctly
+burns the staged mint, the transaction is re-mined, and the depositor **can never mint again**
+because their key is still in the used list. Their BSV sits in the reserve and their tokens are
+gone. It needs no attacker at all.
+
+**This is not the shipped code's honest-user loss vector, though.** Staging and the vault do not
+exist yet, so there is nothing to burn and nothing to strand; the finding is real only for the
+component that will be built. In the code that runs today the honest-user loss is **F6**, the
+200-entry replay ceiling. **F1 is unimplemented, not inherent**, and it is not ranked as the most
+likely honest loss.
 
 **Required rule:** burning a staged mint must remove its replay entry. S2 in the older
 document claims a re-included deposit "can be re-proven", which was true before the vault
@@ -41,18 +47,18 @@ invalidated that assumption.
 | Attack | Who loses | How much | What stops it |
 |---|---|---|---|
 | Self-reorg, **detected** | The attacker | Mining cost | Detection, then the burn |
-| Self-reorg, **detection fails** | **Every holder** | The minted amount | The buffer — if a staker underwrote it |
-| **D6 unbacked path, detection fails** | **Every holder** | The minted amount | **Nothing at all.** No underwriter means no bond, so there is no buffer to absorb it |
+| Self-reorg, **detection fails** | **Every holder** | The minted amount | The **bond**, if a relayer underwrote it — but a slash needs detection too, so on this path nothing is reached. The buffer is off-chain over-collateralisation and is not slashable |
+| **D6 unbacked path, detection fails** | **Every holder** | The minted amount | **Nothing at all.** No underwriter means no bond and no slashable stake to absorb it |
 | Reorg that orphans *someone else's* deposit | That depositor | Time, or everything if F1 bites | Nothing |
-| Fill all bond capacity with reorgable deposits | Honest depositors | Blocked, not robbed | Nothing |
+| Fill all bond capacity with reorgable deposits | **The attacker's own capacity only** | — | **A mint naming relayer R is refused without R's signature/consent**, so a third party cannot occupy an innocent relayer's capacity |
 
 ### F2 — The unbacked path has no backstop · **inherent · serious, and accepted**
 
 D6 allows a peg-in with no underwriter. That is a deliberate risk acceptance, and the
 consequence should be stated as sharply as it deserves: **the vault and detection are then the
 entire defence.** If detection fails — nobody pushes the honest branch within the maturity
-window — the unbacked mint releases and dilutes every holder, with no bond and no buffer to
-absorb it. The `k = 1` bond does not help because there is no relayer in the path at all.
+window — the unbacked mint releases and dilutes every holder, with no bond and no slashable stake
+to absorb it. The `k = 1` bond does not help because there is no relayer in the path at all.
 
 This is not an argument against D6. It is the argument for treating **the incentive to push
 the honest chain** as a first-class deliverable rather than a nice-to-have, since on that path
@@ -102,9 +108,9 @@ the true statement is that **self-dealing is unprofitable only to the extent det
 | Vector | Harm | Cost to attacker | Stopped by |
 |---|---|---|---|
 | Fill the replay list with dust | **All peg-ins fail** once 200 entries are used | Dust plus 200 Solana fees | **Nothing.** `MIN_PEG_IN` is unimplemented and `MAX_USED = 200 < WINDOW = 288`, so the list can be filled inside a window and refilled |
-| Force a pause | Minting halts | Mining a heavier branch (A1 fixed) | Nothing, though it is now expensive |
-| Deny service to the advancer | **Detection fails**, so the buffer is exposed | Blocking a permissionless, unstaked role | **Nothing.** This is the liveness assumption, and it is the load-bearing one |
-| Occupy bond capacity | Honest deposits blocked | Mining | Nothing |
+| Force a pause | **Nothing — an attacker cannot force one** | — | `set_paused` is authority-gated (A2 fixed) and `commit_fork` only emits an event, so no attacker path halts minting |
+| Deny service to the advancer | **An undetected fraud releases a mint into circulation and dilutes holders** | Blocking a permissionless, unstaked role | **Nothing** for that loss: a slash needs detection too, so the bond is not reached either. Detection is the only defence against a released fraudulent mint — but it is not the whole system's single dependency (see below) |
+| Occupy bond capacity | **The attacker's own capacity only** | — | **A mint naming relayer R needs R's signature/consent**, so a third party cannot occupy an innocent relayer's capacity |
 
 ### F6 — The replay list is a cheap, repeatable shutdown · **unimplemented · serious**
 
@@ -118,20 +124,34 @@ denial of service for the price of dust.
 
 ## What this adds up to
 
-**The single dependency is detection.** Five separate findings — F2, F3, F5, and the two
-detection rows in B and D — all reduce to the same sentence: *if nobody pushes the honest
-chain within the maturity window, holders lose and nothing else intervenes.* Everything
-else in the design is defence in depth around that one assumption.
+**Two different losses, two different defences.** An earlier draft called detection "the single
+dependency". That is too strong, and it conflicts with doc 04: a redemption the program has
+accepted is enforced by a deadline, not by a watcher. Separating the two makes the dependency
+precise:
 
-That is not a flaw. It is a consequence of having removed the operator, and it is worth being
-explicit that **the liveness of the advancer is the load-bearing assumption of the whole
-system**, not a background detail. Two concrete responses follow:
+- **The bond answers deliberate theft or abandonment.** A relayer that takes an accepted
+  redemption and then steals or abandons it is caught by the deadline: the escrow is returned to
+  the holder, supply is unchanged, and the bond is slashed. That path is *self-reporting* — no
+  watcher required. This is doc 04's argument, and it is why `k = 1` is defensible for the
+  bonded liability.
+- **Only detection answers a released fraudulent mint.** A reorg fraud that has already released
+  a mint into circulation has no deadline and no victim to complain. If nobody pushes the honest
+  chain within the maturity window, holders are diluted — and **the bond is not reached either,
+  because a slash needs detection too.** The unbacked (D6) path has no bond at all.
 
-1. **F1 and F6 are ordinary engineering** and should be fixed in code — one is a missing
-   delete, the other a missing parameter check.
-2. **F3 wants deciding, not coding**: detection is currently rewarded only indirectly. If the
-   advancer role is the load-bearing one, it may deserve the same explicit bounty the payout
-   challenger already has.
+F2, F3, F5 and the two detection rows in B and D are all the second class. So the load-bearing
+statement is not that the advancer is the system's single dependency, but that **detection is
+the only defence for the released-mint loss, while the redemption loss is self-reporting and
+bonded.** Everything else in the design is defence in depth around the first.
+
+Two concrete responses follow:
+
+1. **F6 and F1 are ordinary engineering** and should be fixed in code — one is a missing
+   parameter check in the shipped code, the other a missing delete in a component (staging)
+   that is not built yet.
+2. **F3 wants deciding, not coding**: detection is currently rewarded only indirectly. If
+   detection is the only defence against a released fraudulent mint, the advancer role may
+   deserve the same explicit bounty the payout challenger already has.
 
 
 ---
@@ -143,7 +163,7 @@ one finding more important than anything above, and produced **two criticals tha
 survive checking.** Both are recorded here because a wrong critical is worse than no critical:
 it spends attention on a non-problem and, if believed, leads to bad design.
 
-### F7 — The client cannot follow a difficulty retarget, so it halts permanently · **inherent · critical**
+### F7 — The client cannot follow a difficulty retarget, so it halts permanently · **defect in built code · critical**
 
 `push_header` requires `bits == expected_bits`, and `expected_bits` is set once at
 `initialize` from the checkpoint header and never updated. `set_checkpoint` does not refresh it
@@ -168,10 +188,10 @@ The independent pass is right that the shipped program mints straight to the dep
 account and that no vault, maturity, release or burn exists anywhere. `13-summary.md` has been
 amended to say so at the top.
 
-**F1 above is therefore misclassified and is corrected here: it is UNIMPLEMENTED, not
-inherent.** It is a genuine flaw in a component that has not been built, and it should not be
-ranked as "the most likely way for an honest user to lose money" while there is nothing to
-lose it from. The shipped code's honest-user loss vector is **F6**, not F1.
+**F1 is therefore classified as UNIMPLEMENTED, not inherent** — the heading, the Table A row and
+the finding itself now say so. It is a genuine flaw in a component that has not been built, and
+it is not ranked as "the most likely way for an honest user to lose money" while there is nothing
+to lose it from. The shipped code's honest-user loss vector is **F6**, not F1.
 
 ### X2 — "Unlimited double-mint via a counterfeit replay list" · **incorrect**
 

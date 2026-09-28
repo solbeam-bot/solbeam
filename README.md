@@ -28,7 +28,7 @@
 
 **Trustless in, trust-minimised out.**
 
-A BSV deposit is proved against proof of work and proof of inclusion, and the mint lands in the program's vault rather than with the depositor. There is no attestor to bribe, no oracle to spoof, and no committee to capture — the program reacts only to BSV headers and Solana slots, and external metrics are published on the website and never consulted by it.
+A BSV deposit is proved against proof of work and proof of inclusion, and the design places the mint in a program-owned vault rather than with the depositor. There is no attestor to bribe, no oracle to spoof, and no committee to capture — the program reacts only to BSV headers and Solana slots, and external metrics are published on the website and never consulted by it.
 
 Redemption needs a BSV signature, and BSV Script cannot verify Solana's consensus — so a key must exist somewhere. There is no pooled hot wallet: each relayer holds its own deposits and posts a bond in `solBSV` (the same asset as the exposure, so no price move can shrink it relative to what it protects). A relayer is a role anyone may run, so the design has **no privileged operator**, and the bond makes cheating **punishable**.
 

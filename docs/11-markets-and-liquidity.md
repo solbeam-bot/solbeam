@@ -16,7 +16,7 @@ Nobody has to wait on the peg's confirmation depth to get `solBSV`, or on a rede
 
 A user picks their point on that line: speed, cost, or trust.
 
-> **Built or designed?** The light client, the token and the mint are built and pass 17 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built**, so the peg plumbing described below is the finished specification; the shipped program mints straight to the depositor. The market layer is external (pools, orderbooks, market makers) and is not SOLBEAM's to build.
+> **Built or designed?** The light client, the token, the mint and fork staging are built and pass 17 on-chain tests. **The vault, the two gates, maturity, the order book, staking, bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all of peg-out are designed and not built** — DAA is **actively rejected in the built client** (F7), not merely absent — so the peg plumbing described below is the finished specification; the shipped program mints straight to the depositor. The market layer is external (pools, orderbooks, market makers) and is not SOLBEAM's to build.
 
 ---
 
@@ -105,7 +105,7 @@ What widens the basis: an exhausted side of the book, thin pools, or a higher di
 | **Market maker** | Both-side inventory | Spread | Yes — they absorb it |
 | **Bonded relayer** | Own BSV deposits + `solBSV` bond | Discovered fee, paid in the asset staked | Yes — it is their job |
 | **Arbitrageur** | Directional flow | Basis | Partly |
-| **Challenger / watchtower** | Gas | Slashed-bond share | No |
+| **Challenger / watchtower** | Gas | Bounty for a successful **payout** challenge; **no** bounty for detecting a reorg (F3) | No |
 | **Exchange** | Custody + order book | Fees | No (internally) |
 
 ---

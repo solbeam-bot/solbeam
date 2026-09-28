@@ -9,8 +9,10 @@ with fresh eyes. **Nothing is settled unless its Status says so.**
 
 ## The flows
 
-Both directions have the same shape: **enter the program's vault, then leave it either to
-the counterparty or back to the sender.** No failure path mints; every one returns.
+**As designed** — the vault and everything downstream of it are not built; the shipped
+program mints straight to the depositor. Both directions have the same shape: **enter the
+program's vault, then leave it either to the counterparty or back to the sender.** No failure
+path mints; every one returns.
 
 ### Peg-in — BSV → solBSV
 
@@ -89,10 +91,10 @@ the number of chances for a detection failure to slip through.
 
 ### D5 — Bond multiple — **`k = 1`, and self-dealing stakers are accepted**
 
-`bond ≥ owed`, and a staker underwriting its own deposit is an accepted risk rather than a
-prohibited one. The consequence is recorded plainly: at `k = 1` a self-dealing attack is
-roughly break-even, so what makes it unprofitable is **the mining cost of the reorg**, not the
-bond. The bond's job is covering an honest relayer's shortfall.
+`bond_R ≥ k × owed_R` (with `k = 1` here), and a staker underwriting its own deposit is an
+accepted risk rather than a prohibited one. The consequence is recorded plainly: at `k = 1` a
+self-dealing attack is roughly break-even, so what makes it unprofitable is **the mining cost of
+the reorg**, not the bond. The bond's job is covering an honest relayer's shortfall.
 
 ### D6 — A peg-in with no underwriter — **allowed, explicitly**
 
@@ -162,6 +164,6 @@ the finished system.
 
 ## Where to read more
 
-- [`12-peg-mechanism.md`](12-peg-mechanism.md) — full reasoning, scenarios, audit findings A1–A19
+- [`12-peg-mechanism.md`](12-peg-mechanism.md) — full reasoning, scenarios, audit findings A1–A16 and A18–A19 (the numbering skips A17, and A7 is listed ahead of A4)
 - [`04-trust-model.md`](04-trust-model.md) — what is trusted, and the roadmap to a signerless reserve
 - [`05-relayers.md`](05-relayers.md) — the relayer role and bond custody

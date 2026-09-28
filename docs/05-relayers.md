@@ -1,9 +1,11 @@
 # 5. Relayers
 
-> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain
-> tests. **The order book, staking, bonds, per-relayer deposits and all of peg-out are designed
-> and not built.** No relayer, bid or bond described below exists in code yet; the shipped
-> program mints straight to the depositor's token account. Read this as a specification.
+> **Built or designed?** The light client, the token, the mint and fork staging exist and pass 17
+> on-chain tests. **The vault, the two gates, maturity, the order book, staking, bonds, `owed_R`,
+> consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all of peg-out are
+> designed and not built.** DAA is **actively rejected in the built client** (F7), not merely
+> absent. No relayer, bid or bond described below exists in code yet; the shipped program mints
+> straight to the depositor's token account. Read this as a specification.
 
 ## What a relayer actually is
 
@@ -50,7 +52,7 @@ path takes over.
 | 4 | It waits for confirmations, then obtains the header and Merkle branch for the payout | The relayer (its own risk); the data source need not be trusted |
 | 5 | It submits `fulfil(request_id, proof)` | **The Solana program verifies the proof** against the light client and checks amount and destination. This closes the redemption and settles the fee |
 | 6 | A challenge window passes with the payout still canonical | The program, from BSV headers. A payout later reorged away is caught here |
-| 7 | No valid payout proven before the deadline — measured in slots, so a Solana halt freezes the clock | The escrow is **returned to the holder**; nothing mints, and the failure is what the bond answers for |
+| 7 | No valid payout proven before the deadline — measured in slots, so a Solana halt freezes the clock | The escrow is **returned to the holder**, which already makes them whole; nothing mints, supply is unchanged, and the bond is **not** additionally transferred. The bond answers `owed_R` — theft or abandonment of what the relayer owes — not a failed redemption |
 
 ### Peg-in — BSV to `solBSV`
 
@@ -85,9 +87,11 @@ Three different kinds of checking are often confused:
 The old worry — a **naked spend** of a shared float that no deadline reports — was a property of
 a pooled reserve. With deposits paying individual relayers there is no pooled object to police: a
 relayer that spends BSV it received is failing its own `owed_R`, which the program measures and
-its bond covers. The reasoning is in [Trust model](04-trust-model.md#the-naked-option-attack);
-what changed is the *object* it bounds, not the logic. Detection still matters systemically,
-because an undetected reorg eats the staking buffer.
+the bond secures. The relayer's own idle float is a different thing and is **not** covered by the
+bond — it is the relayer's own money, off-chain and unreadable by the program (F4). The reasoning
+is in [Trust model](04-trust-model.md#the-naked-option-attack); what changed is the *object* it
+bounds, not the logic. Detection still matters systemically, because an undetected reorg eats the
+staking buffer.
 
 ## What a relayer needs — and does not need
 
@@ -105,7 +109,9 @@ because an undetected reorg eats the staking buffer.
 - **Costs:** BSV transaction fees (tiny), Solana transaction fees, and the opportunity cost of
   the bond — the dominant cost, because the bond is `solBSV` and cannot be redeemed while it is
   bonded.
-- **Risk:** the bond, if it cheats or fails to deliver after accepting a job.
+- **Risk:** the bond, if it absconds with BSV it owes. That liability is what the bond secures;
+  a failed redemption is handled by returning the escrow, not by a bond transfer, and the
+  relayer's own float is not bonded.
 - **Caps are terms, not settings:** the liquidity, fee and depth in its bid are exactly how much
   it will underwrite and on what terms.
 
@@ -194,7 +200,9 @@ remains is the part that always mattered: **advancing the honest chain**. A reor
 the BSV headers the client already stores; detection is permissionless and cheap; and it is
 **incentivised** — a fraud that goes undetected eats the staking buffer, so the parties with the
 most to lose have the most reason to push the honest headers and notice an orphan. Nobody has to
-be appointed as a watcher; the economics do it. See
+be appointed as a watcher; the economics do it. **The incentive is indirect only:** there is a
+**bounty for challenging a bad payout**, and **no bounty for detecting a reorg**, where detection
+is the whole defence (F3). See
 [The system, in summary](13-summary.md#reorg-protection).
 
 A watchtower is still a sensible thing for a relayer to run over its own book, but it is an
