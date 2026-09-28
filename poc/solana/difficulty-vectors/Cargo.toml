@@ -1,0 +1,32 @@
+[package]
+name = "difficulty-vectors"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# This crate exists to run one test: replay 471 real BSV mainnet headers through
+# the **production** `difficulty.rs`, with no Anchor, no validator and no
+# `anchor build`. It works by `#[path]`-including that source file, so the module
+# under test and the module compiled into the program are the same bytes — not a
+# copy that can drift.
+#
+# Why it is separate from the program crate at all: compiling `solbeam` pulls in
+# anchor-lang, anchor-spl and the whole Solana SDK, which needs the SBF toolchain
+# and an x86_64 build box. The difficulty rule is the one part of the client that
+# needs none of that, and the acceptance test for W1.6 should not be blocked on
+# it either.
+
+# A workspace of its own, so it neither joins nor needs the Anchor workspace:
+# `anchor build` should not have to know this crate exists.
+[workspace]
+
+[dependencies]
+# The same 256-bit crate the program uses, so this exercises the same arithmetic.
+#
+# VENDORED, and only here. `uint` depends on `crunchy`, whose build script has
+# to be compiled and run for the host before anything else builds — and this
+# container has no C toolchain, so host binaries cannot be linked. The vendored
+# copy is `uint 0.10.1` and `crunchy 0.2.4` with crunchy's build script replaced
+# by the macro it generates (identical output, checked in). The program itself
+# still takes `uint` from crates.io and is unaffected.
+uint = { path = "vendor/uint" }

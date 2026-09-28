@@ -15,7 +15,7 @@ code written) or *open* (needs a decision). The code is unchanged from the A1/A2
 |---|---|---|---|
 | **P1** | Checkpoint race + self-declared difficulty | **Decided** — race accepted | Deploy privately; address-link later if wanted. No code |
 | **P2** | `commit_fork` does not re-anchor | **Specified** | Store `fork_parent_hash` at init; link from it; re-check at commit |
-| **P3** | Deposits have a hard ~48 h life | **Decided** — 48 h accepted | App automates the mint; deadline disclosed; unproven receipts published off-chain |
+| **P3** | Deposits have a hard ~32 h life | **Decided** — 48 h accepted, but **the window cannot hold it** | W1 measured the real limit at **32 h** (192 records). The app automates the mint; deadline disclosed; unproven receipts published off-chain. **The 48 is now wrong and needs re-deciding** |
 | **P4** | Retarget halts the client (F7) | **Specified** | Store the difficulty-period anchor; compute and check the new target. Testable on regtest |
 | **P5** | Replay-list shutdown and hard ceiling | **Decided** | `MIN_PEG_IN = 1 BSV`, **and the fixed list replaced by a nullifier PDA per minted deposit** |
 | **P6–P10** | Vault-era items | **Design-in** | Depend on the vault, which is unbuilt |

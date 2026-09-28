@@ -23,8 +23,8 @@ anything above the light client until this closes.
 | **W1.1** | Fetch a contiguous run of real BSV mainnet headers (hash, bits, time, height) | ✅ **done** — 300 headers, 968,401–968,700, 0 linkage gaps |
 | **W1.2** | Establish empirically how often `bits` changes and by how much | ✅ **done** — **100% of blocks** |
 | **W1.3** | Identify the actual DAA and verify it predicts real headers | ✅ **done — cw-144, 324/324 exact** |
-| **W1.4** | Determine what the client must store per header, and whether the window fits the 10,240-byte cap | ✅ **done — 52–56 B/record, window falls to ~180–194** |
-| **W1.5** | Whether the DAA is computable from the client's own window | ✅ **done — yes, from the window, but it needs 146 records of lookback** |
+| **W1.4** | Determine what the client must store per header, and whether the window fits the 10,240-byte cap | ✅ **done — 52 B/record, WINDOW = 192, 10,094 of 10,240** |
+| **W1.5** | Whether the DAA is computable from the client's own window | ✅ **done — yes, needs **147** records of lookback (not 146)** |
 | **W1.6** | Rewrite `push_header`'s difficulty check against the real algorithm, with a test using real headers | pending |
 | **W1.7** | Fix **P2** — `commit_fork` does not re-anchor the staged branch — which is still unfixed and is the one defect doc 18 called the genuine forgery vector | pending |
 
@@ -184,3 +184,51 @@ span two accounts.
 `push_header` requires `bits == expected_bits`. With cw-144 the target changes **every block**, so
 this rejects **every header after the checkpoint** — not "at the next retarget". Implementing the fix
 means storing per-header chainwork and time, which is what forces the window down above.
+
+---
+
+## Corrections to this workstream's own numbers
+
+### The lookback is 147, not 146 — and it was measured
+
+My figure of 146 was **wrong by one**, and the way it was caught is the point. `GetSuitableBlock(x)`
+reads three blocks *ending at* `x`, and the older argument is `GetAncestor(nHeight - 144)` where
+`nHeight` is the parent's height. For the header at height `h`:
+
+```
+pindexLast  = GetSuitableBlock(h - 1)     -> needs records h-3   .. h-1
+pindexFirst = GetSuitableBlock(h - 145)   -> needs records h-147 .. h-145
+oldest record needed: h - 147  ->  147 records, not 146
+```
+
+**Verified against the fixture rather than reasoned about:** with a 146-record window the
+implementation reproduces **0 of 324** mainnet headers; at 147 it reproduces **324 of 324.**
+
+An off-by-one in a lookback is exactly the class of error that would have been invisible until
+testnet — a client that halts, for a reason nobody could see from the constants. It surfaced here only
+because the acceptance test is a replay of real headers.
+
+### `WINDOW = 192`, and the arithmetic
+
+```
+LIGHT_CLIENT_FIXED = 8 (discriminator) + 8 + 8 + 32 + 8 + 32 (authority)
+                   + 4 (expected_bits) + 1 (no_retargeting) + 4 (pow_limit_bits)
+                   + 8 (last_push_slot) + 1 (paused) + 1 (bump) + 4 (Vec len)  = 110
+HEADER_RECORD_SIZE = 32 (hash) + 16 (chainwork, u128) + 4 (time)               =  52
+SPACE              = 110 + 192 × 52 = 10,094   of 10,240  ->  146 bytes margin
+```
+
+At 193 it is 10,146 (94 margin); at 194, 10,198 (42 margin). **192 is the largest with real margin**,
+and it is **45 records of slack over the 147 the DAA itself needs.**
+
+**Deposit lifetime: 32 hours** at 600 s/block, down from the 48 the documents assumed.
+
+### Regtest has an explicit no-retarget rule, which is worth knowing
+
+The node has `if (params.fPowNoRetargeting) return pindexPrev->GetBits();` in
+`GetNextWorkRequired` — a case the specification reading did not surface. It is mirrored with a
+`no_retargeting` flag derived **deterministically** at `initialize` (checkpoint `bits` equal to the
+maximum encodable compact target), which is what keeps the existing regtest fixture chain
+(`0x207fffff`, fixed) working **without weakening the mainnet path.** Worth noting because the
+obvious way to keep regtest green would have been to weaken the check, which would have re-opened F7
+by the back door.

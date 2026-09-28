@@ -12,16 +12,17 @@
 //! same fixture is the most valuable test in the whole PoC, and it needs nothing
 //! but this.
 //!
+//! **The difficulty rule is cw-144**, the algorithm BSV's `src/pow.cpp`
+//! actually implements, and it lives in [`difficulty`] — a module with no
+//! Anchor types so it can be replayed against real mainnet headers by a plain
+//! `cargo test`. The old client required `bits == expected_bits`, a value fixed
+//! at `initialize`; on a real chain that rejects *every* header after the
+//! checkpoint, because BSV changes difficulty every block. See
+//! `workstreams/W1-light-client-verification.md`.
+//!
 //! Deliberately NOT in this increment, and each is a known gap rather than an
 //! oversight:
 //!
-//! * **chainwork.** Reorg resolution needs accumulated work to reject a *valid
-//!   but lower-work* competing chain. Linkage alone is not enough. It is the
-//!   next increment, because getting it right means 256-bit arithmetic and I
-//!   would rather add that deliberately than approximate it.
-//! * **DAA.** Regtest has a fixed target, so retargeting is disabled. It is
-//!   behind a flag rather than omitted, so the testnet run is a config change
-//!   and not a rewrite (see `check_daa`).
 //! * **the mint and the token.** No SPL CPI yet, which also keeps this file
 //!   clear of the Anchor 1.x `CpiContext` change.
 
@@ -34,30 +35,52 @@ use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 // on-chain `sol_sha256` syscall rather than doing the work in the program.
 use solana_sha256_hasher::hash as sha256;
 
+pub mod difficulty;
+
+use difficulty::{compact_to_target, target_to_compact, Record, U128, U256};
+
 declare_id!("EYsckW3596zBL1pxfxGev44z6LH4hEpoHff7tSisvjCW");
 
 /// BSV headers are always exactly 80 bytes.
 pub const HEADER_LEN: usize = 80;
 
-/// How long a reorg the client can follow, expressed in TIME rather than a
-/// block count — the earlier "64" was arbitrary and nothing justified it.
+/// How long the header window reaches back, expressed in TIME rather than a
+/// block count.
 ///
-/// BSV targets a ten-minute block, so 48 hours is 288 blocks. A day of margin
-/// sits on top of the rule of thumb that a reorg deeper than a day means BSV is
-/// broken and the peg has far larger problems than its header window.
+/// **This is 32 hours and it cannot be 48.** The window used to be 288 records
+/// of 32 bytes, because a record stored a bare block hash. cw-144 needs more:
+/// the retarget is a function of the *chainwork difference* and the *timestamp
+/// difference* between two suitable blocks 144 apart, so every record carries
+/// hash (32) + chainwork (16) + time (4) = 52 bytes. 288 x 52 = 14,976 plus
+/// overhead, against a hard 10,240-byte account-creation cap — 46% over, and
+/// `initialize` would simply revert.
 ///
-/// Two constraints set what is affordable, and both are hard:
+/// At 52 bytes a record and 944 bytes of fixed fields, 194 records is the
+/// arithmetic maximum. **192 is chosen instead, 1,012 bytes under the cap**,
+/// which leaves room for a field or two without resizing every existing
+/// account. 192 records is 115,200 seconds = **32 hours at 600 s/block**.
 ///
-///   * **Account creation caps at 10,240 bytes.** The window must keep its
-///     per-header record small. `HeaderRecord` stores a bare hash (32 bytes):
-///     288 x 32 + overhead = 9,322 bytes, the same account size a 144-header
-///     window needed when records also carried a Merkle root.
-///   * **The whole account is deserialised on every instruction**, so a bigger
-///     window is also more compute on the mint path. 9,216 bytes of records is
-///     comfortable against the 200,000 CU budget.
-pub const WINDOW_HOURS: u64 = 48;
+/// What actually constrains the *bottom* is cw-144's own lookback:
+/// [`difficulty::LOOKBACK`] = 146 records. A window at or below that could not
+/// compute the retarget for its own oldest blocks, so 192 is 46 records of
+/// slack over the minimum. The product consequence is real and is recorded in
+/// the workstream: the 48-hour deposit deadline the design assumed is gone.
+///
+/// The whole account is deserialised on every instruction, so a bigger window
+/// is also more compute on the mint path. 9,984 bytes of records is comfortable
+/// against the 200,000 CU budget.
+pub const WINDOW_HOURS: u64 = 32;
 pub const SECONDS_PER_BLOCK: u64 = 600;
-pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; // 288
+pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; // 192
+
+/// The window must be wide enough for the difficulty algorithm to be
+/// computable at all. `LOOKBACK` is 146 (144 + 2 for the median); a window at
+/// or below it would silently fall back to the genesis rule in the middle of a
+/// live chain, which is exactly the defect this workstream exists to fix.
+const _: () = assert!(
+    WINDOW > difficulty::LOOKBACK as usize,
+    "WINDOW must exceed the cw-144 lookback (146 records) or the retarget is not computable"
+);
 
 /// How deep a deposit must be buried before it can be minted. Twelve blocks is
 /// roughly two hours on BSV. The test matrix compresses time, not depth, so this
@@ -78,11 +101,41 @@ pub const TOKEN_DECIMALS: u8 = 8;
 /// never pruned and silently stopped the peg-in path after 256 mints in its life.
 pub const MAX_USED: usize = 200;
 
-/// Size of one `HeaderRecord`: a bare block hash, and nothing else. Height is
-/// derived from the window's start; `prev`, `time`, `bits` and `nonce` are used
-/// once when a header is pushed; and the Merkle root is a field *inside* the
-/// header, already committed to by this hash, so a claim can simply supply it.
-pub const HEADER_RECORD_SIZE: usize = 32;
+/// Size of one `HeaderRecord`: the block hash, the block's cumulative
+/// chainwork, and its timestamp.
+///
+/// The three fields are not redundant with one another:
+///   * the **hash** is the client's whole invariant — linkage — and the only
+///     thing a deposit proof needs;
+///   * **chainwork** is the numerator of cw-144's target. It cannot be derived
+///     from a single scalar: the algorithm subtracts two cumulative values 144
+///     apart. `u128` because BSV's cumulative work is around 2^87, which does
+///     not fit `u64`;
+///   * **time** is the denominator, with the clamps applied to its difference.
+///
+/// Height is derived from the window's start; `prev`, `bits` and `nonce` are
+/// used once when a header is pushed; and the Merkle root is a field *inside*
+/// the header, already committed to by this hash, so a claim can simply supply
+/// it. `bits` is deliberately NOT stored: it is `target_to_compact` of the
+/// target the client recomputes anyway, so a stored copy could only ever agree
+/// with itself or hide a wrong target.
+pub const HEADER_RECORD_SIZE: usize = 32 + 16 + 4; // hash + chainwork: u128 + time: u32
+
+/// The fixed part of `LightClient`. Named so the compile-time assertion below
+/// can show its arithmetic instead of hiding it behind one number.
+pub const LIGHT_CLIENT_FIXED: usize = 8      // discriminator
+    + 8                                      // checkpoint_height
+    + 8                                      // tip_height
+    + 32                                     // tip_hash
+    + 8                                      // window_start
+    + 32                                     // authority
+    + 4                                      // expected_bits
+    + 1                                      // no_retargeting
+    + 4                                      // pow_limit_bits
+    + 8                                      // last_push_slot
+    + 1                                      // paused
+    + 1                                      // bump
+    + 4; // headers: Vec length prefix
 
 /// Solana refuses to grow an account by more than this in one instruction, and
 /// `init` allocates the whole `LightClient` in one go. Exceeding it is not a
@@ -126,8 +179,27 @@ pub struct ForkStaging {
     /// The **last common block** shared with the main chain — the common
     /// ancestor. Branch headers begin at `fork_height + 1`.
     pub fork_height: u64,
+    /// **The hash of the block at `fork_height` when this branch was staged.**
+    ///
+    /// This is the fix for P2, and it is the whole of the fix. A branch is only
+    /// meaningful as a set of headers *hanging off one specific block*, and the
+    /// client's only invariant is linkage. Reading the fork point from chain
+    /// state later — which is what this account used to do, once per pushed
+    /// header and again at commit — lets one branch be spliced onto a different
+    /// block than the one it was built on. The window then holds two chains
+    /// stapled together, and a header hash that is not in either chain can be
+    /// made canonical: a mint forgery. Recording the parent **once, here** and
+    /// re-comparing it at commit is what makes the branch a single object.
+    pub fork_parent_hash: [u8; 32],
     /// Branch headers, oldest first, excluding the fork point itself.
-    pub hashes: Vec<[u8; 32]>,
+    ///
+    /// Full records rather than bare hashes. The window keeps `hash + chainwork
+    /// + time` and a commit has to produce records of the same shape: the
+    /// branch's later records are *not* the fork point's chainwork, and cw-144
+    /// subtracts exactly those values, so recomputing them at commit from a
+    /// single total is not possible. They are captured as the headers arrive,
+    /// which is the only moment the branch's `bits` and `time` are in hand.
+    pub records: Vec<HeaderRecord>,
     pub bump: u8,
 }
 
@@ -135,7 +207,8 @@ impl ForkStaging {
     pub const SPACE: usize = 8                  // discriminator
         + 32                                    // submitter
         + 8                                     // fork_height
-        + 4 + (WINDOW * HEADER_RECORD_SIZE)     // hashes: Vec length + records
+        + 32                                    // fork_parent_hash
+        + 4 + (WINDOW * HEADER_RECORD_SIZE)     // records: Vec length + records
         + 1;                                    // bump
 }
 
@@ -171,15 +244,28 @@ pub mod solbeam {
         lc.window_start = checkpoint_height;
         lc.authority = ctx.accounts.payer.key();
         // Taken from the checkpoint header, which is the one piece of data the
-        // client trusts — every later header must match it.
-        lc.expected_bits = read_u32_le(&header, 72);
+        // client trusts. It is the genesis rule only: the first header that has
+        // 146 records behind it is checked against cw-144 instead, and from
+        // then on this value is never consulted again.
+        lc.expected_bits = bits;
+        // Derived, never supplied — see the field. `REGTEST_BITS` is the
+        // compact form of regtest's `powLimit`, i.e. the node's own
+        // `UintToArith256(params.powLimit).GetCompact()` for that chain.
+        lc.no_retargeting = bits == difficulty::REGTEST_POW_LIMIT_BITS;
+        // A network parameter. Mainnet's limit, applied to any chain, is a
+        // strictly-tighter cap than regtest's; a PoC deployment that needs the
+        // regtest value passes it in rather than this constant changing.
+        lc.pow_limit_bits = MAINNET_POW_LIMIT_BITS;
+        lc.last_push_slot = Clock::get()?.slot;
         lc.paused = false;
         lc.bump = ctx.bumps.light_client;
 
         msg!(
-            "SOLBEAM light client initialised at height {} tip {}",
+            "SOLBEAM light client initialised at height {} tip {} window {} records ({} h)",
             checkpoint_height,
-            display_hex(&lc.tip_hash)
+            display_hex(&lc.tip_hash),
+            WINDOW,
+            WINDOW_HOURS
         );
         Ok(())
     }
@@ -197,14 +283,21 @@ pub mod solbeam {
         //    valid block from anywhere.
         require!(prev == lc.tip_hash, SolbeamError::BrokenLinkage);
 
-        // 2. The declared target must be the chain's target, and this is checked
-        //    BEFORE the target is used. Order matters: `meets_target` takes the
-        //    target from the header, so validating only afterwards means an
-        //    attacker chooses their own difficulty. Regtest masks this, because
-        //    0x207fffff is already the largest encodable target and no easier one
-        //    exists — but on testnet or mainnet the target varies, so declaring
-        //    the easiest permitted one is cheap and the check would pass.
-        require!(bits == lc.expected_bits, SolbeamError::UnexpectedRetarget);
+        // 2. The declared target must be the one cw-144 derives for this block,
+        //    and this is checked BEFORE the target is used. Order matters:
+        //    `meets_target` takes the target from the header, so validating only
+        //    afterwards means an attacker chooses their own difficulty.
+        //
+        //    This used to be `bits == expected_bits`, a value fixed at
+        //    `initialize`. On a chain whose difficulty changes every block that
+        //    rejects every header after the checkpoint — the defect this
+        //    replaces. See `difficulty` for the algorithm, which was verified
+        //    against 471 real mainnet headers.
+        let parent_work = lc
+            .record(lc.tip_height)
+            .map(|r| r.chainwork)
+            .unwrap_or_default();
+        let chainwork = lc.difficulty_for(bits, parent_work)?;
 
         // 3. It must be real work. Linkage is not evidence on its own: anyone
         //    can build an arbitrarily long chain of easy headers.
@@ -216,6 +309,11 @@ pub mod solbeam {
             .ok_or(SolbeamError::Overflow)?;
 
         let record_hash = header_hash(&header);
+        let record = HeaderRecord {
+            hash: record_hash,
+            chainwork,
+            time: read_u32_le(&header, 68),
+        };
         if lc.headers.len() >= WINDOW {
             lc.headers.remove(0);
             lc.window_start += 1;
@@ -223,12 +321,19 @@ pub mod solbeam {
         if lc.headers.is_empty() {
             lc.window_start = height;
         }
-        lc.headers.push(HeaderRecord { hash: record_hash });
+        lc.headers.push(record);
 
         lc.tip_height = height;
         lc.tip_hash = record_hash;
+        lc.last_push_slot = Clock::get()?.slot;
 
-        msg!("SOLBEAM header {} {}", height, display_hex(&record_hash));
+        msg!(
+            "SOLBEAM header {} {} bits {:08x} work +{}",
+            height,
+            display_hex(&record_hash),
+            bits,
+            work_from_bits(bits)
+        );
         Ok(())
     }
 
@@ -244,20 +349,12 @@ pub mod solbeam {
     /// only happens if the branch is STRICTLY heavier; a tie keeps the
     /// incumbent, so nobody can grind a tiebreak.
     ///
-    /// **KNOWN NOT TO WORK AS WRITTEN.** A Solana transaction is capped at 1232
-    /// bytes, so a branch of more than about 13 headers cannot be submitted in
-    /// one instruction at all — the client fails with "Invalid bytes for
-    /// branch_bytes: length exceeds remaining bytes", which reads like an
-    /// encoding bug and is a size limit. This needs a staging area and an
-    /// incremental push-then-commit, which is a design decision as much as
-    /// code. See TEST_PLAN 4.6.
+    /// **Weight is accumulated chainwork, not height.** Each staged record
+    /// carries the work of the target its header declares, summed from the fork
+    /// point, so a short branch of hard blocks beats a long branch of easy ones
+    /// — which is the whole point of the rule and is not true of a length
+    /// comparison.
     ///
-    /// **Weight here is height.** Regtest fixes the difficulty, so every header
-    /// carries the same work and accumulated work is proportional to length.
-    /// Testnet needs real chainwork - `work = 2^256 / (target + 1)`, summed -
-    /// and that is a flag on this comparison rather than a rewrite, in the same
-    /// way DAA is. It cannot be exercised on regtest, where the target never
-    /// changes, so implementing it here would be untested code.
     /// A competing branch is submitted **one header at a time**. It cannot be
     /// sent whole: a Solana transaction is capped at 1232 bytes, and a real branch
     /// is far longer than the ~13 headers that would fit. So it is staged in a
@@ -281,15 +378,17 @@ pub mod solbeam {
         require!(!lc.paused, SolbeamError::Paused);
         // The common ancestor must be a header we still hold. Deeper than the
         // window needs a checkpoint reset, which is a governance action.
-        require!(
-            lc.index_of(fork_height).is_some(),
-            SolbeamError::ForkPointNotInWindow
-        );
+        let fork_parent_hash = lc
+            .hash_at(fork_height)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?;
 
         let staging = &mut ctx.accounts.staging;
         staging.submitter = ctx.accounts.submitter.key();
         staging.fork_height = fork_height;
-        staging.hashes = Vec::new();
+        // Read once, from the chain state as it is *now*. Everything this branch
+        // does afterwards is pinned to this value — see `ForkStaging`.
+        staging.fork_parent_hash = fork_parent_hash;
+        staging.records = Vec::new();
         staging.bump = ctx.bumps.staging;
         Ok(())
     }
@@ -324,42 +423,70 @@ pub mod solbeam {
         let batch = branch_bytes.len() / HEADER_LEN;
         require!(batch <= MAX_FORK_BATCH, SolbeamError::BatchTooLarge);
         require!(
-            staging.hashes.len() + batch <= WINDOW,
+            staging.records.len() + batch <= WINDOW,
             SolbeamError::ForkTooLong
         );
 
-        // Link to the tip of the branch so far, or to the main chain at the fork
-        // point while the branch is still empty. `get` rather than indexing: the
-        // window can be empty immediately after `initialize`, which is a real
-        // state rather than a panic.
-        let mut prev = match staging.hashes.last() {
-            Some(h) => *h,
+        // Link to the tip of the branch so far, or to the fork point while the
+        // branch is still empty.
+        //
+        // The first header links to the hash **recorded when the branch was
+        // staged**, not to whatever the chain holds at that height now. That is
+        // P2: a fresh lookup here lets the first header of a branch be judged
+        // against one chain state and the rest of it against another, and lets
+        // a branch staged against block A silently become a branch of block B.
+        // The recorded hash is the block this branch was built on; if the chain
+        // has since moved, the lookup below is what notices.
+        let mut chainwork;
+        let mut prev = match staging.records.last() {
+            Some(record) => {
+                // Resuming a staged branch: the parent's cumulative work is its
+                // last record's, and every record in the branch was derived the
+                // same way, so the running sum stays continuous across batches.
+                chainwork = record.chainwork;
+                record.hash
+            }
             None => {
-                let idx = lc
-                    .index_of(staging.fork_height)
+                let record = lc
+                    .record(staging.fork_height)
                     .ok_or(SolbeamError::ForkPointNotInWindow)?;
-                lc.headers
-                    .get(idx)
-                    .ok_or(SolbeamError::ForkPointNotInWindow)?
-                    .hash
+                chainwork = record.chainwork;
+                staging.fork_parent_hash
             }
         };
 
+        // The target rule depends only on the main chain, which does not move
+        // while this instruction runs, so it is computed once per batch rather
+        // than once per header. `difficulty_for` is not used directly because a
+        // branch's records are not written into the window until commit, so the
+        // check has to be run against the incumbent state, exactly as
+        // `push_header` would have run it had this header arrived on the main
+        // chain.
+        let required = lc.required_bits();
+
         // Validate the whole batch before writing any of it, so a bad header
         // half-way through does not leave a partial branch staged.
-        let mut checked: Vec<[u8; 32]> = Vec::with_capacity(batch);
+        let mut checked: Vec<HeaderRecord> = Vec::with_capacity(batch);
         for raw in branch_bytes.chunks(HEADER_LEN) {
             require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
             let bits = read_u32_le(raw, 72);
             // Target before work, for the reason given in `push_header`.
-            require!(bits == lc.expected_bits, SolbeamError::UnexpectedRetarget);
+            require!(
+                bits == required.unwrap_or(lc.expected_bits),
+                SolbeamError::UnexpectedRetarget
+            );
             require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
 
             let hash = header_hash_of_bytes(raw);
-            checked.push(hash);
+            chainwork = chainwork.saturating_add(work_from_bits(bits));
+            checked.push(HeaderRecord {
+                hash,
+                chainwork,
+                time: read_u32_le(raw, 68),
+            });
             prev = hash;
         }
-        staging.hashes.extend(checked);
+        staging.records.extend(checked);
         Ok(())
     }
 
@@ -377,9 +504,11 @@ pub mod solbeam {
 
     /// Swap the window onto the staged branch, if it is strictly heavier.
     ///
-    /// **Strictly** heavier: a tie keeps the incumbent, so equal-length branches
-    /// cannot be used to churn the tip. The staging account is closed here and
-    /// its rent returns to the submitter.
+    /// **Strictly** heavier: a tie keeps the incumbent, so equal-work branches
+    /// cannot be used to churn the tip. The comparison is real accumulated
+    /// chainwork, not height: on any chain where difficulty varies, a shorter
+    /// branch can carry more work, so height is not a proxy for it. The staging
+    /// account is closed here and its rent returns to the submitter.
     pub fn commit_fork(ctx: Context<CommitFork>) -> Result<()> {
         let lc = &mut ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
@@ -388,17 +517,43 @@ pub mod solbeam {
             staging.submitter == ctx.accounts.submitter.key(),
             SolbeamError::NotStagingOwner
         );
-        require!(!staging.hashes.is_empty(), SolbeamError::EmptyFork);
+        require!(!staging.records.is_empty(), SolbeamError::EmptyFork);
 
-        let new_tip_height = staging.fork_height + staging.hashes.len() as u64;
+        let new_tip_height = staging.fork_height + staging.records.len() as u64;
 
-        // Regtest fixes the target, so every header carries the same work and
-        // accumulated work is proportional to length — length is the comparison
-        // here. Testnet needs real chainwork, `work = 2^256 / (target + 1)`
-        // summed, and that is a flag on this comparison rather than a rewrite, in
-        // the same way DAA is. It cannot be exercised on regtest, where the target
-        // never changes, so implementing it now would be untested code.
-        require!(new_tip_height > lc.tip_height, SolbeamError::ForkNotHeavier);
+        // P2, the re-anchor check. The branch was staged on one specific block;
+        // if the chain no longer holds that block at that height, the branch is
+        // stale and must be re-staged against whatever is there now.
+        //
+        // Without this, two branches staged against the same height could both
+        // commit: the first moves the tip, the second splices its headers onto
+        // the *new* chain's block at the fork height, and the window ends up
+        // holding `headers[0..=fork_idx]` from one chain and the branch from
+        // another with no linkage between them at all. Linkage is the only
+        // invariant this client has; breaking it lets a header that is in no
+        // chain become canonical, and therefore lets a deposit that is in no
+        // block be minted. Re-staging is cheap; a forged mint is not.
+        let current_parent = lc
+            .hash_at(staging.fork_height)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?;
+        require!(
+            current_parent == staging.fork_parent_hash,
+            SolbeamError::ForkPointMoved
+        );
+
+        // The incumbent's tip and the branch's tip, measured on the same
+        // baseline: the window's cumulative work, where "cumulative" means from
+        // the checkpoint. The branch's value was accumulated as its headers
+        // arrived, from the fork point's record.
+        let incumbent_work = lc
+            .record(lc.tip_height)
+            .map(|r| r.chainwork)
+            .unwrap_or_default();
+        require!(
+            staging.records.last().map(|r| r.chainwork).unwrap_or_default()
+                > incumbent_work,
+            SolbeamError::ForkNotHeavier
+        );
 
         let fork_idx = lc
             .index_of(staging.fork_height)
@@ -407,8 +562,14 @@ pub mod solbeam {
         // Keep the prefix up to and including the fork point, append the branch,
         // then prune to the window. The prefix always begins at headers[0], so
         // window_start only moves by whatever the prune discards.
+        //
+        // The prefix's records are the shared ancestry: identical on both
+        // branches, which is why their hash, chainwork and time carry over
+        // unchanged. Every record above the fork point comes from the branch and
+        // was built as it arrived — hash, work and time together — so the window
+        // that results is a single contiguous chain with no gap in it.
         let mut rebuilt: Vec<HeaderRecord> = lc.headers[..=fork_idx].to_vec();
-        rebuilt.extend(staging.hashes.iter().map(|hash| HeaderRecord { hash: *hash }));
+        rebuilt.extend(staging.records.iter().cloned());
         if rebuilt.len() > WINDOW {
             let excess = rebuilt.len() - WINDOW;
             rebuilt.drain(0..excess);
@@ -420,7 +581,8 @@ pub mod solbeam {
 
         lc.headers = rebuilt;
         lc.tip_height = new_tip_height;
-        lc.tip_hash = *staging.hashes.last().unwrap();
+        lc.tip_hash = staging.records.last().unwrap().hash;
+        lc.last_push_slot = Clock::get()?.slot;
 
         emit!(ChainReorganised {
             from_height: staging.fork_height,
@@ -670,22 +832,99 @@ pub struct LightClient {
     /// ground one hash, and the proof-of-work check passed — which made the
     /// client forgeable by anyone with a laptop and made every "forging blocks
     /// must out-mine the chain" claim false.
+    ///
+    /// Since W1.6 this is the target a header must carry **only when
+    /// [`LightClient::no_retargeting`] is set** (regtest) or while the window is
+    /// still too short to compute cw-144 (fewer than 146 records, i.e. the first
+    /// blocks after `initialize` or `set_checkpoint`). On a live chain it is the
+    /// checkpoint's value and nothing more.
     pub expected_bits: u32,
+    /// Mirrors the node's `fPowNoRetargeting` chain parameter: on regtest the
+    /// target is never recomputed, and every block after the checkpoint must
+    /// carry the checkpoint's own `bits`.
+    ///
+    /// Derived at `initialize` from the checkpoint header, deterministically:
+    /// it is set when the checkpoint's compact target already equals the maximum
+    /// the compact encoding can express, which is exactly regtest's `powLimit`.
+    /// No chain can be easier than that, so a chain anchored there has nowhere
+    /// to adjust to — and a chain anchored anywhere else never acquires the
+    /// flag. Deriving it is deliberate: a stored boolean passed in by the
+    /// initialiser would be a value an attacker could set to skip the retarget
+    /// check entirely.
+    pub no_retargeting: bool,
+    /// The network's `powLimit` in compact form, fixed at `initialize`.
+    ///
+    /// A network parameter, not a property of the algorithm: mainnet's
+    /// `0x1d00ffff` caps the target far below regtest's `0x207fffff`. Applying
+    /// mainnet's limit to a regtest chain would reject blocks the node accepts.
+    pub pow_limit_bits: u32,
+    /// `Clock::slot` of the last accepted header.
+    ///
+    /// Recorded on every accepted header — main chain and committed fork alike.
+    /// It is a **freshness** input for a later design, and it cannot be
+    /// back-dated by the submitter because it comes from the sysvar; note that
+    /// it advances on *any* accepted header, so it measures how recently the
+    /// client was updated, not how honest the update was (audit T8).
+    pub last_push_slot: u64,
     pub paused: bool,
     pub bump: u8,
 }
 
 impl LightClient {
-    pub const SPACE: usize = 8                 // discriminator
-        + 8                                    // checkpoint_height
-        + 8                                    // tip_height
-        + 32                                   // tip_hash
-        + 8                                    // window_start
-        + 32                                   // authority
-        + 4                                    // expected_bits
-        + 4 + (WINDOW * HEADER_RECORD_SIZE)    // headers: Vec length + records
-        + 1                                    // paused
-        + 1;                                   // bump
+    pub const SPACE: usize = LIGHT_CLIENT_FIXED + (WINDOW * HEADER_RECORD_SIZE);
+
+    /// The window as the difficulty module wants it. Built fresh rather than
+    /// kept in a parallel field: a second copy of the window is a second thing
+    /// to get out of step with the first.
+    fn difficulty_records(&self) -> Vec<Record> {
+        self.headers
+            .iter()
+            .map(|h| Record {
+                time: h.time,
+                chainwork: h.chainwork,
+            })
+            .collect()
+    }
+
+    /// The `bits` the header at `tip_height + 1` must carry, or `None` while
+    /// the window is still too short for cw-144.
+    fn required_bits(&self) -> Option<u32> {
+        if self.no_retargeting {
+            // The node's own rule for a chain with no retargeting: the target
+            // is simply the previous block's. `expected_bits` is that value.
+            return Some(self.expected_bits);
+        }
+        let records = self.difficulty_records();
+        let pow_limit = compact_to_target(self.pow_limit_bits);
+        difficulty::next_target(&records, self.window_start, pow_limit).map(target_to_compact)
+    }
+
+    /// The whole difficulty check, in one place so `push_header` and
+    /// `push_fork_header` cannot drift apart.
+    ///
+    /// `parent_work` is the chainwork of the block this header builds on, and
+    /// the returned value is this header's cumulative chainwork — the sum of
+    /// the two, derived from the header's own `bits`. Deriving it rather than
+    /// trusting a supplied number is what makes the stored window internally
+    /// consistent: every record's work is the work of the target it declares.
+    fn difficulty_for(&self, bits: u32, parent_work: u128) -> Result<u128> {
+        if let Some(required) = self.required_bits() {
+            require!(bits == required, SolbeamError::UnexpectedRetarget);
+        } else {
+            // Fewer than 146 records, so the client cannot yet see the ancestor
+            // cw-144 needs and the rule is not computable. It holds the
+            // checkpoint's target for those blocks instead. This is bounded and
+            // one-way: the window only grows, so once it holds `LOOKBACK`
+            // records the fallback is gone and cannot be re-entered. It is a
+            // real (if narrow) trust hole and is stated as such — a checkpoint
+            // whose ancestors are outside the window has this window over which
+            // its successors are unchecked by the difficulty rule, though they
+            // are still checked for linkage and proof of work.
+            require!(bits == self.expected_bits, SolbeamError::UnexpectedRetarget);
+        }
+        let work = work_from_bits(bits);
+        Ok(parent_work.saturating_add(work))
+    }
 
     /// Index of a height inside the window, if it is still held.
     pub fn index_of(&self, height: u64) -> Option<usize> {
@@ -699,13 +938,38 @@ impl LightClient {
     pub fn height_at(&self, index: usize) -> u64 {
         self.window_start + index as u64
     }
+
+    /// The stored record for a height, or `None` if it has left the window.
+    pub fn record(&self, height: u64) -> Option<&HeaderRecord> {
+        let index = self.index_of(height)?;
+        self.headers.get(index)
+    }
+
+    /// The hash the window holds for a height, or `None` if it has left it.
+    pub fn hash_at(&self, height: u64) -> Option<[u8; 32]> {
+        self.record(height).map(|r| r.hash)
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default, PartialEq, Eq, Debug)]
 pub struct HeaderRecord {
-    /// Internal byte order, matching the Python reference. Everything else a
-    /// deposit proof needs is derived from, or supplied alongside, this.
+    /// Internal byte order, matching the Python reference. Everything a deposit
+    /// proof needs that is not the header itself is derived from, or supplied
+    /// alongside, this.
     pub hash: [u8; 32],
+    /// Cumulative proof of work from the checkpoint, not from genesis.
+    ///
+    /// The node's value is genesis-absolute, but cw-144 only ever subtracts two
+    /// cumulative values, so any common offset cancels. A checkpoint header
+    /// cannot supply the genesis total — that is a trusted scalar this PoC does
+    /// not take — so the window carries its own baseline: `initialize` starts
+    /// it at zero and every accepted header adds `work(target(bits))` to its
+    /// parent's value. The difference the algorithm consumes is then exact,
+    /// because both ends are sums of the same per-header quantities.
+    pub chainwork: u128,
+    /// The header's own timestamp. cw-144's denominator, and the field
+    /// `GetSuitableBlock` sorts the three topmost blocks by.
+    pub time: u32,
 }
 
 #[derive(Accounts)]
@@ -860,16 +1124,30 @@ pub fn bits_to_target_be(bits: u32) -> [u8; 32] {
     out
 }
 
-/// Difficulty adjustment. Regtest fixes the target, so this accepts only the
-/// network's own value — and is the single place that changes for testnet.
+/// The work a target is worth: `2^256 / (target + 1)`, the node's
+/// `GetBlockProof`.
 ///
-/// **DEAD CODE — F7.** This is no longer called anywhere. `push_header` requires
-/// `bits == expected_bits`, which is set once at `initialize` and never refreshed,
-/// so the client halts at the first difficulty retarget. Implementing the retarget
-/// needs a stored difficulty-period anchor: BSV retargets every 2016 blocks and the
-/// window holds only 288.
-pub fn check_daa(_bits: u32) -> bool {
-    true // regtest: fixed target
+/// Returned as `u128` because that is the only width the window can store —
+/// BSV's cumulative total is around 2^87, and a *per-block* value is smaller
+/// still. Saturating rather than wrapping, for the reason given in
+/// `push_header`: a wrapped work value would make a chain look lighter, not
+/// heavier, and a lighter chain is the one that wins a comparison by accident.
+///
+/// Only the *differences* of these values are ever used, so their absolute
+/// scale never has to be comparable with the node's genesis-absolute chainwork.
+pub fn work_from_bits(bits: u32) -> u128 {
+    let target = compact_to_target(bits);
+    if target.is_zero() {
+        // Not an encodable target: no header can meet it, so it is worth
+        // nothing. Returning 0 keeps this total and monotone.
+        return 0;
+    }
+    let work = (!U256::zero()) / (target + U256::one());
+    if work > U256::from(u128::MAX) {
+        u128::MAX
+    } else {
+        work.as_u128()
+    }
 }
 
 // -- small helpers ----------------------------------------------------------
@@ -1180,7 +1458,7 @@ pub enum SolbeamError {
     BadPow,
     #[msg("the checkpoint header does not meet its own target")]
     CheckpointBadPow,
-    #[msg("unexpected difficulty retarget — regtest fixes the target")]
+    #[msg("unexpected difficulty retarget")]
     UnexpectedRetarget,
     #[msg("the light client is paused")]
     Paused,
@@ -1220,6 +1498,8 @@ pub enum SolbeamError {
     EmptyFork,
     #[msg("the fork point is not inside the header window")]
     ForkPointNotInWindow,
+    #[msg("the fork point has moved since this branch was staged — re-stage it")]
+    ForkPointMoved,
     #[msg("the competing branch is not heavier than the current one")]
     ForkNotHeavier,
     #[msg("the staging account belongs to a different submitter")]

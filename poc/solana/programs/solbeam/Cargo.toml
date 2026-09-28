@@ -36,3 +36,10 @@ anchor-spl = { version = "1.2.0", features = ["token", "associated_token"] }
 # syscall on the SBF target; the `sha2` feature (not default) is what makes it
 # work in a host build, which is why it is switched on explicitly.
 solana-sha256-hasher = { version = "3", features = ["sha2"] }
+
+# 256-bit unsigned arithmetic — `arith_uint256`'s counterpart — for cw-144. It
+# is already in the tree transitively through the Solana SDK, but the difficulty
+# module depends on it directly since W1.6, and naming a transitive dependency
+# directly is what makes it a stable part of this crate's API rather than an
+# accident of the SDK's.
+uint = "0.10"
