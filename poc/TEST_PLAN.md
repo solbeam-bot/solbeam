@@ -93,7 +93,7 @@ The Python checker suite passes **156/156** offline, and **157/157** with a live
 
 ### 1.3 Not started
 
-- **Phase 2 — nearly complete.** The light client, the deposit verifier and the `solBSV` mint are built and verified on-chain — **13 tests** against the fixture, including a hostile-advancer suite. Outstanding: **reorg handling**, which is a design decision as much as a coding one, and the chainwork that goes with it. See §4.5.
+- **Phase 2 — built.** The light client, the deposit verifier and the `solBSV` mint are built and verified on-chain — **17 tests** against the fixture, including a hostile-advancer suite and fork staging with reorg following. **Real chainwork for the fork choice is not built**: `commit_fork` compares branch length, which is correct on regtest only. See §4.5, and §0 for the authoritative status.
 - **Phase 3** — the off-chain services (advancer / watcher / relayer); bond accounting, deadlines, refunds, the unbonding period.
 - The user-facing surface.
 - **Phase 5** — monitoring. Plan only; see §11.
@@ -191,7 +191,7 @@ These are the things that are wrong-by-default and cost a day if discovered late
 - `-minminingtxfee` set low, so regtest txs are cheap.
 - A regtest genesis that is **not** Bitcoin's — header, PoW target and message differ. Any hard-coded assumption here silently breaks.
 - A funded regtest wallet: `generatetoaddress 101` for spendable coinbase.
-- Regtest has a **fixed difficulty target**. DAA must therefore be *stubbed behind a flag*, not omitted — see §4.2.
+- Regtest has a **fixed difficulty target**, which hides the retarget defect: DAA is **actively rejected**, not stubbed behind a flag — see §4.2.
 
 **Solana**
 
@@ -201,7 +201,7 @@ These are the things that are wrong-by-default and cost a day if discovered late
 
 **Keys and secrets**
 
-- A regtest BSV keypair for the deposit address and one for the relayer hot wallet.
+- A regtest BSV keypair for the deposit address and one per relayer for its own float.
 - A Solana keypair for the payer, one per relayer, and the bridge PDA.
 - `.env.example` committed, real keys never committed. The existing `.gitignore` already covers `*.key`, `*.pem`, `.env`.
 
@@ -284,33 +284,37 @@ Solana's equivalent of regtest is **`solana-test-validator`** — a local single
 ### 4.1 What gets built
 
 1. **`solBSV`** — a classic SPL mint: 8 decimals, **no freeze authority**, mint authority = the bridge PDA. Asserted programmatically, not by inspection.
-2. **A BSV light client program** — a checkpoint, a rolling window of headers with chainwork, and instructions to push a header and to answer "is this tx in this block".
-3. **The bridge program** — deposit registry, `verify_and_mint`, the used-`(txid,vout)` set, caps, and pause.
-4. **The advancer** — an untrusted off-chain loop that reads headers from a BSV node and submits them.
+2. **A BSV light client program** — a checkpoint, a rolling window of 288 header hashes, and instructions to push a header and to answer "is this tx in this block". **No chainwork**: `commit_fork` compares branch length (§4.5).
+3. **The bridge program** — deposit registry, `verify_deposit` (there is no `verify_and_mint`), the used-`(txid,vout)` set, and the authority-gated pause. **The caps are not built**: `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented (F6/A9).
+4. **The advancer** — an untrusted off-chain loop that reads headers from a BSV node and submits them. The on-chain tests drive headers directly; a standalone advancer loop is not shipped.
 5. **A hostile advancer** — the same loop, deliberately malformed. It exists only to drive the negative tests.
 
-### 4.2 The DAA decision
+### 4.2 The DAA decision — **not a flag: DAA is actively rejected (F7)**
 
-Regtest has a fixed target, so DAA can be skipped for the PoC. **But it must be a flag, not an omission**: the check is implemented, code-pathed and unit-tested, and simply disabled on regtest. Otherwise the testnet run becomes a rewrite instead of a config change.
+An earlier draft called DAA "a flag, not an omission" — implemented, code-pathed and unit-tested, and simply disabled on regtest. **None of that is true.** `check_daa` has **no caller** and there is **no test** for it. Worse, `push_header` requires `bits == expected_bits`, and `expected_bits` is set once at `initialize` from the checkpoint header and **never refreshed** — `set_checkpoint` does not refresh it either.
+
+The consequence is a defect in built code, audit finding **F7**: on any chain whose target changes, every header after a retarget is rejected `UnexpectedRetarget` with no instruction able to fix it, so the client **halts permanently at the first difficulty retarget**. Invisible on regtest; fatal on testnet or mainnet. This was introduced by the A1 fix, which made the proof-of-work check actually bind. Implementing the retarget — or permitting `expected_bits` to advance at a retarget boundary — is item 1 in §0.4, and must happen before testnet.
 
 ### 4.3 Test scope
+
+> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (17 on-chain tests). Cases 2.5 (DAA), 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row.
 
 | # | Case | Expected |
 |---|---|---|
 | 2.1 | Mint properties | 8 decimals; freeze authority absent; mint authority == the bridge PDA |
-| 2.2 | Light client accepts a valid header sequence | Checkpoint + window stored; chainwork accumulates |
+| 2.2 | Light client accepts a valid header sequence | Checkpoint + window stored; each header links to the tip. **No chainwork accumulates** — not built |
 | 2.3 | Bad PoW / bad linkage / wrong checkpoint | Each rejected |
 | 2.4 | **Rolling window bound** | A header outside the window is rejected; **rent cost measured and recorded** |
-| 2.5 | **DAA check** (flag on) | Accepts a valid retarget, rejects an invalid one — even though regtest disables it |
+| 2.5 | **Difficulty retarget (F7)** | **Not built and not tested.** Today every header after a retarget is rejected `UnexpectedRetarget`. The case to add: a valid retarget accepted, an invalid one rejected |
 | 2.6 | **Cross-implementation agreement** | The on-chain Merkle/header logic and the Python verifier accept and reject the *same* fixtures. This is the single most valuable test in the PoC — it is where two independent implementations are forced to agree |
 | 2.7 | **Mint from the Phase 1 fixture** | Balance rises by exactly the deposited amount, at the right ATA, with 8 decimals |
 | 2.8 | Replay the same proof | Rejected |
 | 2.9 | Tampered branch / wrong `vout` / wrong amount / wrong recipient | Each rejected |
 | 2.10 | **Hostile advancer** — fabricated header, out-of-order header, duplicated header | All rejected; it cannot mint, and it cannot corrupt the window |
-| 2.11 | **Stalling advancer** | Chain stops advancing; **no funds are at risk**; a second advancer recovers the tip |
-| 2.12 | Caps and `pause` | Mint above cap rejected; mint while paused rejected; **holders can still burn** |
+| 2.11 | **Stalling advancer** | Chain stops advancing; **no funds are at risk**. **Not built**: a second advancer recovering the tip is a planned demo, not a shipped path |
+| 2.12 | `pause` — and the caps that do not exist | Mint while paused rejected; authority-gated. **Caps are not built** — `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented (F6/A9), and burn does not exist |
 | 2.13 | **Compute-unit budget** | The SPV-verify path's CU cost is measured and recorded. The design estimate is ~2,842 CU per deposit proof — **confirm or correct it** |
-| 2.14 | User role, end to end | A browser wallet pointed at localnet sees and moves `solBSV` |
+| 2.14 | User role, end to end | **Not built.** Planned: a browser wallet pointed at localnet sees and moves `solBSV` |
 
 ### 4.4 Acceptance and artefact
 
@@ -332,9 +336,9 @@ Three parts were needed, and all three are now built:
 
 1. **a way to submit a competing branch** — `init_staging` / `push_fork_header` / `commit_fork` (§4.6);
 2. **the replacement policy** — **strictly heavier wins, ties keep the incumbent**, so an equal-length branch cannot be used to churn the tip; a branch may fork back to any height still inside the window, and deeper than that needs a checkpoint reset, which is a governance action;
-3. **what happens to already-minted deposits** — **nothing.** They are not reversed. The twelve-confirmation depth is the protection, and `solBSV` deliberately has no freeze authority, so reversal is not merely unimplemented but impossible by design. The trade is explicit: no confiscation, at the cost of a possible unbacked mint after a reorg deeper than twelve blocks.
+3. **what happens to already-minted deposits** — in the **shipped** program, **nothing.** The mint went straight to the depositor, no vault exists, and `solBSV` deliberately has no freeze authority, so a *released* balance cannot be reversed. (In the designed system a still-*staged* mint is burned out of the program-owned vault; a released mint still cannot be reversed.) The trade is explicit: no confiscation, at the cost of a possible unbacked mint after a reorg deeper than twelve blocks.
 
-**Chainwork remains flag-shaped.** `commit_fork` compares branch *length*, which is correct on regtest because the target never changes and work is therefore proportional to length. Testnet needs real chainwork — `work = 2^256 / (target + 1)`, summed — and that is a flag on this comparison rather than a rewrite, the same category as DAA. Implementing it now would be untested code, since regtest cannot exercise it.
+**Chainwork is absent, not flag-shaped.** `commit_fork` compares branch *length*, which is correct on regtest because the target never changes and work is therefore proportional to length. Testnet needs real chainwork — `work = 2^256 / (target + 1)`, summed — and **none of it is built**. Unlike DAA (F7), which is built code that halts, chainwork is simply missing. Implementing it now would be untested code, since regtest cannot exercise it.
 
 ### 4.6 The branch cannot be submitted in one transaction
 
@@ -383,7 +387,7 @@ A day is the right scale because of what a deeper reorg would mean. If BSV reorg
 
 `288 × 32 + overhead = 9,322 bytes` — the same account size the earlier 144-header layout needed, now covering twice the time. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
 
-Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it, and the suite is 14 passing.
+Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it. The suite is now 17 passing (§0).
 
 Two latent bugs on the reorg path were fixed while the fields were being reshaped: `push_fork` never advanced `window_start` when it pruned the rebuilt window, and it indexed `headers[fork_idx]` directly — which would **panic** in the one state that is genuinely empty, immediately after `initialize`.
 
@@ -395,19 +399,20 @@ Two latent bugs on the reorg path were fixed while the fields were being reshape
 > [`docs/12-peg-mechanism.md`](../docs/12-peg-mechanism.md)** — the peg-in and
 > peg-out flows, the reorg gates, the relayer and bond model, and the parameter
 > classes. That document is the source of truth; where it and this plan disagree,
-> it wins and this plan is updated. The tests below predate it and have not yet
-> been aligned with the gates it specifies.
+> it wins and this plan is updated. The tests below have been aligned with the
+> current model — `bond_R ≥ k × owed_R` with `k = 1`, and every failure path a
+> return rather than a mint — but `docs/12` remains authoritative.
 
 **Goal: the enforcement path works — burn, pay, prove, settle — and cheating is bounded, punished, or both.**
 
-This is where the trust-minimised machinery lives, and where the recent trust-model corrections ([`docs/04-trust-model.md`](../docs/04-trust-model.md#the-naked-option-attack)) turn into tests. The bond is **denominated in `solBSV`**, and the two invariants that matter are `bond ≥ k × (hot float + releasable tranche)` and `custodied BSV ≥ outstanding solBSV` at every step.
+This is where the trust-minimised machinery lives, and where the recent trust-model corrections ([`docs/04-trust-model.md`](../docs/04-trust-model.md#the-naked-option-attack)) turn into tests. The bond is **denominated in `solBSV`** and sized **`bond_R ≥ k × owed_R` with `k = 1`** (D5), where `owed_R` is the per-relayer liability the program accumulated from proofs it verified itself — **including staged mints still in the vault** (F4). A relayer's own float is **not** covered by the bond. The reserve invariant `custodied BSV ≥ outstanding solBSV` is **monitored and published, not enforced** (D8): the reserve is off-chain BSV the program cannot read.
 
 ### 5.1 What gets built
 
-1. `burn(amount, bsv_destination)` — burns `solBSV`, records a redemption with a deadline.
-2. **A relayer binary** — watches burns, pays from the hot wallet, builds the payout proof, submits `fulfil`.
+1. `burn(amount, bsv_destination)` — escrows `solBSV` into the program vault and records a redemption with a deadline.
+2. **A relayer binary** — watches burns, pays BSV from **its own float**, builds the payout proof, and submits `fulfil`.
 3. `fulfil(id, proof)` — verifies the payout on-chain against the requested destination and amount.
-4. `refund(id)` — after the deadline, re-mints the holder and slashes the bond.
+4. `refund(id)` — after the deadline, with no valid payout proven, **returns the escrow to the holder**. Supply is unchanged; the bond is **not** additionally transferred; no failure path mints.
 5. `challenge(...)` / `slash(...)` — the unmatched-spend path.
 6. **Bond custody**: locked `solBSV`, and an **unbonding period** longer than the deadline plus the challenge window.
 7. **A deliberately misbehaving relayer** — a mode that selects an attack. This is a *testability requirement*, not a nicety: it is the only way the negative cases can be driven deterministically.
@@ -417,17 +422,17 @@ This is where the trust-minimised machinery lives, and where the recent trust-mo
 | # | Case | Expected |
 |---|---|---|
 | 3.1 | Happy path | Redemption closes; supply decrements; BSV lands at the destination |
-| 3.2 | Relayer never pays | After the deadline the holder is **re-minted** and the bond is slashed |
-| 3.3 | Wrong address / underpayment | Proof cannot match the request → not fulfilled → deadline refund |
+| 3.2 | Relayer never pays | After the deadline the escrow is **returned to the holder**; supply is unchanged; the bond is **not** additionally transferred. No failure path mints |
+| 3.3 | Wrong address / underpayment | Proof cannot match the request → not fulfilled → the deadline returns the escrow |
 | 3.4 | **Double-claim** — `fulfil` then `refund`, and `refund` then `fulfil` | Both orderings impossible; exactly one terminal state |
 | 3.5 | **Naked spend** (no redemption outstanding) | Bounded by the float cap; **requires a challenger** to slash. Assert the bound is what the parameters claim |
 | 3.6 | Naked spend, **nobody challenges** | The loss is bounded and the bond is *not* seized. **Record this as the honest residual**, with the no-idle-float rule as the mitigation |
 | 3.7 | **Unbonding period** | A relayer cannot exit mid-commitment; exit succeeds only after commitments settle and the notice period elapses |
-| 3.8 | **Bond denomination and deflationary slash** | A slashed theft removes supply as the reserve falls; assert backing per token does **not** fall — and rises when `bond > float` |
+| 3.8 | **Bond denomination and deflationary slash** | A slashed theft removes supply as the reserve falls; assert backing per token does **not** fall — and rises when `bond_R > owed_R` |
 | 3.9 | Reorg after payout | The 6-hour window catches it; the closed redemption's behaviour is documented |
-| 3.10 | Concurrent redemptions | All settle; no hot-wallet double spend |
-| 3.11 | Relayer offline mid-flight | The deadline still protects the holder |
-| 3.12 | **Round-trip invariant, after every case** | `custodied BSV ≥ outstanding solBSV` asserted as a hard failure, not a warning |
+| 3.10 | Concurrent redemptions | All settle; no double spend of a relayer's float |
+| 3.11 | Relayer offline mid-flight | The deadline still protects the holder: the escrow is returned |
+| 3.12 | **Round-trip invariant, after every case** | `custodied BSV ≥ outstanding solBSV` asserted by the off-chain harness as a hard failure. **D8: monitored, not enforced on-chain** — the reserve is off-chain BSV the program cannot read |
 
 ### 5.3 Acceptance and artefact
 
@@ -481,14 +486,14 @@ Model **B** stays on the roadmap as the better *product* answer. The PoC's job i
 | **Software** | **A Python program** with a config file — one process, loops for watch / pay / prove / submit, plus unbonding (decision 3: the service language is chosen later, on the evidence) |
 | **A BSV hot key** | Plus a way to broadcast — its own node or an untrusted broadcast API |
 | **A Solana keypair + RPC** | To read burns and submit `fulfil` |
-| **A bond in `solBSV`** | **Locked** on Solana, sized `≥ k × (hot float + releasable tranche)`. Not a balance it can move |
+| **A bond in `solBSV`** | **Locked** on Solana, sized **`≥ k × owed_R` with `k = 1`** (D5) — against the liability the program measured, **including staged mints**, not against the relayer's own float (F4). Not a balance it can move |
 | **Proof data** | Headers and a Merkle branch for its own payout. Its own SPV or a public API — the *source need not be trusted*, because the program verifies the proof |
-| **Monitoring** | Float level vs cap, bond level vs exposure, pending deadlines, missed fulfilments. A relayer that cannot see its own deadlines will be slashed by its own latency |
+| **Monitoring** | Its own float level, `bond_R` against `owed_R`, pending deadlines, missed fulfilments. A relayer that cannot see its own deadlines will miss them |
 | **An exit path** | Announce, settle outstanding commitments, wait out the unbonding period |
 | **A misbehaviour mode** | **Required for the PoC.** A flag that selects an attack — steal the float, vanish, underpay, pay the wrong address, refuse to unbond — so the negative tests are deterministic rather than hand-driven |
 | **Two instances** | Run two relayers concurrently, to prove independence of float and bond, and that competition does not break settlement |
 
-Note the capital consequence, which the PoC should make visible rather than hide: at `k = 5` a relayer locks **five times** the float it serves, and bonded `solBSV` **cannot be redeemed while bonded**. That locked capital, not gas, is what the fee has to cover.
+Note the capital consequence, which the PoC should make visible rather than hide: at **`k = 1`** a relayer locks at least its measured liability `owed_R` — **not** the float it serves, which the bond does not cover — and bonded `solBSV` **cannot be redeemed while bonded**. That locked capital, not gas, is what the fee has to cover.
 
 ### 6.3 The advancer — permissionless, untrusted, replaceable
 
@@ -514,7 +519,7 @@ Recorded so reviewers know what they are *not* seeing.
 
 | Deferred | Why |
 |---|---|
-| **Cold-reserve covenant** (cold → hot only, tranches, hot-balance cap) | Its job is to bound a stolen cold key, which only matters once there is a large reserve. The PoC keeps everything in one hot wallet covered by a bond |
+| **Cold-reserve covenant** (cold → hot only, tranches, hot-balance cap) | Not needed, because **the design removes the pooled reserve rather than securing it** (A6): deposits pay each relayer's own BSV script, and each relayer is bonded against its own `owed_R`, so there is no single cold key or aggregated pot to protect. *Designed, not built* — the shipped program still has one bridge-wide P2PKH deposit script, the pooled reserve A6 exists to remove |
 | **Signerless peg-out** (ZK proof of a Solana burn verified in BSV Script) | A 2–4 year research programme |
 | **FROST / threshold keys**, insurance, proof-of-reserves publication | Production hardening |
 | **Relayer competition economics**, fee markets | The PoC runs two relayers to test independence, not to model a market |
@@ -531,10 +536,10 @@ Phase 0 ──┬─► 1A  (synthetic chain, no node)  ──┐
           └─► 1B  (real SV Node format pin) ────┘
 ```
 
-- **The critical path is Phase 2** — specifically the light client. Everything else can run in parallel with it or ahead of it.
-- **Phase 1A needs no environment at all** and can start today, on this machine.
-- **Phase 1B is done** — every byte format is pinned against a live SV Node, so Phase 2's on-chain verifier now has a measured target rather than an assumed one. It cost four corrections, all to one RPC's wire format; see [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts).
-- **Phase 3 depends on Phase 2** and on the relayer, but its negative tests can be specified now.
+- **Phases 0, 1A, 1B and 2 are built.** The critical path is no longer Phase 2; it is the ordered list in §0.4 — **F7 first** (the client halts at the first retarget), then F6, then the vault, then per-relayer deposits / `owed_R` / consent, then peg-out.
+- **Real chainwork is not built** — `commit_fork` compares branch length, correct on regtest only.
+- **Phase 1B is done** — every byte format is pinned against a live SV Node, so the on-chain verifier has a measured target rather than an assumed one. It cost four corrections, all to one RPC's wire format; see [`VERSIONS.md`](VERSIONS.md#sv-node-rpc-facts).
+- **Phase 3 depends on the vault and on the relayer**, but its negative tests can be specified now.
 
 The one ordering rule worth enforcing: **the fixture layout is owned by Phase 1.** If Phase 2 needs it changed, the fix goes in Phase 1 so that both halves keep consuming the same bytes.
 
@@ -546,15 +551,15 @@ Indicative, one focused developer. Note that Phase 1 is new work that the earlie
 
 | Phase | Duration | Notes |
 |---|---|---|
-| **Phase 0** — environment, bootstrap, doctor | 2–3 days | ✅ **Done.** `doctor.sh`: 19 ok, 0 failures on the x86_64 droplet |
+| **Phase 0** — environment, bootstrap, doctor | 2–3 days | ✅ **Done.** `doctor.sh`: 19 ok, 1 warning, 0 failures on the x86_64 droplet |
 | **Phase 1A** — synthetic chain + deposit proof | 3–4 days | ✅ **Done.** |
 | **Phase 1B** — real SV Node format pin | 1–2 days | ✅ **Done.** Took four live iterations, all on `getmerkleproof2`'s wire format |
-| **Phase 2** — token, light client, mint, hostile advancer | 1.5–2 weeks | **The long pole** |
+| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 17 on-chain tests. Real chainwork is still not built |
 | **Phase 3** — burn, relayer, bond, deadline, challenge | 1–1.5 weeks | Includes the misbehaving-relayer mode |
-| **Testnet repeat** (BSV testnet + Solana devnet, DAA on) | 2–3 days | Proves the DAA flag and real difficulty |
+| **Testnet repeat** (BSV testnet + Solana devnet) | 2–3 days | **Blocked until the retarget is implemented (F7)**: DAA is actively rejected today, so the client halts at the first difficulty change — it is not a flag to switch on |
 | **Total to a demoable PoC** | **~5–6 weeks** | |
 
-**The trustless-mint claim alone** (Phases 0, 1 and 2, with the relayer stubbed) lands in **~2.5–3 weeks** and is already the strongest single claim in the design.
+**The trustless-mint claim alone** (Phases 0, 1 and 2, with the relayer stubbed) landed in **~2.5–3 weeks** and remains the strongest single claim in the design.
 
 ---
 

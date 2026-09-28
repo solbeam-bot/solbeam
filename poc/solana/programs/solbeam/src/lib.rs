@@ -50,7 +50,7 @@ pub const HEADER_LEN: usize = 80;
 ///
 ///   * **Account creation caps at 10,240 bytes.** The window must keep its
 ///     per-header record small. `HeaderRecord` stores a bare hash (32 bytes):
-///     288 x 32 + overhead = 9,286 bytes, the same account size a 144-header
+///     288 x 32 + overhead = 9,322 bytes, the same account size a 144-header
 ///     window needed when records also carried a Merkle root.
 ///   * **The whole account is deserialised on every instruction**, so a bigger
 ///     window is also more compute on the mint path. 9,216 bytes of records is
@@ -863,9 +863,11 @@ pub fn bits_to_target_be(bits: u32) -> [u8; 32] {
 /// Difficulty adjustment. Regtest fixes the target, so this accepts only the
 /// network's own value — and is the single place that changes for testnet.
 ///
-/// A flag rather than an omission: the check exists, is code-pathed and is
-/// called on every header, so enabling retargeting is a comparison here rather
-/// than a rewrite of the light client.
+/// **DEAD CODE — F7.** This is no longer called anywhere. `push_header` requires
+/// `bits == expected_bits`, which is set once at `initialize` and never refreshed,
+/// so the client halts at the first difficulty retarget. Implementing the retarget
+/// needs a stored difficulty-period anchor: BSV retargets every 2016 blocks and the
+/// window holds only 288.
 pub fn check_daa(_bits: u32) -> bool {
     true // regtest: fixed target
 }

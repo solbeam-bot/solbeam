@@ -203,7 +203,7 @@ most to lose have the most reason to push the honest headers and notice an orpha
 be appointed as a watcher; the economics do it. **The incentive is indirect only:** there is a
 **bounty for challenging a bad payout**, and **no bounty for detecting a reorg**, where detection
 is the whole defence against a released fraudulent mint (F3). See
-[The system, in summary](13-summary.md#reorg-protection).
+[The system, in summary](13-summary.md#reorg-protection-designed).
 
 A watchtower is still a sensible thing for a relayer to run over its own book, but it is an
 optimisation rather than the enforcement mechanism, and the design does not depend on it.

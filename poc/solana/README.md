@@ -2,7 +2,7 @@
 > **STALE — predates the current program.** It claims "this code has never been
 > compiled", that `check_daa()` runs on every header, and that there is "no mint and no
 > token". None of that is true today: the program builds, has 17 passing tests, mints
-> `solBSV`, and `check_daa` has **no caller at all**. See [`TEST_PLAN.md`](TEST_PLAN.md) §0.
+> `solBSV`, and `check_daa` has **no caller at all**. See [`TEST_PLAN.md`](../TEST_PLAN.md) §0.
 
 
 **First increment: the light client only.** A checkpoint, a rolling window of
@@ -102,7 +102,7 @@ Each is a decision, not an oversight:
 
 1. `anchor build` on the droplet, then a fix pass.
 2. Chainwork, so a lower-work competing chain is rejected.
-3. The Merkle fold and `verify_and_mint`, consuming the fixture's **instruction**
+3. The Merkle fold and `verify_deposit`, consuming the fixture's **instruction**
    — not just its headers.
 4. `solBSV`: classic SPL, 8 decimals, no freeze authority, mint authority = the
    bridge PDA, with the ATA created so a first-time user needs no SOL.

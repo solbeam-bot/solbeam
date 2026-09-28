@@ -67,7 +67,7 @@ Every BSV block needs one header pushed, so the client costs **144 transactions 
 
 **Base fees are trivial; priority fees are the real variable.** Under congestion this is the number that matters, and it is beyond the protocol's control.
 
-Two mitigations exist. Headers can be **batched**, since about 13 fit in one transaction: that cuts base fees to **$1.56/year**, at the cost of the client lagging about two hours behind the chain — acceptable, because a mint already waits out the confirmation depth the depositor chose, and then the maturity window on top. Batching does not reduce priority fees, which dominate.
+Two mitigations exist. Headers can be **batched**, since about 12 fit in one transaction: that cuts base fees to **$1.56/year**, at the cost of the client lagging about two hours behind the chain — acceptable, because a mint already waits out the confirmation depth the depositor chose, and then the maturity window on top. Batching does not reduce priority fees, which dominate.
 
 ### Being parsimonious: what the window stores, and why it is now one word long
 

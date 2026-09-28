@@ -111,7 +111,7 @@ That is the insight a ratio destroys, and it is the reason the absolute numbers 
 |---|---|
 | `solBSV` supply | Solana `getTokenSupply` |
 | Reserve at large | the covenant-locked cold address balance, read from BSV |
-| Hot float | the relayer hot wallets |
+| Hot float | the individual relayers' own BSV |
 | **The invariant** | `reserve ≥ supply`, shown as surplus or deficit |
 
 **Publish the addresses.** A proof-of-reserves that says "here are the addresses, go and look" is stronger than a signed attestation, because it is independently checkable and cannot be quietly restated. Show the series over time, not a snapshot, so a deficit is visible *while it develops* rather than only in the post-mortem.
@@ -124,7 +124,7 @@ Display supply in both tokens and BSV, and show the peg-out queue next to it, be
 
 - **Flow:** cumulative mints (count and BSV volume), cumulative redemptions, net supply, refunds, slashes.
 - **Latency:** the distribution of deposit→mint and redemption→payout times. This is the honest answer to "how long does it take", and it will be uglier than a single advertised number — which is the point.
-- **Bond coverage:** aggregate bond against `k × (hot float + releasable tranche)`, the number of active relayers, and the unbonding queue. Publishing this makes the trust model **live** rather than described; a reader can watch the safety factor instead of taking it on faith.
+- **Bond coverage:** aggregate bond against `k × (owed_R)`, the number of active relayers, and the unbonding queue. Publishing this makes the trust model **live** rather than described; a reader can watch the safety factor instead of taking it on faith.
 - **Fees** actually paid, not advertised.
 
 ---

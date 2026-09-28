@@ -22,7 +22,7 @@ The point is not to confirm that the tests pass. The point is to **try to break 
 | **Proof producer** | The verifier: forge an inclusion proof, inflate an amount, replay a deposit | **Now** |
 | **Man in the middle (against the user)** | The address or payload the user is told to use | **Now** — and see §4, where two of these cannot be prevented |
 | **Reorg attacker** | The chain itself: undo a deposit after it is mintable | **Now** |
-| **Hostile advancer** | The header chain: feed fabricated, reordered or low-work headers | Phase 2 |
+| **Hostile advancer** | The header chain: feed fabricated, reordered or low-work headers | **Now** — on-chain suite (lower-work is not testable until chainwork is built) |
 | **Rogue relayer** | The float, the bond, the deadline, the unbonding period | Phase 3 |
 | **Colluding user + relayer** | The refund path: claim both the payout and the refund | Phase 3 |
 
@@ -81,12 +81,15 @@ The protocol is behaving correctly. It has no way to know the user was told the 
 
 ---
 
-## 5. Plays waiting on Phase 2 — you are the advancer
+## 5. Plays against the header chain — Phase 2 is built
+
+The light client and fork staging exist and pass 17 on-chain tests, so the hostile-advancer cases run now. Note that **chainwork is not built**: `commit_fork` compares branch *length*, which is correct on regtest only, so the lower-work case needs the real chainwork comparison before testnet.
 
 | Play | What you try | Expected |
 |---|---|---|
-| `hostile-advancer` | Submit fabricated headers; reorder them; submit duplicates; offer a *valid but lower-work* competing chain | All rejected. The low-work case is the one to watch: linkage alone is not enough, the client must compare accumulated work |
-| `stall-advancer` | Simply stop advancing | No funds at risk. Mints stop. A second advancer recovers the tip. This is the honest liveness dependency: the advancer cannot steal, it can only delay |
+| `hostile-advancer` | Submit fabricated headers; reorder them; submit duplicates | All rejected. The adversarial suite is part of the on-chain tests |
+| `hostile-advancer` (lower work) | Offer a *valid but lower-work* competing chain | **Not testable yet** — branch *length* is compared, not accumulated work (`chainwork` is unbuilt). Planned for testnet |
+| `stall-advancer` | Simply stop advancing | No funds at risk. Mints stop; a second advancer recovers the tip. **The two-advancer recovery demo is not built.** This is the honest liveness dependency: the advancer cannot steal, it can only delay |
 
 ## 6. Plays waiting on Phase 3 — you are the relayer
 
@@ -94,13 +97,13 @@ This is where the trust model actually gets tested, and where the interesting fi
 
 | Play | What you try | Expected |
 |---|---|---|
-| `rogue-earmarked` | Take the float while a redemption you accepted is outstanding | Deadline refunds the holder; your bond is slashed. **Self-reporting** — no watcher needed |
+| `rogue-earmarked` | Take the float while a redemption you accepted is outstanding | The deadline **returns the escrow to the holder**; supply is unchanged, and the bond is **not** additionally transferred to a holder already made whole. The bond answers the deliberate theft — it does not top up a failed redemption. **Self-reporting** — no watcher needed. No failure path mints |
 | `rogue-naked` | Take an **idle** float with no redemption outstanding | Bounded by the float cap; the bond is seized **only if a challenger submits it**. Run it twice — once challenger active, once not — and confirm the honest residual: bounded but unpunished. This is the play that tests the least comfortable claim in [`docs/04-trust-model.md`](../docs/04-trust-model.md#the-naked-option-attack) |
-| `rogue-vanish` | Accept a job, then disappear | Holder re-minted, bond slashed |
-| `rogue-underpay` | Pay less than owed | Proof cannot match; deadline refund |
+| `rogue-vanish` | Accept a job, then disappear | The escrow is **returned to the holder**; supply is unchanged; the bond is **not** additionally transferred. The bond makes deliberate abandonment punishable — it is not compensation for a failed redemption |
+| `rogue-underpay` | Pay less than owed | Proof cannot match; the deadline returns the escrow |
 | `rogue-refuse-unbond` | Exit mid-commitment to dodge a slash | Blocked by the unbonding period |
 | `rogue-self-deal` | Burn your own `solBSV`, pay yourself, then claim the refund too | Exactly one terminal state; the double-claim must be impossible |
-| `pump-the-bond` | Simulate a BSV price move and profit by forfeiting the bond | Impossible: the bond is `solBSV`, so `bond ≥ k × exposure` is unchanged by any price. This play exists specifically to re-test the attack that was found in design review |
+| `pump-the-bond` | Simulate a BSV price move and profit by forfeiting the bond | Impossible: the bond is `solBSV`, so **`bond_R ≥ k × owed_R` (`k = 1`)** is unchanged by any price. This play exists specifically to re-test the attack that was found in design review |
 | `reorg-payout` | Reorg a payout after it settled | The settlement window catches it; document what happens to the already-closed redemption |
 
 The relayer needs a **`--attack <name>` flag** to make these deterministic rather than hand-driven. That flag is a requirement of Phase 3, and this table is its specification.
