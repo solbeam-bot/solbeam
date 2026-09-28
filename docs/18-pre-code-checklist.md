@@ -17,7 +17,7 @@ code written) or *open* (needs a decision). The code is unchanged from the A1/A2
 | **P2** | `commit_fork` does not re-anchor | **Specified** | Store `fork_parent_hash` at init; link from it; re-check at commit |
 | **P3** | Deposits have a hard ~48 h life | **Decided** — 48 h accepted | App automates the mint; deadline disclosed; unproven receipts published off-chain |
 | **P4** | Retarget halts the client (F7) | **Specified** | Store the difficulty-period anchor; compute and check the new target. Testable on regtest |
-| **P5** | Replay-list shutdown and hard ceiling | **Half-decided** | `MIN_PEG_IN = 1 BSV` decided. **The 200-per-window ceiling is not fixed by it** — see below |
+| **P5** | Replay-list shutdown and hard ceiling | **Decided** | `MIN_PEG_IN = 1 BSV`, **and the fixed list replaced by a nullifier PDA per minted deposit** |
 | **P6–P10** | Vault-era items | **Design-in** | Depend on the vault, which is unbuilt |
 
 Only **P1** is closed by a decision rather than by work. Everything else is work still to do.
@@ -107,7 +107,7 @@ the rest of the window, repeatably. Independently, it caps the protocol at **200
 
 ---
 
-## P5 — a minimum fixes the dust, not the ceiling
+## P5 — settled: a minimum, plus a nullifier per deposit
 
 Two different problems were filed together, and only one is answered by a minimum deposit.
 
@@ -134,8 +134,10 @@ capacity limit, not a safety one, and it would bite in ordinary use.
 | **A nullifier PDA per minted deposit** ✅ | **none** | ~0.002 SOL rent per mint, refundable when closed | **The structural fix.** Solana cannot enumerate PDAs, but it does not need to — replay is checked by looking up a derived address |
 | Multiple list accounts | 200 × n | n × rent | Works, more moving parts |
 
-**The nullifier is the right answer**, and it also removes the pruning logic entirely: a deposit
-is "used" if its PDA exists. Closing those accounts after the window returns the rent.
+**Decided: adopt the nullifier.** A deposit is "used" if its derived PDA exists, which removes
+the ceiling, the pruning logic and the accidental capacity cap at once. Solana cannot enumerate
+PDAs but does not need to — replay is checked by *deriving* an address, not by scanning a list.
+Rent is ~0.002 SOL per mint, refundable when the account is closed after the window.
 
 **Separately, the aggregate mint cap is still unimplemented.** `MAX_MINT_PER_WINDOW` was designed
 as the safety parameter; the replay list is a *different* thing that has been accidentally
