@@ -456,15 +456,12 @@ fn single_header_trace_matches_the_reference() {
     assert_eq!(work_delta, 19_799_344_252_901_577_219_061);
     assert_eq!(records[last].time - records[first].time, 90_211);
 
-    println!("TRACE fw={} ft={} lw={} lt={}", records[first].chainwork, records[first].time, records[last].chainwork, records[last].time);
     let target = difficulty::compute_target(
         records[first].chainwork,
         records[first].time,
         records[last].chainwork,
         records[last].time,
     );
-    println!("TRACE target={:x}", target);
-    println!("TRACE scaled({:x})", (U256::from(work_delta) * U256::from(600u64)) / U256::from(90_211u64));
     // Python's independent implementation of the same formula for this height:
     //   work   = 19,799,344,252,901,577,219,061 * 600 / 90,211
     //          = 131,686,895,741,549,770,332

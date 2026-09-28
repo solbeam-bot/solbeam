@@ -122,7 +122,7 @@ window holds **192 hashes** — about 32 hours at ten-minute blocks. This is nor
 a reorg, not an attack.
 
 **(b) So every deposit has a deadline.** `verify_deposit` asks "is the block at height H in the
-window?" After ~288 blocks the answer is permanently no. The proof can never be verified again.
+window?" After ~192 blocks the answer is permanently no. The proof can never be verified again.
 
 **(c) The BSV does not come back.** The deposit sits in the relayer's own script. Moving it needs
 a BSV transaction signed by **that relayer's key**. The protocol is on Solana and cannot sign it,
@@ -164,7 +164,7 @@ we store 192, of which 147 are consumed by the DAA.
 ### P5 — The replay list is a cheap shutdown and a hard ceiling · **F6, unfixed**
 `MAX_USED = 200` with `MIN_PEG_IN` unimplemented. Two hundred dust deposits block every peg-in for
 the rest of the window, repeatably. Independently, it caps the protocol at **200 peg-ins per
-48 hours** with no attacker at all.
+32 hours** with no attacker at all.
 
 ---
 

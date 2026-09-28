@@ -59,21 +59,23 @@ construct_uint! {
 
 /// BSV's target block spacing in seconds. `params.nPowTargetSpacing`.
 pub const BLOCK_SPACING: u64 = 600;
-/// `nPowTargetTimespan` = 2 weeks = 2016 blocks; retained because the node
-/// derives its clamps from it.
+/// `nPowTargetTimespan` = 2 weeks; retained because the node derives its
+/// difficulty period from it, though cw-144 does not use it directly.
 pub const TARGET_TIMESPAN: u64 = 14 * 24 * 60 * 60;
 /// Number of blocks in the averaging window: `nPowAveragingWindow`.
 pub const AVERAGING_WINDOW: u64 = 144;
-/// The oldest block that can be used as a fitting block:
-/// `nPowMaxAdjustDown / 100 * nPowAveragingWindow` = 72 * 144.
-pub const MAX_ADJUST_DOWN_WINDOW: u64 = 72 * AVERAGING_WINDOW; // 10,368
-/// Newest: `nPowMaxAdjustUp` = 288.
-pub const MAX_ADJUST_UP_WINDOW: u64 = 288 * AVERAGING_WINDOW; // 41,472
 
-/// Lower clamp on the measured timespan: 72 blocks of 600s = 43,200s.
-pub const MIN_ACTUAL_TIMESPAN: i64 = (MAX_ADJUST_DOWN_WINDOW * BLOCK_SPACING) as i64;
-/// Upper clamp: 288 blocks of 600s = 172,800s.
-pub const MAX_ACTUAL_TIMESPAN: i64 = (MAX_ADJUST_UP_WINDOW * BLOCK_SPACING) as i64;
+/// Lower clamp on the measured timespan: `72 * nPowTargetSpacing` = 43,200s.
+///
+/// The "72" and "288" in the node multiply `nPowTargetSpacing`, **not** the
+/// 144-block averaging window. Writing them as `72 * 144 * 600` — which this did
+/// at first — makes both bounds 144 times too large, so every real timespan looks
+/// short, every target is pinned to the lower clamp, and the bound is inverted: a
+/// window that took 25 hours is treated as though it took 6.2 million seconds.
+/// The values are asserted against the node's in the vector harness.
+pub const MIN_ACTUAL_TIMESPAN: i64 = 72 * BLOCK_SPACING as i64; // 43,200
+/// Upper clamp: `288 * nPowTargetSpacing` = 172,800s.
+pub const MAX_ACTUAL_TIMESPAN: i64 = 288 * BLOCK_SPACING as i64; // 172,800
 
 /// How many records the client must hold for the algorithm to be computable.
 ///
