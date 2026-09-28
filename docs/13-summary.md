@@ -19,6 +19,12 @@ move the coin back and forth to rebalance and to earn a fee. Retail reaches `sol
 an exchange or a pool rather than through the peg directly — which is why a peg that takes
 hours is acceptable, and why the interesting questions are economic rather than interactive.
 
+> **Built or designed?** The light client, the token and the mint exist and pass 17 on-chain
+> tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and
+> not built.** The shipped program mints straight to the depositor's token account, so nothing
+> is staged yet and the protections described below are, at this moment, a specification
+> rather than a property of the code.
+
 ## The parts
 
 | | |

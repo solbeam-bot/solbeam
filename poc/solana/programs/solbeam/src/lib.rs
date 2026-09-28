@@ -997,7 +997,13 @@ pub struct InitializeToken<'info> {
 pub struct VerifyDeposit<'info> {
     #[account(seeds = [b"light_client"], bump = light_client.bump)]
     pub light_client: Account<'info, LightClient>,
-    #[account(mut)]
+    /// Pinned to its PDA. It was previously bound only by the type and owner,
+    /// which Anchor enforces — so the attack of passing a counterfeit replay list
+    /// requires fabricating a program-owned account with this discriminator, which
+    /// the runtime prevents. Pinned regardless: the constraint costs nothing, the
+    /// reasoning is subtle enough to get wrong, and a future instruction that
+    /// creates another `UsedDeposits` would turn the subtlety into a double-mint.
+    #[account(mut, seeds = [b"used_deposits"], bump = used_deposits.bump)]
     pub used_deposits: Account<'info, UsedDeposits>,
     #[account(seeds = [b"deposit_script"], bump = deposit_script.bump)]
     pub deposit_script: Account<'info, DepositScript>,

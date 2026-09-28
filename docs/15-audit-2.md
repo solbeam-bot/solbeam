@@ -132,3 +132,105 @@ system**, not a background detail. Two concrete responses follow:
 2. **F3 wants deciding, not coding**: detection is currently rewarded only indirectly. If the
    advancer role is the load-bearing one, it may deserve the same explicit bounty the payout
    challenger already has.
+
+
+---
+
+## Independent pass — what it found, and where it is wrong
+
+A second adversarial run was made against the same code and documents. It confirmed F6, added
+one finding more important than anything above, and produced **two criticals that do not
+survive checking.** Both are recorded here because a wrong critical is worse than no critical:
+it spends attention on a non-problem and, if believed, leads to bad design.
+
+### F7 — The client cannot follow a difficulty retarget, so it halts permanently · **inherent · critical**
+
+`push_header` requires `bits == expected_bits`, and `expected_bits` is set once at
+`initialize` from the checkpoint header and never updated. `set_checkpoint` does not refresh it
+either.
+
+**This is a consequence of the A1 fix.** Before A1, `check_daa` returned `true`
+unconditionally and the target was read from the submitted header, so every header passed and
+the defect was invisible. Now the check actually binds — which is correct — and on **any chain
+whose target changes, every header after a retarget is rejected `UnexpectedRetarget` with no
+instruction able to fix it.**
+
+On regtest this is invisible, because the target never changes. On testnet or mainnet the
+bridge **stops minting at the first retarget, permanently.**
+
+The older framing called DAA "a flag, not an omission". That is no longer accurate: the flag
+is now **load-bearing for liveness**, not merely for security. Worth deciding before testnet:
+implement the retarget, or permit `expected_bits` to advance at a retarget boundary.
+
+### X1 — "The vault does not exist" · **correct, and already addressed**
+
+The independent pass is right that the shipped program mints straight to the depositor's token
+account and that no vault, maturity, release or burn exists anywhere. `13-summary.md` has been
+amended to say so at the top.
+
+**F1 above is therefore misclassified and is corrected here: it is UNIMPLEMENTED, not
+inherent.** It is a genuine flaw in a component that has not been built, and it should not be
+ranked as "the most likely way for an honest user to lose money" while there is nothing to
+lose it from. The shipped code's honest-user loss vector is **F6**, not F1.
+
+### X2 — "Unlimited double-mint via a counterfeit replay list" · **incorrect**
+
+The claim is that `used_deposits` has no `seeds` constraint, so an attacker can pass their own
+account bearing the `UsedDeposits` discriminator, present an empty list, and mint one real
+deposit repeatedly.
+
+**The attack requires fabricating an account that the program owns and whose first eight bytes
+are the discriminator. That is not possible on Solana.** Only the owning program may write an
+account's data, and this program writes `UsedDeposits` data in exactly one place —
+`InitializeBridge`, with fixed seeds `[b"used_deposits"]`, as an `init`. A second call fails
+because the PDA already exists, and no other instruction creates one. `SystemProgram::create_account`
+can set the *owner* to this program but leaves the data **zeroed**, which fails Anchor's
+discriminator check; and nothing can write the discriminator afterwards, because after
+assignment only the program may write.
+
+So the constraint was missing, but the consequence was not an exploit: the account was already
+bound by owner and type. **It is pinned now anyway**, because the reasoning is subtle, the
+constraint costs nothing, and a future instruction creating a second `UsedDeposits` would turn
+the subtlety into a real double-mint:
+
+```rust
+#[account(mut, seeds = [b"used_deposits"], bump = used_deposits.bump)]
+pub used_deposits: Account<'info, UsedDeposits>,
+```
+
+**The rigorous closure is a test, not an argument.** The suite never tries a counterfeit
+account — it derives the real PDA every time, so "refuses the same deposit twice" tests
+nothing about binding. A test that creates a program-owned account, attempts to pass it, and
+asserts rejection would settle X2 by evidence instead of by reasoning. **Recommended before
+this is called closed.**
+
+### Also claimed, and also incorrect
+
+**"A miner can re-mine a signed deposit with a different `OP_RETURN`, redirecting the mint to
+themselves."** The output script would be unchanged, so `WrongOutputScript` would not fire —
+but the depositor's own signature covers the `OP_RETURN` output. Under `SIGHASH_ALL` — the
+default, and what `bsvlib` builds — altering the `OP_RETURN` invalidates the input's
+signature, so the transaction becomes unspendable and cannot be mined. **Not exploitable.**
+It would become real if a depositor signed with `SIGHASH_NONE`, which no wallet here does.
+
+### Confirmed, and worse than recorded
+
+**F6 is a hard throughput ceiling, not only a griefing vector.** `MAX_USED = 200` with no
+`MIN_PEG_IN` means the program can process **at most 200 peg-ins per 48-hour window** even
+with no attacker at all. The griefing case is simply an attacker reaching that ceiling
+deliberately. Worth separating in the write-up: one is a capacity limit, the other is abuse of
+it.
+
+**C3, a residual.** `initialize` accepts any header meeting *its own* declared `bits`, so the
+checkpoint's difficulty is unchecked and self-declared. Combined with the deploy-time race
+already recorded under A2, whoever calls `initialize` first chooses both the trusted root and
+its difficulty. On regtest that target is trivially mineable. **The checkpoint being trusted is
+inherent to the design; the race is not.**
+
+### What the independent pass gets right that is easy to miss
+
+**D6 is not an exception path — in the shipped code it is the only path.** There is no relayer
+registry, no consent, no `owed_R`, no `bond_R` and no bond check, so *every* peg-in today is
+the unbacked one. The design's layering — underwriter, bond, buffer — is entirely prospective.
+That is expected at this stage, but it means **the D6 risk acceptance is currently the whole
+system's risk posture**, not a seeded-book special case.
