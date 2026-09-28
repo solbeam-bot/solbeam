@@ -6,6 +6,66 @@ The intent is unchanged: **get the design in front of reviewers as running code.
 
 ---
 
+## 0. Reset — where this actually stands
+
+**This section supersedes §1 and any status language elsewhere in this plan.** A second
+adversarial audit found the documents had drifted ahead of the code: several artefacts were
+described as working that are specified but not built. §1 is kept as history, not as status.
+
+### 0.1 Built, and passing
+
+- **The light client** — trusted checkpoint, a 288-block rolling window storing a bare block hash
+  per header, linkage, and proof of work with the target taken **from the chain** rather than from
+  the submitted header. 17 on-chain tests.
+- **`solBSV`** — classic SPL, 8 decimals, no freeze authority, mint authority a program PDA.
+- **The mint** — verifies a deposit against the window: Merkle fold, on-chain transaction parsing,
+  exact output script, confirmation depth, replay refusal. Then mints.
+- **Fork staging** — per-submitter, batched, abandonable; reorg following with a strictly-heavier
+  commit.
+- **The Python reference and the live SV Node pin** — all checkers pass; 21/21 against a real node.
+
+### 0.2 Designed, and NOT built
+
+Everything below is specified in [`docs/13-summary.md`](../docs/13-summary.md) and
+[`docs/14-decisions.md`](../docs/14-decisions.md), and does not exist in code. **The shipped
+program mints straight to the depositor's token account**, so nothing is staged and the vault is
+a specification rather than a property.
+
+- The **vault** and both gates — maturity, release, burn
+- The **order book**, staking, bonds, `owed_R`, relayer consent, `k`
+- **Per-relayer deposit scripts** — currently one bridge-wide P2PKH, which is the pooled reserve
+  that decision A6 exists to remove
+- **All of peg-out** — escrow, deadline, payout proof, challenge, settlement, refunds
+- **`MIN_PEG_IN` / `MAX_PEG_IN`**, the aggregate mint cap, committed-depth parsing, DAA, chainwork
+
+**The consequence worth stating plainly:** with no underwriter concept anywhere in code, **every
+peg-in today is the D6 unbacked path.** The D6 risk acceptance is the system's current whole
+posture, not a seeded-book special case.
+
+### 0.3 Open defects in code that exists
+
+| | Defect | Effect |
+|---|---|---|
+| **F7** | `expected_bits` is set at `initialize` and never updated; `check_daa` is never called | **Halts permanently at the first difficulty retarget.** Invisible on regtest, fatal on testnet or mainnet. Introduced by the A1 fix |
+| **F6** | `MAX_USED = 200` with `MIN_PEG_IN` unimplemented | **A hard ceiling of 200 peg-ins per 48-hour window**, with no attacker required |
+| **C3** | `initialize` accepts any header meeting **its own** declared `bits` | The first caller picks the trusted root *and* its difficulty |
+| **A6** | One bridge-wide P2PKH deposit script | The pooled reserve the design removes |
+| **A5** | Program upgrade authority | Out of scope for the PoC; recorded so it is not forgotten |
+| **A9/A10/A14** | No `MIN_PEG_IN`, no aggregate cap, committed depth unparsed | Unimplemented |
+
+Full findings, including which are inherent and which merely unbuilt, are in
+[`docs/15-audit-2.md`](../docs/15-audit-2.md).
+
+### 0.4 Next, in order
+
+1. **F7** — implement the retarget, or allow `expected_bits` to advance at a boundary. Without it
+   the plan cannot reach testnet at all.
+2. **F6** — enforce `MIN_PEG_IN` and size or replace the replay list.
+3. **The vault** — the component the rest of the design rests on.
+4. **Per-relayer deposits, `owed_R`, consent** — what turns a fraud from something holders absorb
+   into something a relayer is charged for.
+5. **Peg-out**, then the website.
+
 ## 1. Where we are today
 
 ### 1.1 Done — the BSV primitives, validated against live chain data

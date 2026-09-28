@@ -77,6 +77,13 @@
 
     <h2>Implementation plan</h2>
 
+    <p class="note" style="margin:0 0 18px">
+      <strong>Status reset.</strong> An adversarial audit found these pages had drifted ahead of the
+      code — describing a vault, a two-gate maturity process and a staking book that are
+      <em>specified but not built</em>. The program mints straight to the depositor's token account.
+      Below, "Done" means done and tested; everything described as designed is a specification.
+    </p>
+
     <div class="phase">
       <div class="phase__head">
         <span class="phase__mark mark--ok" aria-hidden="true">&#10004;</span>
@@ -144,6 +151,7 @@
         <li><strong>Two gates each way.</strong> Minted <code>solBSV</code> lands in a program-owned vault and is released only once its deposit is still canonical after a maturity window — and burned if a reorg is followed first. That makes a reorg reversible without a freeze authority and without trusting anyone.</li>
         <li><strong>Underwriting as an order book.</strong> Stakers post sell orders — so much liquidity at 10&nbsp;bp, more at 50&nbsp;bp — matched by price then time, partially filled, with unused stake returned. The fee is discovered rather than chosen, and the depositor can see the liquidity and its price before committing.</li>
         <li><strong>Stakers are paid in what they stake</strong> — BSV for BSV, <code>solBSV</code> for <code>solBSV</code>. They underwrite the system, so a fraudulent mint lands on volunteers rather than diluting every holder.</li>
+        <li><strong>Designed, not built: the vault and both gates.</strong> Every mint is specified to land in a program-owned vault and be released only after a maturity window, or burned if a reorg is followed. None of it exists yet — today's mint goes straight to the depositor.</li>
         <li><strong>Bids fill automatically.</strong> An earlier reading held that a passive bid would be picked off by a miner who deposits and reorgs — but the vault means a burned fill reverses the liability, so the staker loses nothing and the loss is systemic rather than per-fill. Auto-approve is the proof-of-concept answer, to be revisited against the finished system.</li>
         <li><strong>Specialists stake first.</strong> Anyone-may-stake is a phase-2 goal, so the upgrade path is a deliverable rather than a maybe. Delegated staking — retail pledging to a specialist operator, as a product for exchanges and miners — is the likely shape of it.</li>
         <li><strong>Genesis is settled.</strong> A seizable bond must be <code>solBSV</code>, <code>solBSV</code> exists only once minted, and a mint is only safe once a bond exists — a circularity. Resolved by minting into the program vault and releasing only once the matching BSV has been verified, so no unbacked window exists at any point. A peg-in with no underwriter is also allowed explicitly, for seeding.</li>
@@ -168,6 +176,7 @@
     <div class="tally">
       <span><b>13</b> adversarial plays</span>
       <span><b>17</b> on-chain tests</span>
+      <span><b>0</b> of the vault built</span>
       <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>
     </div>
