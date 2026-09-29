@@ -123,6 +123,27 @@ lands.**
 **The residual, stated plainly:** a holder who does not watch and does not act within 30 days is
 exposed. That is a disclosure obligation, not a mechanism.
 
+### The bond is the float
+
+**Nothing can be minted that the bond cannot cover.** Before a mint is accepted, the program requires
+
+```
+aggregate_bond  ≥  k × (supply + amount)          with k ≥ 1
+```
+
+where `supply` is the outstanding `solBSV` and `aggregate_bond` is a running total maintained on
+chain, since members cannot be enumerated. **The same check runs on `withdraw_bond`**, so a member
+cannot leave while its share is needed.
+
+**This is what makes "total value locked is capped by bonds pledged" true rather than aspirational.**
+The bond is not collateral in the abstract — it is **the float for minting and redeeming**, and the
+mint gate is where that is enforced. It also resolves an earlier contradiction: minting is *not*
+"gated by nothing at all." It is gated by the bond.
+
+The consequence is deliberate: **the bridge can only grow as fast as members will bond.** That is the
+property that stops it outrunning its own collateral, and the price is that growth needs new members
+rather than larger ones.
+
 ### Where the money comes from
 
 **The fee is gross, and it is the only revenue.** 30 bp on mint and 30 bp on redeem cover the real

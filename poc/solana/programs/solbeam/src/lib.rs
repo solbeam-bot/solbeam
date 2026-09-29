@@ -82,6 +82,24 @@ const _: () = assert!(
     "WINDOW must exceed the cw-144 lookback (147 records) or the retarget is not computable"
 );
 
+/// How many records the window must hold before cw-144 is computable — the
+/// size of the **trusted seed**.
+///
+/// This is [`difficulty::LOOKBACK`], not a second constant, because the seed
+/// exists for exactly one reason: to supply the records the difficulty rule
+/// reads. For the header at height `h` the rule reaches back to `h - 147`, so a
+/// window of 147 records ending at the checkpoint is what makes the *first*
+/// block after it checkable. With one fewer the rule returns `None` — and the
+/// old client, faced with that `None`, fell back to `bits == expected_bits`
+/// forever (F1). The seed is that missing history, taken on trust.
+///
+/// The seed **includes the checkpoint itself** as its newest record, so the
+/// caller supplies `SEED_RECORDS - 1 = 146` ancestors below the checkpoint and
+/// the checkpoint is pinned by the seed's linkage check. That keeps the
+/// arithmetic 147 seed + 45 live = the 192-record window, with no extra field
+/// to remember the checkpoint's timestamp.
+pub const SEED_RECORDS: usize = difficulty::LOOKBACK as usize;
+
 /// How deep a deposit must be buried before it can be minted. Twelve blocks is
 /// roughly two hours on BSV. The test matrix compresses time, not depth, so this
 /// stays a real number.
@@ -132,6 +150,7 @@ pub const LIGHT_CLIENT_FIXED: usize = 8      // discriminator
     + 4                                      // expected_bits
     + 1                                      // no_retargeting
     + 4                                      // pow_limit_bits
+    + 4                                      // seed_remaining
     + 8                                      // last_push_slot
     + 1                                      // paused
     + 1                                      // bump
@@ -233,39 +252,24 @@ pub mod solbeam {
         checkpoint_height: u64,
         header: [u8; HEADER_LEN],
     ) -> Result<()> {
-        let bits = read_u32_le(&header, 72);
-        require!(meets_target(&header, bits), SolbeamError::CheckpointBadPow);
-
         let lc = &mut ctx.accounts.light_client;
-        lc.checkpoint_height = checkpoint_height;
-        lc.tip_height = checkpoint_height;
-        lc.tip_hash = header_hash(&header);
-        lc.headers = Vec::new();
-        lc.window_start = checkpoint_height;
         lc.authority = ctx.accounts.payer.key();
-        // Taken from the checkpoint header, which is the one piece of data the
-        // client trusts. It is the genesis rule only: the first header that has
-        // 147 records behind it is checked against cw-144 instead, and from
-        // then on this value is never consulted again.
-        lc.expected_bits = bits;
-        // Derived, never supplied — see the field. `REGTEST_BITS` is the
-        // compact form of regtest's `powLimit`, i.e. the node's own
-        // `UintToArith256(params.powLimit).GetCompact()` for that chain.
-        lc.no_retargeting = bits == difficulty::REGTEST_POW_LIMIT_BITS;
-        // A network parameter. Mainnet's limit, applied to any chain, is a
-        // strictly-tighter cap than regtest's; a PoC deployment that needs the
-        // regtest value passes it in rather than this constant changing.
-        lc.pow_limit_bits = MAINNET_POW_LIMIT_BITS;
-        lc.last_push_slot = Clock::get()?.slot;
         lc.paused = false;
         lc.bump = ctx.bumps.light_client;
+        // Shared with `set_checkpoint` on purpose: F2 was that the two paths
+        // disagreed about what a trusted root implies, and one implementation is
+        // the only way to keep them agreeing.
+        lc.anchor_checkpoint(checkpoint_height, &header)?;
+        lc.last_push_slot = Clock::get()?.slot;
 
         msg!(
-            "SOLBEAM light client initialised at height {} tip {} window {} records ({} h)",
+            "SOLBEAM light client initialised at height {} tip {} window {} records ({} h), \
+             seed remaining {}",
             checkpoint_height,
             display_hex(&lc.tip_hash),
             WINDOW,
-            WINDOW_HOURS
+            WINDOW_HOURS,
+            lc.seed_remaining
         );
         Ok(())
     }
@@ -275,6 +279,12 @@ pub mod solbeam {
     pub fn push_header(ctx: Context<PushHeader>, header: [u8; HEADER_LEN]) -> Result<()> {
         let lc = &mut ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
+        // The window holds fewer than 147 records, so cw-144 is not computable
+        // and the client has no business accepting main-chain headers. The seed
+        // is the only instruction allowed to write during this state, and it
+        // checks linkage instead of difficulty because there is no difficulty
+        // rule to check yet.
+        require!(!lc.is_seeding(), SolbeamError::Seeding);
 
         let prev = read32(&header, 4);
         let bits = read_u32_le(&header, 72);
@@ -334,6 +344,125 @@ pub mod solbeam {
             bits,
             work_from_bits(bits)
         );
+        Ok(())
+    }
+
+    /// Supply the trusted ancestors a fresh checkpoint cannot carry. **This is
+    /// a trusted bootstrap, on the same footing as the checkpoint itself — not
+    /// an ongoing trust, and not a second way to advance the chain.**
+    ///
+    /// A checkpoint is one header. cw-144 needs 147 records ending at it, and
+    /// the client has no way to obtain the other 146 trustlessly: their
+    /// cumulative chainwork is genesis-absolute and is not committed to by the
+    /// checkpoint header. So they are supplied here, checked for **linkage
+    /// only**, and then never treated as trusted again — from the moment the
+    /// seed completes, every later header is checked against cw-144 computed
+    /// from these records, so a seed that lied about difficulty would be caught
+    /// at the first retarget rather than believed forever. That bounded,
+    /// one-time trust is the whole design; F1 exists because the alternative
+    /// was an *unbounded* trust (the `bits == expected_bits` fallback) that
+    /// never switched off.
+    ///
+    /// Why linkage is enough to make the seed non-fabricable in practice: the
+    /// records are supplied oldest-first and each must link to the previous
+    /// one, and the **last must hash to the checkpoint**. The checkpoint is
+    /// already fixed and its `prev` has exactly one preimage, so every record
+    /// below it is forced. A fabricated ancestor therefore has nowhere to go:
+    /// either it is the first record (nothing links to it, and the real second
+    /// header is then rejected `BrokenLinkage`), or it breaks the chain at the
+    /// point it was spliced in. What the seed *can* lie about is difficulty —
+    /// the work values — which is exactly the trust the checkpoint already
+    /// carries and which cw-144 retires.
+    ///
+    /// Authority-gated, unlike `push_header`, and deliberately so: a
+    /// permissionless seed has a griefing failure — anyone could write one
+    /// arbitrary header as the seed root, and since the rest of the chain must
+    /// link to *it*, no honest seed could ever complete. The seed is trusted
+    /// data set by whoever set the checkpoint, so it is signed by the same key.
+    ///
+    /// Batched like `push_fork_header` because 147 x 80 = 11,760 bytes cannot
+    /// fit in one 1,232-byte transaction. Batches arrive oldest-first; up to
+    /// [`MAX_FORK_BATCH`] headers per call, and the client tracks how many it
+    /// still needs in `seed_remaining`.
+    pub fn seed_headers(ctx: Context<SeedHeaders>, ancestors: Vec<u8>) -> Result<()> {
+        let lc = &mut ctx.accounts.light_client;
+        require!(!lc.paused, SolbeamError::Paused);
+        require!(lc.is_seeding(), SolbeamError::NotSeeding);
+
+        require!(!ancestors.is_empty(), SolbeamError::EmptySeed);
+        require!(ancestors.len() % HEADER_LEN == 0, SolbeamError::MalformedTx);
+        let batch = ancestors.len() / HEADER_LEN;
+        require!(batch <= MAX_FORK_BATCH, SolbeamError::BatchTooLarge);
+        require!(
+            batch <= lc.seed_remaining as usize,
+            SolbeamError::SeedTooLong
+        );
+
+        // Cumulative work continues from whatever has arrived already, with the
+        // window's oldest record as the zero point. As in `push_header`, the
+        // value is derived from each header's own `bits` rather than supplied,
+        // so the window stays internally consistent. Only *differences* of this
+        // value are ever consumed, so the arbitrary baseline cancels.
+        let mut chainwork = lc.headers.last().map(|r| r.chainwork).unwrap_or_default();
+        let mut prev = lc.headers.last().map(|r| r.hash);
+
+        let mut records: Vec<HeaderRecord> = Vec::with_capacity(batch);
+        for raw in ancestors.chunks(HEADER_LEN) {
+            // No difficulty check: with fewer than SEED_RECORDS records the rule
+            // is not computable, which is why this instruction exists at all.
+            // Linkage is checked, and the terminal hash is pinned to the
+            // checkpoint below, so the chain cannot be fabricated.
+            if let Some(parent) = prev {
+                require!(read32(raw, 4) == parent, SolbeamError::BrokenLinkage);
+            }
+            let bits = read_u32_le(raw, 72);
+            let hash = header_hash_of_bytes(raw);
+            chainwork = chainwork.saturating_add(work_from_bits(bits));
+            records.push(HeaderRecord {
+                hash,
+                chainwork,
+                time: read_u32_le(raw, 68),
+            });
+            prev = Some(hash);
+        }
+
+        let completes = batch == lc.seed_remaining as usize;
+        if completes {
+            // The pin. The last seed record must BE the checkpoint the client
+            // was anchored on, so the whole chain below it is forced and the
+            // seed ends exactly where the trusted root is.
+            require!(
+                prev == Some(lc.tip_hash),
+                SolbeamError::SeedWrongTip
+            );
+        }
+
+        lc.headers.extend(records);
+        lc.seed_remaining -= batch as u32;
+
+        if completes {
+            // 147 records ending at the checkpoint. The window_start set by
+            // `anchor_checkpoint` already names the oldest of them, so this is
+            // a statement about the shape the program just built, not a plan.
+            require!(
+                lc.headers.len() == SEED_RECORDS,
+                SolbeamError::SeedWrongLength
+            );
+            lc.last_push_slot = Clock::get()?.slot;
+            msg!(
+                "SOLBEAM seed complete: {} records, window {}..{}, next header is checked by cw-144",
+                lc.headers.len(),
+                lc.window_start,
+                lc.tip_height
+            );
+        } else {
+            msg!(
+                "SOLBEAM seed {}/{} records, {} still required",
+                lc.headers.len(),
+                SEED_RECORDS,
+                lc.seed_remaining
+            );
+        }
         Ok(())
     }
 
@@ -858,6 +987,23 @@ pub struct LightClient {
     /// `0x1d00ffff` caps the target far below regtest's `0x207fffff`. Applying
     /// mainnet's limit to a regtest chain would reject blocks the node accepts.
     pub pow_limit_bits: u32,
+    /// How many trusted ancestor headers the client still needs before cw-144
+    /// is computable. **Zero means live.**
+    ///
+    /// Set to [`SEED_RECORDS`] by `anchor_checkpoint` whenever the checkpoint
+    /// sits on a retargeting chain, and decremented by `seed_headers` as
+    /// ancestors arrive; the checkpoint itself is the last seed record, so the
+    /// window is exactly full when this reaches zero. On a no-retargeting chain
+    /// it is zero from the start, because the checkpoint's target is the whole
+    /// rule there.
+    ///
+    /// This field is why the seed cannot be forgotten or half-applied: every
+    /// instruction that could advance the chain checks it, and a window that is
+    /// short of 147 records can never be mistaken for a working one. The old
+    /// design had no such state and inferred "too short to compute" from the
+    /// window length at the moment of use — which is exactly how F1's permanent
+    /// fallback arose.
+    pub seed_remaining: u32,
     /// `Clock::slot` of the last accepted header.
     ///
     /// Recorded on every accepted header — main chain and committed fork alike.
@@ -872,6 +1018,72 @@ pub struct LightClient {
 
 impl LightClient {
     pub const SPACE: usize = LIGHT_CLIENT_FIXED + (WINDOW * HEADER_RECORD_SIZE);
+
+    /// Install a trusted checkpoint and decide how the client can move on from
+    /// it.
+    ///
+    /// **One implementation, used by `initialize` and `set_checkpoint` alike.**
+    /// F2 was precisely the two paths disagreeing: `set_checkpoint` reset the
+    /// hash, height and window but left `expected_bits`, `no_retargeting` and
+    /// `pow_limit_bits` carrying the *old* chain's values, so a client ever
+    /// anchored on a `0x207fffff` header kept `no_retargeting = true` forever
+    /// and accepted everything afterwards at the easiest encodable target.
+    ///
+    /// The two chains behave differently and the derivation says which:
+    ///
+    ///   * **No retargeting** (the checkpoint's compact target is the largest
+    ///     the encoding can express, i.e. regtest): the target never changes, so
+    ///     the checkpoint's own `bits` *is* the rule and the client is live
+    ///     immediately. No lookback is needed and none is requested.
+    ///   * **Retargeting** (any real chain): cw-144 needs 147 records ending at
+    ///     the checkpoint and only one of them exists, so the client opens a
+    ///     **seeding** state and refuses to advance until `seed_headers` has
+    ///     supplied the other 146. This is the F1 fix: without the seed, the
+    ///     fallback `bits == expected_bits` can never be satisfied on a chain
+    ///     that changes difficulty every block, and the client deadlocks.
+    fn anchor_checkpoint(&mut self, height: u64, header: &[u8; HEADER_LEN]) -> Result<()> {
+        let bits = read_u32_le(header, 72);
+        // The checkpoint is trusted, but not *arbitrary*: it still has to be a
+        // real block under its own target, exactly as `initialize` required.
+        require!(meets_target(header, bits), SolbeamError::CheckpointBadPow);
+
+        self.checkpoint_height = height;
+        self.tip_height = height;
+        self.tip_hash = header_hash(header);
+        self.headers = Vec::new();
+        // Taken from the checkpoint header, which is the one piece of data the
+        // client trusts. On a no-retargeting chain this is the target forever;
+        // on a real chain it is replaced by cw-144 once the seed completes and
+        // is never consulted again.
+        self.expected_bits = bits;
+        // Derived, never supplied. `REGTEST_BITS` is the compact form of
+        // regtest's `powLimit`, i.e. the node's own
+        // `UintToArith256(params.powLimit).GetCompact()` for that chain.
+        self.no_retargeting = bits == difficulty::REGTEST_POW_LIMIT_BITS;
+        // A network parameter. Mainnet's limit, applied to any chain, is a
+        // strictly-tighter cap than regtest's; a PoC deployment that needs the
+        // regtest value passes it in rather than this constant changing.
+        self.pow_limit_bits = MAINNET_POW_LIMIT_BITS;
+
+        if self.no_retargeting {
+            self.seed_remaining = 0;
+            self.window_start = height;
+        } else {
+            // The window the seed will fill runs from `height - 146` to the
+            // checkpoint itself, which is `SEED_RECORDS` records and is exactly
+            // what cw-144 needs to judge `height + 1`.
+            self.window_start = height
+                .checked_sub(SEED_RECORDS as u64 - 1)
+                .ok_or(SolbeamError::CheckpointTooLow)?;
+            self.seed_remaining = SEED_RECORDS as u32;
+        }
+        Ok(())
+    }
+
+    /// True while the client is still waiting for trusted ancestors.
+    fn is_seeding(&self) -> bool {
+        self.seed_remaining > 0
+    }
 
     /// The window as the difficulty module wants it. Built fresh rather than
     /// kept in a parallel field: a second copy of the window is a second thing
@@ -888,6 +1100,11 @@ impl LightClient {
 
     /// The `bits` the header at `tip_height + 1` must carry, or `None` while
     /// the window is still too short for cw-144.
+    ///
+    /// `None` is now an **error on the main-chain path, not a licence to
+    /// trust.** The only way a live client can hold fewer than `LOOKBACK`
+    /// records is a bug, because `push_header` refuses to run until the seed
+    /// has filled the window — see [`Self::anchor_checkpoint`] and F1.
     fn required_bits(&self) -> Option<u32> {
         if self.no_retargeting {
             // The node's own rule for a chain with no retargeting: the target
@@ -899,29 +1116,29 @@ impl LightClient {
         difficulty::next_target(&records, self.window_start, pow_limit).map(target_to_compact)
     }
 
-    /// The whole difficulty check, in one place so `push_header` and
-    /// `push_fork_header` cannot drift apart.
+    /// The whole difficulty check for the main chain.
     ///
     /// `parent_work` is the chainwork of the block this header builds on, and
     /// the returned value is this header's cumulative chainwork — the sum of
     /// the two, derived from the header's own `bits`. Deriving it rather than
     /// trusting a supplied number is what makes the stored window internally
     /// consistent: every record's work is the work of the target it declares.
+    ///
+    /// There is deliberately **no fallback** when the rule is not computable.
+    /// The old fallback accepted `bits == expected_bits` for every block before
+    /// the window reached 147 records; on BSV, where difficulty changes every
+    /// block, that made the checkpoint's successors unverifiable and the client
+    /// never advanced (F1). The trusted seed is what supplies those records, so
+    /// `None` here means the seed did not run and the honest response is to
+    /// refuse the header.
+    ///
+    /// [`push_fork_header`] does not use this function: a branch header must be
+    /// judged at its *own* height, not at `tip_height + 1` (F3).
     fn difficulty_for(&self, bits: u32, parent_work: u128) -> Result<u128> {
-        if let Some(required) = self.required_bits() {
-            require!(bits == required, SolbeamError::UnexpectedRetarget);
-        } else {
-            // Fewer than 147 records, so the client cannot yet see the ancestor
-            // cw-144 needs and the rule is not computable. It holds the
-            // checkpoint's target for those blocks instead. This is bounded and
-            // one-way: the window only grows, so once it holds `LOOKBACK`
-            // records the fallback is gone and cannot be re-entered. It is a
-            // real (if narrow) trust hole and is stated as such — a checkpoint
-            // whose ancestors are outside the window has this window over which
-            // its successors are unchecked by the difficulty rule, though they
-            // are still checked for linkage and proof of work.
-            require!(bits == self.expected_bits, SolbeamError::UnexpectedRetarget);
-        }
+        let required = self
+            .required_bits()
+            .ok_or(SolbeamError::DifficultyNotComputable)?;
+        require!(bits == required, SolbeamError::UnexpectedRetarget);
         let work = work_from_bits(bits);
         Ok(parent_work.saturating_add(work))
     }

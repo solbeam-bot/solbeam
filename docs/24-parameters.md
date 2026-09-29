@@ -53,6 +53,8 @@ while the numbers are still provisional.
 | ID | Name | Value | Description |
 |---|---|---|---|
 | `fed.bond_size` | Member bond | **1,000 BSV** `dec` | The price of admission. Sets the scale limit |
+| `fed.total_bond` | Aggregate bond (tracked) | **derived from bonds** `dec` | A running total on-chain, since members cannot be enumerated. **This is the number the mint gate checks** |
+| `fed.mint_gate` | Bond gates minting | **true** `dec` | **F5.** A mint is refused unless `total_bond ≥ k × (supply + amount)` after it. **The bond IS the float**: nothing can be minted that the bond cannot cover |
 | `fed.k` | Bond multiple | **1** `dec` | Aggregate bond ≥ `k ×` outstanding supply. At `k = 1` theft is unprofitable, not prevented. **Capital inefficiency accepted** — over-collateralising is a member's choice, not a requirement |
 | `fed.threshold` | Signing threshold | **open** | `t` of `n`. **Stated nowhere yet** — this is a real gap |
 | `fed.shards` | Shard count | **open** | One key or several groups. Affects blast radius and latency |
@@ -68,6 +70,9 @@ while the numbers are still provisional.
 | `gov.delay` | Delay before effect | **30 days** `ph` | **This is the floor.** Redemptions run throughout, so a hostile change empties the bridge |
 | `gov.signal` | Signal from proposal | **true** `dec` | Live from the moment it is raised, not when it passes |
 | `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. There is no immutable floor |
+| `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `dec` | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint |
+| `gov.authority_timelock` | Authority timelock | **open** | **F4.** Delay before a checkpoint or pause takes effect. Must be long enough to exit |
+| `gov.delay_ratchet` | Delay is non-decreasing | **true** `dec` | **F7.** `gov.delay` may only be raised. A first proposal setting it to zero harms nobody, so nobody exits, and the second then lands instantly |
 | `gov.pause_threshold` | Pause threshold | **>50%** `ph` | Lower than a governance change, because the power is bounded |
 | `gov.pause_duration` | Pause auto-lift | **open** | Days before a pause lapses unless renewed |
 
