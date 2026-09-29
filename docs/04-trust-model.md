@@ -24,14 +24,14 @@ mode this document exists to prevent.
 |---|---|
 | **Minting** | **Trustless, given the deployed program.** A Solana program verifies BSV proof of work (cw-144) and Merkle inclusion directly. **No member's signature, no committee vote and no oracle mints anything.** The program's **upgrade authority** is the one exception — it can re-anchor the checkpoint — so production must hold it under a threshold and a timelock |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. **A reorg is a fact about headers, not a report from anyone** |
-| **The reserve** | **Trusted, and bounded.** BSV under a **threshold key** held by the federation. No single member can move it. What protects you is a **bond that anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
+| **The reserve** | **Trusted, and bounded.** BSV under a **threshold ECDSA** key held by the federation — an ordinary P2PKH address whose key is never assembled in one place. No single member can move it. What protects you is a **bond that anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
 
 | Property | Status |
 |---|---|
 | Backing (1 `solBSV` = 1 BSV) | `custodied BSV ≥ outstanding solBSV` — **monitored, not enforced.** The reserve is off-chain BSV the program cannot read (D8). The mint path enforces its half of it today |
-| Reserve custody | **Threshold key.** No single member can move it. *Designed, not built* |
-| Membership | **Open.** A 1,000 BSV bond, software rather than manual approval. *Designed, not built* |
-| Bond | `bond ≥ k × owed`, **`k = 1`**, in seizable `solBSV`. `owed` is the liability the program has credited from proofs it verified itself. Both sides are `solBSV` the program holds or measures, so the inequality is checkable on-chain with no oracle. *Designed, not built* |
+| Reserve custody | **Threshold ECDSA key.** The address is ordinary P2PKH; no single member can move it. *Designed, not built* |
+| Membership | **Open.** Two-sided bonds, software rather than manual approval. *Designed, not built* |
+| Bonds | **Two-sided, one per direction, neither inside the reserve**: `bsv_bond ≥ k × (BSV held)` in native BSV held outside the reserve, and `solbsv_bond ≥ k × (solBSV held)` in `solBSV`. **The BSV-side bond is held under the collective key and seized by the members collectively** (the slashers are paid from it); the `solBSV` side is seized by the program automatically. `k = 1`; no oracle. *Designed, not built* |
 | Slashing | **Self-proving equivocation** on individually-signed payout intents. *Designed, not built* |
 | Reversibility | The vault: a program-owned account, so a staged mint can be burned or released with **no freeze authority**. *Designed, not built* |
 | Censorship of mints | **None** — anyone can mint, for anyone |
@@ -41,8 +41,10 @@ mode this document exists to prevent.
 | Exit speed vs entry | The fast direction is the one that needs no trust — **minting** — and the slow direction is the one where trust is substituted with collateral |
 
 **The one trust assumption: a threshold of federation members do not collude.** Everything else is
-verified. That assumption is not eliminated — it is **bounded**, by bonds that exceed what they
-could take, and by proofs anyone can submit.
+verified. That assumption is not eliminated — it is **bounded**, by two-sided bonds that cover what
+their sides hold, and by proofs anyone can submit. The maximum loss from a colluding threshold is the
+entire non-member supply; **continuous publication of the reserve and supply is the mitigation**,
+promoted to an early deliverable (doc 07).
 
 ## What is trustless, and why
 
@@ -92,9 +94,11 @@ So at the instant of redemption, *some key must exist*. This is a property of th
 shortcut in the design. SOLBEAM's response is to make that key:
 
 - **a threshold, not a key** — no single member can move the reserve, so the object worth
-  compromising is a quorum rather than one operator;
-- **bounded by a bond that exceeds what it could take** — the bond is `solBSV`, the same unit as the
-  exposure, so no BSV price move shrinks it relative to what it protects;
+  compromising is a quorum rather than one operator, and it is a threshold **ECDSA key** rather than
+  a script;
+- **bounded by bonds that cover their own sides** — the redeem side is `solBSV`, the same unit as that
+  exposure; the mint side is native BSV held **outside the reserve**, so neither bond is funded by a
+  deposit into the thing it covers, and no BSV price move shrinks either relative to what it protects;
 - **attributable** — members sign payout **intents individually and on Solana**, so every approval
   is on record and equivocation is self-proving, even though the final payment is a threshold
   signature;
@@ -127,12 +131,16 @@ committee is needed and no watcher is needed at all: the program checks every de
 1. **Backing.** Custodied BSV ≥ outstanding `solBSV` at all times. **Monitored rather than
    enforced** (D8): the reserve is off-chain BSV the program cannot read, so the website publishes
    the ratio and the program does not check it. The mint path enforces its half of it today.
-2. **Exposure.** `bond ≥ k × owed`, **with `k = 1`**. Both sides are quantities the program holds
-   or measures in `solBSV` — the bond it can seize, and the liability it credited from proofs it
-   verified itself. Because the bond and the exposure are the same asset, the inequality holds at
-   every BSV price: **no oracle, no governor, no reaction window.** *Designed, not built.*
-3. **The reserve needs a quorum.** No single member can move it. This is a property of the threshold
-   key, and it is why the custody assumption is *a threshold of members*, not *an operator*.
+2. **Exposure.** **Two-sided bonds**, one per direction and **neither inside the reserve**:
+   `bsv_bond ≥ k × (BSV held)` in native BSV held outside the reserve, and
+   `solbsv_bond ≥ k × (solBSV held)` in seizable `solBSV`, **with `k = 1`**. Each side is sized in the
+   asset it protects, so the inequalities hold at every BSV price: **no oracle, no governor, no
+   reaction window.** The mint-side bond is **held under the collective key and seized by the members
+   collectively** — a collective action by the majority, not an automatic rule; the `solBSV` side is
+   seized by the program. *Designed, not built.*
+3. **The reserve needs a quorum.** No single member can move it. This is a property of the **threshold
+   ECDSA** key — not of a script — and it is why the custody assumption is *a threshold of members*,
+   not *an operator*. `fed.threshold` sizes nothing on-chain.
 4. **Reversibility without a freeze authority.** Every mint lands in a program-owned vault, released
    after `MATURITY`, or **burned** if a reorg is followed. *Designed, not built.*
 5. **Solvency after a failed redemption.** The escrow is **returned to the holder** and supply is
@@ -143,8 +151,8 @@ committee is needed and no watcher is needed at all: the program checks every de
    after the deadline. Supply is unchanged either way. **This is why the exit window can substitute
    for an immutable floor.** *Designed, not built.*
 7. **Bonds lock.** A bond withdrawable on demand is not a bond. Release requires settling outstanding
-   commitments and waiting out the unbonding period, which outlasts the payout deadline; and
-   `bond ≥ k × owed` must hold, so **a member cannot leave while owing.**
+   commitments and waiting out the unbonding period, which outlasts the payout deadline; and **both
+   bonds must still cover what their sides hold**, so **a member cannot leave while owing.**
 
 ## Governance, and the floor that is an exit
 
@@ -197,13 +205,13 @@ problem because nobody has to solve it. *Designed, not built.*
 | Fake deposit proof | **Rejected by the light client** — proof of work under cw-144 and Merkle inclusion. The retarget is implemented, so a real chain is followed rather than stalled; the open item is X3, that the rule is hard-coded |
 | Mint staged, then a reorg is followed | The vault **burns** the staged tokens, from its own stored header hash. The depositor's BSV is reorged away with the deposit, and they end where they started. Nobody else is affected. *Designed, not built* |
 | Reorg after the vault has released | `FLOOR` (12 blocks) and `MATURITY` (144 blocks) are what make out-mining the honest chain cost more than the fraud is worth |
-| A single member tries to move the reserve | It cannot: the reserve is under a **threshold key**. *Designed, not built* |
-| A **threshold** of members colludes | The assumed risk, and the one the whole design is bounded against. Their bonds — `solBSV`, `k = 1`, seizable on proof — are what make it expensive; equivocation is self-proving. It is **not** made impossible |
+| A single member tries to move the reserve | It cannot: the reserve is under a **threshold ECDSA key** — an ordinary P2PKH address whose key is never assembled in one place. *Designed, not built* |
+| A **threshold** of members colludes | The assumed risk, and the one the whole design is bounded against. **Two-sided bonds, neither inside the reserve** (`k = 1`; the `solBSV` side seized by the program, the BSV side seized collectively by the members) are what make it expensive; equivocation is self-proving, and **continuous publication** makes the theft visible. It is **not** made impossible |
 | A member signs two conflicting payout intents | **Self-proving.** Two signatures are the entire proof; anyone can submit and take the bounty. *Designed, not built* |
 | Nobody fulfils a redemption | The deadline passes and the escrow is **returned to the holder**, permissionlessly. Supply is unchanged and the bond is not additionally transferred, because the returned escrow already makes them whole |
 | A payout is reorged away | It must be paid again; if it is not, the deadline returns the escrow. An ordinary reorg of a valid signed transaction self-heals, because the transaction returns to the mempool and re-mines |
-| A member exits to dodge a slash | The bond cannot be withdrawn instantly, and `bond ≥ k × owed` must hold — **a member cannot leave while owing** |
-| BSV price rises sharply | **Not a solvency risk.** Bond and exposure are both `solBSV`, so they move together — no top-up demand, no governor, and no window for an attacker to strike in |
+| A member exits to dodge a slash | The bond cannot be withdrawn instantly, and **both bonds must still cover what their sides hold** — **a member cannot leave while owing** |
+| BSV price rises sharply | **Not a solvency risk.** Each bond is denominated in the asset its side holds, so bond and exposure move together — no top-up demand, no governor, and no window for an attacker to strike in |
 | Weak BSV hash rate | SPV security inherits the most-work assumption; BSV's hash rate is low relative to Bitcoin's. Mitigated by `FLOOR` and conservative caps |
 | The DAA changes (X3) | The rule is hard-coded, so a BSV consensus change would halt the bridge until governance acts. Recoverable, not a theft — and the honest gap in the design |
 | Bridge program upgrade | Governance holds the upgrade authority, so this is **not** out of scope any more: it is the power the 85% / 30-day / live-signal / unpausable-redemptions structure exists to bound. The window is the protection, not immutability |
@@ -213,27 +221,31 @@ problem because nobody has to solve it. *Designed, not built.*
 **A quorum that colludes can take the reserve, and bonding does not make that impossible.**
 
 This is the honest shape of what is left over once everything provable has been proved. The
-threshold key removes the single key — no member can move the reserve alone — but it does not
+threshold **ECDSA** key removes the single key — no member can move the reserve alone — but it does not
 remove the *quorum*. A `t`-of-`n` set that signs together can pay the reserve anywhere, and that act
 is not something the program can detect from a threshold signature: **you cannot deduce who was at
 fault from an aggregate.**
 
 Three things bound it, and none of them closes it:
 
-1. **The bonds.** `bond ≥ k × owed`, in `solBSV`, seizable on proof. With `k = 1` the bond covers the
-   liability the program measures and no more, so a colluding quorum that takes more than the
-   pledged bonds is **not** answered by them. The bond is sized against the exposure, not against
-   the reserve.
+1. **The bonds.** Two-sided, `k = 1`, one per direction and **neither inside the reserve** — the
+   `solBSV` side seized by the program on proof, the BSV side held under the **collective key** and
+   seized by the **members collectively** (the slashers paid from it). They cover what
+   their sides hold and no more, so a colluding quorum that takes the reserve is **not** fully
+   answered by them. The maximum loss is the entire non-member supply.
 2. **Attribution.** Members sign payout **intents individually and on record**, so equivocation
    produces its own proof and a member can be slashed without anyone judging intent. That makes the
    *individual* act punishable; it does not make the *quorum* act detectable.
-3. **The exit.** Redemptions cannot be paused, so a holder who sees a hostile direction can leave
-   — but that protects against a *visible* change, not against a reserve that is simply gone.
+3. **The exit and visibility.** Redemptions cannot be paused, so a holder who sees a hostile direction
+   can leave — but that protects against a *visible* change, not against a reserve that is simply
+   gone. **Continuous publication of the reserve and supply is what forces the theft to be visible**,
+   and it is promoted to an early deliverable for exactly this case (doc 07).
 
 **The residual, stated plainly:** you trust that a threshold of members do not collude. It is
 bounded, priced and disclosed; it is not eliminated. The design's answer is the one this document
 has given throughout — **make the assumption a threshold rather than a single party, make the
-individual acts self-proving, and make the bond exceed what the program can measure as owed.**
+individual acts self-proving, make each bond cover its own side, and publish the ratio so a theft
+cannot be hidden.**
 
 **This is also where the earlier "naked option" argument went.** That analysis asked what happens
 when a key holder spends an idle float with no redemption attached, and answered: the float is the
@@ -242,7 +254,7 @@ object no longer exists — **there is one reserve, and it is under a threshold 
 someone's hot wallet** — so the question is no longer about a float at all. It is the quorum
 question above, and it is answered the same way: state it, bound it, do not pretend it is closed.
 
-## Why the bond is `solBSV` and not a stablecoin
+## Why the bonds are denominated in what they protect, not a stablecoin
 
 A stablecoin bond against a BSV liability is not a bond. It is a **written call option on the
 reserve, struck at the ratio of the stablecoin bond to the BSV exposure it must cover**. Post
@@ -255,20 +267,24 @@ A price governor cannot fix a written option. It is reactive by construction, it
 new trust assumption and a new manipulation surface — and there is always a window between the move
 and the throttle. That window *is* the trade.
 
-Denominating the bond in `solBSV` removes the position instead of hedging it, and it costs a member
-nothing in optionality, because holding BSV is the business. This is also the answer to "just hedge
-the collateral with perps": you do not hedge the position, you delete it. The bond is compared
-against `owed`, a quantity the program measures in `solBSV`, so the inequality is not merely
-price-invariant in principle — **it is one the program can evaluate for itself, on-chain, with
-nothing external consulted.**
+**The two-sided bonds delete the position on both sides.** The **redeem-side bond is `solBSV`** — the
+same unit as that exposure — and the **mint-side bond is native BSV held outside the reserve**, so it
+is not the same asset *or* the same pool as the liability it covers. Denominating each side in the
+asset it protects costs a member nothing in optionality, because holding BSV is the business. This is
+also the answer to "just hedge the collateral with perps": you do not hedge the position, you delete
+it. Each bond is compared against what its own side holds — quantities the program measures on-chain,
+with nothing external consulted. (Under the **superseded** single-bond model the bond was `solBSV`
+inside the reserve, which was a round trip funded by a deposit into the very pool it covered.)
 
 ### A slashed theft is deflationary
 
-Because the bond is `solBSV`, a slash removes supply while the reserve falls by the stolen amount.
-Where the bond covers the liability (`bond ≥ owed`), backing per remaining token **rises**. Honest
+Because the **redeem-side** bond is `solBSV`, a slash of it removes supply while the reserve falls by
+the stolen amount. Where that bond covers the liability, backing per remaining token **rises**. Honest
 holders are not merely protected — they end up marginally better collateralised. A stablecoin bond
 has the opposite property: it has to be sold at a price to make holders whole, so the system absorbs
-the theft *and* the market move.
+the theft *and* the market move. **The mint-side bond moves native BSV, so that half is not
+deflationary — it is returned to the affected side or paid as the bounty, and it does not change the
+`solBSV` supply.**
 
 **The two cases, kept distinct.** When the theft is caught while the mint is still staged, the vault
 **burns** it: supply falls, nothing was sold, and the backing behind every remaining token is
@@ -292,7 +308,7 @@ releases itself against a valid proof. That is the research track, and it is why
 redemption authority behind a replaceable boundary: the token, the mint path and the light client do
 not change when it lands.
 
-Until it lands, the threshold key is the honest answer, and the bond is what bounds it.
+Until it lands, the threshold key is the honest answer, and the two-sided bonds are what bound it.
 
 ## What we ask you to trust — plainly
 

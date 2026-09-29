@@ -98,11 +98,11 @@ This graphic is the social-friendly summary and should appear on the landing pag
 ## Voice
 
 - **Plain, not promotional.** State what is trustless and what is trusted-and-bounded, every time.
-- **No overclaiming.** Avoid "fully trustless", "risk-free", "instant" for redemption, or "guaranteed" yields. **Never imply the reserve is trustless:** minting and reversal are verified, the reserve is held by a bonded federation under a threshold key, and what bounds it is a seizable bond plus an exit window that never closes.
-- **Say the federation, not "no operator".** The design has a federation, open membership, a **1,000 BSV bond**, and governance at **85% of pledged coins over 30 days**. Do not describe it as an operator-less system; that was an earlier model.
+- **No overclaiming.** Avoid "fully trustless", "risk-free", "instant" for redemption, or "guaranteed" yields. **Never imply the reserve is trustless:** minting and reversal are verified, the reserve is held by a bonded federation under a **threshold ECDSA key** (an ordinary P2PKH address, never assembled in one place), and what bounds it is **two-sided bonds** — the program seizes the `solBSV` side, the members seize the BSV side collectively — plus an exit window that never closes and continuous publication of the reserve and supply.
+- **Say the federation, not "no operator".** The design has a federation, open membership, **two-sided bonds**, and governance at **85% of pledged coins over 30 days**. Do not describe it as an operator-less system; that was an earlier model. **Never say "threshold script"** — it is a threshold **key** (audit F10).
 - **No oracle.** The program reacts only to BSV headers and Solana slots. External metrics — price, hashrate, reorg cost — are published on the website and never consulted by the program, so copy must not imply it watches a market.
-- **Precise words:** mint, redeem, bond, threshold key, maturity, deadline, proof, equivocation.
-- **Say the numbers.** The fee (**30 bp, governed**), the confirmation depth (**12 blocks**), maturity (**144 blocks**), the bond (**1,000 BSV**), and the governance defaults (**85% / 30 days**). Do not present a confirmation time as a promise.
+- **Precise words:** mint, redeem, bond, **threshold key** (never "threshold script"), maturity, deadline, proof, equivocation.
+- **Say the numbers.** The fee (**30 bp, governed**), the confirmation depth (**12 blocks**), maturity (**144 blocks**), the bonds (**1,000 BSV per side**), the signing threshold (**3-of-5 provisional, `open`**), and the governance defaults (**85% / 30 days**). Do not present a confirmation time as a promise.
 
 ## Naming note
 

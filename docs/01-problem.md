@@ -44,9 +44,11 @@ of this document, which described an operator-less design. The honest division i
   **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, which is why production must hold it under a threshold and a timelock.
 - **Reversal is trustless.** The program compares its own stored header hash against the one a
   deposit was proven with. A reorg is a fact about headers, not a report from anyone.
-- **The reserve is trusted, and bounded.** The BSV sits under a **threshold key** held by the
-  federation, so no single member can move it. What protects a holder is a **bond anyone can seize
-  by proving misbehaviour on-chain** — not the absence of trust.
+- **The reserve is trusted, and bounded.** The BSV sits under a **threshold ECDSA key** held by the
+  federation — an ordinary P2PKH address whose key is never assembled in one place — so no single
+  member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour
+  on-chain** — the program seizes the `solBSV` side, the members seize the BSV side collectively —
+  not the absence of trust.
 
 That leaves **one trust assumption: a threshold of federation members do not collude.** It is not
 eliminated. It is bounded — by bonds that exceed what the members could take, by a 30-day governed

@@ -13,6 +13,8 @@ rest of the design rests on, then the federation and the parts that need bonds a
 
 | | What closed it |
 |---|---|
+| **F1/F2/F3 — the light client could not follow a real chain** | Seed the difficulty bootstrap and verify the instruction path, not only the pure function: **160 real mainnet headers through `push_header`** and a real mainnet branch through `push_fork_header`. **27 tests, 0 failing** |
+| **F4's initialiser vulnerability** | `initialize` and `initialize_bridge` require the program's **upgrade authority**, so the first caller of a fresh deployment no longer becomes `authority`. The authority residual (timelock + threshold) is specified in doc 24, not built |
 | **F7 — the difficulty retarget** | **cw-144**, from the SV Node's `src/pow.cpp`, replayed against real mainnet headers: **324/324 predicted exactly** (`difficulty.rs`, `difficulty-vectors/`). Workstream W1.6 |
 | **P2 — the fork re-anchor** | `init_staging` records `fork_parent_hash`; `commit_fork` requires the chain still to hold it at that height and fails `ForkPointMoved` otherwise. Workstream W1.7 |
 | **A7 — double-minting one deposit** | Deposit identity `(txid, vout)` in the used-deposit list, and the account is pinned by its constraint, which addresses the counterfeit-list reading (X2; the audit still recommends a test) |
@@ -28,30 +30,38 @@ rather than an orphaned risk.
 
 | Step | What ships | Why this order |
 |---|---|---|
+| **Transparency — reserve and supply published continuously** | The reserve balance and the `solBSV` supply published as a live, public backing ratio | **Promoted from a phase-5 monitoring task to an early deliverable.** For the two cases nothing can enforce — a colluding threshold, and an unspent-outpoint spend nobody challenges — **visibility is the only remaining defence**, and it must exist before real value does |
 | **F6 — the replay-list ceiling** | `MIN_PEG_IN` enforced, and `MAX_USED = 200` sized or replaced | A hard ceiling of **200 peg-ins per 32-hour window**, with no attacker required. An open defect in code that exists |
 | **The vault** | Every mint lands in a program-owned token account; released after maturity, burned if a reorg is followed | The component the rest of the design rests on. It gives reversibility without a freeze authority and removes the window in which a fraudulent mint could be sold |
-| **The federation** | Open membership, a **1,000 BSV bond**, members running software only, and the reserve held under a **threshold key** | Turns individually-trusted keys into a threshold over the reserve, and makes the parties with the most to lose the ones who watch |
+| **The federation** | Open membership, **two-sided bonds** (1,000 BSV per side), members running software only, and the reserve held under a **threshold ECDSA key** | Turns individually-trusted keys into a threshold over the reserve, and makes the parties with the most to lose the ones who watch. The BSV-side bond sits under the same collective key, so the members can seize it |
 | **Governance** | **85% of pledged coins, 30 days, live signal**, holding the **upgrade authority**; redemptions never pausable; pause stops **mints only** | Gives the system a change mechanism that is slower than its exit: a hostile proposal empties the bridge before it lands |
 | **Slashing** | **Self-proving equivocation** — members sign payout intents individually, so signing two conflicting intents is its own evidence | The proof is on-chain and needs no judgement; anything weaker cannot attribute fault from a threshold signature |
 | **Peg-out** | Escrow into the vault, individually-signed payout intents, the threshold signature, settlement proved against the light client, and a permissionless cancel after the deadline | Turns a one-way wrapper into a two-way peg. Failure returns; it never mints, so supply is unchanged on every path |
 | **The node and user software** | The federation member's node, and the surfaces that submit headers and resolve pending items | **No consensus role.** Last because it exposes a system rather than completing one |
 
 **Named as open, and not dressed up** ([`13-summary.md`](13-summary.md)): the vault's design carries
-unfixed audit findings and is being re-audited against this model; the **genesis bootstrap** has no
-path (members bond `solBSV`, which does not exist until a mint happens); **sharding** the threshold
-key is undecided; and the DAA is hard-coded until governance can change it.
+unfixed audit findings and is being re-audited against this model; **sharding** the threshold key is
+undecided; and the DAA is hard-coded until governance can change it.
+
+**Genesis — decided.** Members post a **BSV-side bond at genesis**, so no `solBSV` needs to exist
+first. The alternative — a **capped, explicitly-unbonded first mint** — is recorded as a documented
+later option, not chosen, because it leaves the first mint backed by nothing but the members' word.
 
 ## Launch sequencing
 
 1. **Testnet, mint only.** No longer blocked on the retarget. F6 remains; no real value.
-2. **Testnet, vault.** Mints stage, mature and release. Still no real value.
-3. **Testnet, federation and governance.** Bonded membership, threshold custody, governance and
+2. **Transparency, alongside the testnet.** Publish the reserve balance and the `solBSV` supply
+   continuously, so the backing ratio is public **before** any real value is at stake. An early
+   deliverable, not a phase-5 monitoring task: for collusion and for an unchallenged outpoint spend,
+   nothing can enforce anything, and visibility is the defence that remains.
+3. **Testnet, vault.** Mints stage, mature and release. Still no real value.
+4. **Testnet, federation and governance.** Bonded membership, threshold custody, governance and
    slashing exercised end to end. Still no real value.
-4. **Mainnet, mint only, small caps.** Deposits proven end to end. Redemption handled manually and
+5. **Mainnet, mint only, small caps.** Deposits proven end to end. Redemption handled manually and
    transparently while peg-out is finished.
-5. **Mainnet, peg-out live, small caps.** Escrow, payout intents, the threshold signature, and the
+6. **Mainnet, peg-out live, small caps.** Escrow, payout intents, the threshold signature, and the
    cancel path exercised in production.
-6. **Raise caps.** Capacity is capped by bonds pledged, so raising it means more members or larger
+7. **Raise caps.** Capacity is capped by bonds pledged, so raising it means more members or larger
    bonds — and only after audits and after the invariants hold in production for a sustained period.
 
 ## Milestones
@@ -62,8 +72,8 @@ key is undecided; and the DAA is hard-coded until governance can change it.
   after maturity.
 - A reorg followed inside the maturity window burns the staged tokens, and the depositor ends
   exactly where they started.
-- A federation is formed from **open membership** at the 1,000 BSV bond, and holds the reserve
-  under a threshold key.
+- A federation is formed from **open membership** at the two-sided 1,000 BSV bonds, and holds the
+  reserve under a **threshold ECDSA key**.
 - A governance proposal passes at **85% of pledged coins** and takes effect after **30 days**,
   with redemptions live throughout.
 - A redemption completes end-to-end: escrow → signed payout intents → BSV payout → proof → settlement.

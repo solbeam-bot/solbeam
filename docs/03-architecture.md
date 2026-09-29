@@ -44,7 +44,7 @@
 |---|---|---|
 | **BSV light client** (Solana program) | **Built** | Holds a checkpoint plus a rolling window of **192 BSV headers**. It answers one question — *is this transaction in this block, and is that block still canonical?* — by verifying proof-of-work and Merkle inclusion. Difficulty is implemented as **cw-144**, the rule the SV Node's `src/pow.cpp` uses, replayed against real mainnet headers at **324/324 exact**. Each of the 52-byte records carries the block hash, its cumulative chainwork and its timestamp, which is what the rule consumes. **This is what makes minting permissionless: the proof is the authorisation** |
 | **The vault** (program-owned token account + a record per pending item) | **Designed, not built** | **Every mint lands here first, never with the depositor.** The program releases the staged `solBSV` once `MATURITY` passes with the deposit still canonical, or **burns** it if a reorg is followed. The release decision is made from the program's own stored headers — it compares the hash stored when the deposit was proven against the hash it holds now — so it needs no reporter. Because the tokens are in an account the program owns, releasing or burning is disposing of what it holds, which is what makes a mint reversible **without a freeze authority**. The current design carries unfixed audit findings and is being re-audited against this model; see [`21-vault-structural.md`](21-vault-structural.md) |
-| **The federation** — bonding, threshold custody, governance, slashing | **Designed, not built** | A set of **open-membership, bonded members** (1,000 BSV bond) who run software rather than exercising judgement. Each runs its own light client, relays headers, **signs payout intents individually** (which is what makes misbehaviour self-proving), and challenges theft. The reserve is held under a **threshold key**, so **no single member can move it**. **Anyone can seize a bond by proving misbehaviour on-chain** — that, not the absence of trust, is what protects the reserve. See [`23-federation.md`](23-federation.md) |
+| **The federation** — bonding, threshold custody, governance, slashing | **Designed, not built** | A set of **open-membership, bonded members** (**two-sided bonds**, 1,000 BSV per side) who run software rather than exercising judgement. Each runs its own light client, relays headers, **signs payout intents individually** (which is what makes misbehaviour self-proving), and challenges theft. The reserve is held under a **threshold ECDSA key**, so **no single member can move it**. **A bond can be seized by proving misbehaviour on-chain** — the program seizes the `solBSV` side, the members seize the BSV side collectively — and that, not the absence of trust, is what protects the reserve. See [`23-federation.md`](23-federation.md) |
 | **The website** | Not built | Parameter display, status and the external metrics. **No consensus role at all** — it can be replaced or ignored without the program noticing |
 
 `solBSV` itself is a classic SPL token: 8 decimals, **no freeze authority**, its mint authority a
@@ -83,23 +83,31 @@ verify than to run, but the tooling is unaudited and, in the cheapest cases, res
 
 ## Where the BSV sits
 
-**One reserve, under a threshold key.** The BSV lives at the federation's deposit script, spendable
-only by a **threshold signature** the members produce. Three properties matter, and they are the
-whole of the custody story:
+**One reserve, under a threshold ECDSA key.** The BSV lives at the federation's reserve address — an
+ordinary **P2PKH** address — spendable only by a **threshold signature** the members produce. The key
+is **never assembled in one place**; there is a threshold **key**, not a threshold script (audit
+F10). Three properties matter, and they are the whole of the custody story:
 
-- **No single member can move it.** That is a property of the key, not a promise about behaviour.
-- **It is trusted, and that is stated.** A threshold of members who collude can take the reserve.
-  The design does not pretend otherwise; it **bounds** the assumption with bonds that exceed what
-  collusion could take, and with proofs anyone can submit.
-- **The bond is in `solBSV`**, the same unit as the exposure, so no BSV price move shrinks it
-  relative to what it protects, and the program can compare both sides on-chain with no oracle.
+- **No single member can move it.** That is a property of the shared key, not a promise about
+  behaviour, and not a script that enforces it.
+- **It is trusted, and that is stated.** A threshold of members who collude can take the reserve,
+  and the maximum loss is the entire non-member supply. The design does not pretend otherwise; it
+  **bounds** the assumption with two-sided bonds and with proofs anyone can submit, and it makes the
+  theft **visible** by publishing the reserve and supply continuously (doc 07).
+- **The bonds are two-sided and outside the reserve.** The mint side is native BSV held outside the
+  reserve **under the collective key, not the member's own**; the redeem side is `solBSV`, seized by
+  the program on Solana. Each is denominated in the asset its side holds, so no BSV price move shrinks
+  it relative to what it protects, and the program can compare each pair on-chain with no oracle. The
+  BSV-side bond is **seized by the members collectively** — a threshold-signed transaction, with the
+  slashers paid from it — so it is a mechanism, though it is a **collective action by the majority**
+  rather than an automatic rule.
 
 The published invariant is `custodied BSV ≥ outstanding solBSV`. **The program cannot enforce it** —
 the reserve is off-chain BSV it cannot read — so the website shows the ratio and the program does
-not check it. What the program *can* check is that the bond covers what the federation owes, because
-both are `solBSV` quantities it holds.
+not check it. What the program *can* check is that each bond covers its side, because those are
+quantities it holds or measures. **Publishing that ratio is an early deliverable, not a late one.**
 
-See [Parameters & governance](06-parameters.md) for the sizing of the bond and the governance
+See [Parameters & governance](06-parameters.md) for the sizing of the bonds and the governance
 threshold, and [The federation](05-federation.md) for the role.
 
 ## Governance and the upgrade authority
@@ -144,7 +152,7 @@ the Open BSV License and is avoided for the same reason.
 - **No BSV full node.** A header source needs only chain data; the proof is verified on Solana, so
   the data source need not be trusted.
 - **No Solana infrastructure.** A public or private RPC endpoint is enough.
-- **No single operator.** Membership is open at a 1,000 BSV bond, and the website has no consensus
+- **No single operator.** Membership is open at two-sided 1,000 BSV bonds, and the website has no consensus
   role: no privileged party signs anything the program trusts, and the reserve needs a threshold
   rather than a key.
 

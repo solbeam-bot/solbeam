@@ -35,18 +35,29 @@ submit.
 
 ## Membership
 
-**Open.** Anyone posting a **1,000 BSV bond** may join — unlike Zcash's federation, whose membership
+**Open.** Anyone posting the bonds may join — unlike Zcash's federation, whose membership
 is fixed. Open entry with a capital gate, so the set is permissionless but not anonymous.
 
-- The bond is posted as **`solBSV`**, because it must be **seizable on Solana**
-- `bond ≥ k × owed` must always hold, with **`k = 1`** — so **a member cannot leave while owing**
+- **Two bonds, one per direction** (doc 13, *The two bonds*): a **BSV-side bond** held **outside the
+  reserve** and sized against the BSV held, and a **`solBSV`-side bond**, because that leg must be
+  **seizable on Solana**, sized against the `solBSV` held
+- **Neither bond sits inside the reserve**
 - Fees are earned **pro rata to stake**
-- Leaving: announce, wait the unbonding period, withdraw if still covered
+- Leaving: announce, wait the unbonding period, withdraw if still covered on **both** sides
 
 **Members run software, not judgement.** There is no manual approval of any transaction: each node
 watches both chains, verifies independently with its own light client, signs, and challenges —
 automatically. It is **running a staked node**: pledge a bond, run the software, earn a yield, lose
 the bond for misbehaving.
+
+**The BSV-side bond is enforced by the members, not by the Solana program.** It sits under the
+**collective (threshold ECDSA) key** — the same primitive as the reserve, pointed at the bond — and
+**not under the member's own key**. That is the design requirement: a member cannot move their own
+bond, and the federation can, by signing a threshold transaction that moves the bond. **Slashing pays
+the slashers from the seized bond**, which is the motive. It is a **collective action by the
+majority**, not an automatic rule — nothing on BSV compels the members to sign — and the two
+residuals (a majority could seize an honest member's bond; the duty to slash is social) are stated in
+doc 13, *The two bonds*.
 
 **The bond size is the scale limit, and that is stated rather than implied.** With `k = 1`, total
 value locked is capped by total bonds pledged. Ten members at 1,000 BSV is roughly **$300k** of
@@ -60,10 +71,10 @@ capacity. That is a proof of concept, and it is better to say so than to imply o
 |---|---|
 | Watch both chains and verify **independently** | Each node runs its own light client; it does not take the others' word |
 | Relay BSV headers to Solana | Permissionless and unpaid in itself — but nothing releases, including the member's own deposits, if the tip does not advance |
-| Hold the reserve under a **threshold key** | **No single member can move funds** |
+| Hold the reserve under a **threshold ECDSA key** | **No single member can move funds** — the reserve is an ordinary P2PKH address, but the key is never assembled in one place |
 | **Sign payout intents individually** | Recorded on Solana, so every approval is attributed |
 | Produce the threshold signature for the BSV payout | Only once enough attributed intents exist |
-| **Challenge theft** | The node software *is* the challenger, and the bond is seizable on proof |
+| **Challenge theft** | The node software *is* the challenger: the `solBSV` bond is seized by the program on proof, and the BSV bond by the members collectively |
 
 **Making the challenger part of the node is the important change.** It was previously an unpaid
 chore nobody owned; it is now a funded job done by the parties with the most to lose.
@@ -74,34 +85,43 @@ chore nobody owned; it is now a funded job done by the parties with the most to 
   post and no price to set: the fee is a parameter, so a member's income is a function of the
   system's volume and its share of the bond, not of its pricing judgement.
 - **Costs:** BSV transaction fees (tiny), Solana transaction fees, and the opportunity cost of the
-  bond — the dominant cost, because the bond is `solBSV` and cannot be redeemed while it is pledged.
-- **Risk:** the bond. It answers `owed` — the liability the program credited from proofs it verified
-  itself — and it is lost for **equivocation**, which is self-proving.
-- **Caps are not a member's choice.** Capacity is set by `bond ≥ k × owed`: the bond is the limit,
-  and it is enforced on-chain at the moment it is used.
+  bonds — the dominant cost, because the `solBSV`-side bond cannot be redeemed while it is pledged
+  and the BSV-side bond is capital held outside the reserve.
+- **Risk:** the bonds. They cover what each side holds and are lost for **equivocation**, which is
+  self-proving. The BSV-side bond sits under the **collective key** and is seized by the members collectively, with the slashers paid from it — a collective action by the majority, not an automatic rule.
+- **Caps are not a member's choice.** Capacity is set by the **two-sided bonds** — `bsv_bond ≥ k ×
+  (BSV held)` and `solbsv_bond ≥ k × (solBSV held)` — and the checks run on-chain at the moment they
+  are used.
 
-The bond is `bond ≥ k × owed`, with **`k = 1`**. At `k = 1` it covers the principal and no more. A
-self-dealing attack by a member is roughly break-even — what makes it unprofitable is **the mining
-cost of the reorg**, not the bond. The bond's job is covering a shortfall, and the fee has to clear
-the cost of the locked capital, not just gas.
+The bonds are **`k = 1`** per side. At `k = 1` each covers what its side holds and no more; **neither
+sits inside the reserve**, so a bond is no longer funded by a deposit into the very reserve it covers
+(the old single-bond flaw). A self-dealing attack by a member is roughly break-even — what makes it
+unprofitable is **the mining cost of the reorg**, not the bond. The bonds' job is covering a
+shortfall, and the fee has to clear the cost of the locked capital, not just gas.
 
 ---
 
 ## The reserve, and the threshold key
 
-**One reserve, under a threshold key.** The BSV sits at the federation's deposit script and only a
-threshold signature can spend it. Three consequences, and they are the whole custody story:
+**One reserve, under a threshold ECDSA key.** The BSV sits at the federation's reserve address — an
+ordinary **P2PKH** address — and only a threshold signature can spend it. The key is **never
+assembled in one place**, which is why the check for a 25-byte P2PKH script is correct rather than a
+limitation (audit F10). Three consequences, and they are the whole custody story:
 
-1. **No single member can move the reserve.** A compromised key is not a compromised reserve.
-2. **A quorum that colludes can.** That is the trust assumption, stated rather than hidden, and it
-   is bounded by bonds that exceed what a colluding quorum could take.
-3. **The bond is `solBSV`**, the same unit as the exposure, so the program can compare the two
-   on-chain with nothing external consulted, and no price move can shrink the bond relative to what
-   it protects.
+1. **No single member can move the reserve.** A compromised key share is not a compromised reserve.
+2. **A quorum that colludes can.** That is the trust assumption, stated rather than hidden, and it is
+   bounded by the two-sided bonds and by **continuous publication** of the reserve and supply (doc 07).
+3. **Each bond is in the asset its side holds**, so the program can compare each pair on-chain with
+   nothing external consulted, and no price move shrinks either bond relative to what it protects.
 
 **What the program cannot see:** the BSV itself. The published invariant — `custodied BSV ≥
 outstanding solBSV` — is **monitored, not enforced** (D8), because the reserve is off-chain. What
-*is* checkable is `bond ≥ k × owed`, since both are `solBSV` quantities the program holds or measures.
+*is* checkable is each bond against its own side, since those are quantities the program holds or
+measures.
+
+**`fed.threshold` sizes nothing on-chain.** It is a parameter of the **signing protocol** —
+provisional `3-of-5`, marked `open` (doc 24). Adding or removing a member is a **re-sharing**, not a
+migration: the reserve never moves and the address never changes. With a multisig it would have to.
 
 ---
 
@@ -192,8 +212,10 @@ Changeable by 85% with a 30-day delay:
 |---|---|
 | Mint fee | **30 bp** |
 | Redeem fee | **30 bp** |
-| Bond size | 1,000 BSV |
+| Bond — `fed.bond_mint` (BSV side) | 1,000 BSV, outside the reserve |
+| Bond — `fed.bond_redeem` (`solBSV` side) | 1,000 BSV, seizable on Solana |
 | Bond multiple `k` | 1 |
+| Signing threshold `fed.threshold` | 3-of-5 provisional, `open` |
 | Unbonding period | — |
 | Governance threshold / delay | 85% / 30 days |
 | Pause threshold / duration | majority / N days |
@@ -216,10 +238,12 @@ parameter is settable at runtime.)**
 |---|---|
 | **D7** — no governance in the PoC | 85% / 30 days / live signal, holding the upgrade authority |
 | **D2** — fees discovered on an order book | **30 bp, governed** |
-| Per-relayer keys, each individually trusted | **Threshold key** over the reserve |
-| Per-relayer deposit scripts and floats | **One deposit script**, one reserve under a threshold |
+| Per-relayer keys, each individually trusted | **Threshold ECDSA key** over the reserve — an ordinary P2PKH address, the key never assembled in one place |
+| A single `solBSV` bond inside the reserve | **Two-sided bonds, neither inside the reserve** (doc 13, *The two bonds*) |
+| Per-relayer deposit scripts and floats | **One reserve address**, one reserve under a threshold |
 | An unpaid permissionless challenger | **The node software**, funded from fees and bounties |
 | An immutable floor | **The exit window** is the floor |
+| "Monitoring" as a late activity | **Continuous publication of reserve and supply as an early deliverable** — the only defence where nothing is enforceable |
 | Slashing with no attribution mechanism | **Self-proving equivocation** on individually-signed intents |
 
 **The order book is redundant.** It solved fee discovery and capacity allocation; a governed fee
@@ -232,12 +256,13 @@ received an adversarial review. Its prose in [`12-peg-mechanism.md`](12-peg-mech
 
 ## Open questions
 
-1. **Genesis bootstrap** — members bond `solBSV`, but none exists until a mint happens. The first
-   members need a path (the genesis mint, D3)
+1. **Genesis — decided: a BSV-side bond.** Members post BSV at genesis, so no `solBSV` needs to exist
+   first. A capped, explicitly-unbonded first mint is recorded as a documented later option, not
+   chosen (`docs/14-decisions.md`, D16)
 2. **Shards** — one threshold key across all members, or several groups with their own? Shards
    contain both theft and signing latency, at the cost of coordination
-3. **The threshold itself** — `t` of `n` is not yet specified anywhere, and the choice interacts
-   with shard count and the bond multiple `k`
+3. **The threshold value** — provisional `3-of-5`, `open` (doc 24). It sizes nothing on-chain but
+   every "no single member" claim depends on it, and the choice interacts with shard count
 4. **The vault design** — [`21-vault-structural.md`](21-vault-structural.md) is the current vault
    design and carries unfixed findings. It should be re-audited against this model, since several
    of its findings were caused by trying to enforce BSV-side behaviour that the federation now

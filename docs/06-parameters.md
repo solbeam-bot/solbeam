@@ -18,8 +18,10 @@ is the point of the governance design — except where the note says otherwise.
 |---|---|---|---|
 | **Mint fee** | **30 bp**, governed | economic | Replaces the discovered order-book fee (D2, superseded) |
 | **Redeem fee** | **30 bp**, governed | economic | Same fee in the other direction |
-| **Bond** | **1,000 BSV**, posted as `solBSV` | **safety** | Open-membership gate; must be seizable on Solana, which is why it is not posted in BSV |
-| **Bond multiple `k`** | **1** | **safety** | `bond ≥ k × owed`. At `k = 1` the bond covers the credited liability in full and no more |
+| **Bond — mint side (`fed.bond_mint`)** | **1,000 BSV**, BSV, **outside the reserve**, under the **collective key** | **safety** | Sized against the BSV held. **Held under the collective key, not the member's own**, and seized by the **members collectively** with a threshold-signed transaction; slashing pays the slashers from it. A collective action by the majority, not an automatic rule (doc 13, *The two bonds*) |
+| **Bond — redeem side (`fed.bond_redeem`)** | **1,000 BSV**, posted as `solBSV` | **safety** | Sized against the `solBSV` held; must be seizable on Solana. **Neither bond sits inside the reserve** |
+| **Bond multiple `k`** | **1** | **safety** | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`. The old single formula `aggregate_bond ≥ k × non_bonded_supply` is **superseded** (D14) |
+| **Signing threshold (`fed.threshold`)** | **3-of-5 provisional**, `open` | **safety** | `t` of `n` for the **threshold ECDSA** key. A **signing-protocol** parameter: it sizes nothing on-chain |
 | **Governance threshold** | **85% of pledged coins** | **safety** | The proposal bar |
 | **Governance delay** | **30 days** | **safety** | Signal time between passing and taking effect. **This is the exit window** |
 | **Signal** | **live from the moment it is raised** | **safety** | The proposal is visible while it is only a proposal |
@@ -98,8 +100,9 @@ vault means a *successful* fraud mints tokens that are **not in anyone's wallet*
 to dump and no innocent buyer to inherit the loss.
 
 **The honest limit:** the reserve is off-chain BSV the program cannot read, so `custodied BSV ≥
-outstanding solBSV` is **tracked, not verified** (D8). What the program *can* compare is `bond ≥
-k × owed`, since both are `solBSV` quantities it holds or measures.
+outstanding solBSV` is **tracked, not verified** (D8). What the program *can* compare is each bond
+against what its side holds — `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)` —
+since those are quantities it holds or measures, and **neither bond sits inside the reserve**.
 
 ## What the program can and cannot see
 
@@ -109,8 +112,8 @@ k × owed`, since both are `solBSV` quantities it holds or measures.
 | Deposit inclusion | Proved against the light client | **Verified** — proof of work and Merkle branch |
 | Deposit's block hash | Stored when the deposit is proven | **Compared later**, to decide release vs burn. No reporter |
 | Deadline | Solana slots | **Read natively.** A cluster halt freezes the clock; it does not burn anyone |
-| `owed` and the bond | On Solana, `solBSV` | **Compared on-chain**: `bond ≥ k × owed` |
-| The BSV reserve itself | Off-chain, under a threshold key | **Not readable.** Monitored and published, not enforced |
+| Bonds | One on Solana (`solBSV`), one on BSV (native, outside the reserve) | **Compared on-chain per side**: `bsv_bond ≥ k × (BSV held)`, `solbsv_bond ≥ k × (solBSV held)`. The **mint-side bond is seized by the members collectively** under the collective key, not by the program |
+| The BSV reserve itself | Off-chain, under a **threshold ECDSA** key | **Not readable.** Monitored and published, not enforced — and **publication is an early deliverable**, not a late one (doc 07) |
 | Price, hashrate, reorg cost | Off-chain | **Never consulted.** Published as information; deciding on them would make them oracles |
 
 ## What was specified before, and is now superseded
@@ -131,8 +134,8 @@ what became of each rather than rewriting it silently.
 | **P7** | `MIN_PEG_IN` = 10 BSV | **Superseded** — an economic parameter, no longer specified |
 | **P8** | `MAX_PEG_IN` = 10,000 BSV | **Superseded.** The real bound is the bond: total value locked is capped by total bonds pledged |
 | **P9** | `MAX_PEG_OUT` = 10,000 BSV | **Superseded.** A redemption is bounded by the reserve and the payout path, not a per-transaction number |
-| **P10** | `HOT_FLOAT_CAP` | **Removed with the pooled float.** There is one reserve under a threshold key, and the bond is the bound |
-| **—** | bond `k` = 1 (D5) | **Kept.** `bond ≥ k × owed`, `k = 1`, and it is governable |
+| **P10** | `HOT_FLOAT_CAP` | **Removed with the pooled float.** There is one reserve under a **threshold ECDSA key**, and the two-sided bonds are the bound |
+| **—** | bond `k` = 1 (D5) | **`k = 1` kept, formula superseded** (D14): two-sided bonds replace `bond ≥ k × owed` |
 | **D4** | `FLOOR` fixed in code | **Superseded.** The default is 12; the mechanism is governance |
 | **D7** | No governance in the PoC | **Superseded.** 85% / 30 days / live signal, holding the upgrade authority |
 | **D8** | Reserve invariant monitored, not enforced | **Kept**, and it is the honest residual |
@@ -142,9 +145,10 @@ what became of each rather than rewriting it silently.
 - **A stablecoin bond is a written call option on the reserve.** Post `$500k` against `10,000 BSV`
   and the member is short `5,000 BSV`; at `$100` the option is in the money, and absconding becomes
   the rational trade. A price governor cannot fix a written option — it is reactive, it needs an
-  oracle, and the window between the move and the throttle *is* the trade. **Denominate the bond in
-  `solBSV`.** That removes the position instead of hedging it, and it is also what makes `bond ≥
-  k × owed` checkable on-chain with nothing external consulted.
+  oracle, and the window between the move and the throttle *is* the trade. **Denominate each bond in
+  the asset its side holds** — BSV on the mint side (held outside the reserve), `solBSV` on the
+  redeem side. That removes the position instead of hedging it, needs no oracle, and keeps each
+  inequality checkable from quantities the program holds or measures (D14).
 - **A change must be disclosed before someone transacts.** A holder should be able to see the fee,
   `FLOOR`, `MATURITY` and the bond before they peg in. Published, the external metrics are
   information; consulted by the program, they would be oracles.
@@ -158,12 +162,12 @@ before they change.**
 
 | Unspecified | Note |
 |---|---|
-| **The threshold itself** | `t` of `n` is not stated anywhere, and it interacts with shard count and `k` |
+| **The signing threshold** | Provisional **3-of-5**, `open`. It sizes nothing on-chain, but every "no single member" claim depends on it (doc 24) |
 | **Unbonding period** | Must outlast the payout deadline; no default |
 | **Pause threshold and duration** | "A majority of pledged coins" and "N days" — neither is fixed |
 | **Challenge bounty share** | How a seizure splits between the wronged holder and the challenger |
 | **Redeem deadline default** | The holder sets it; the minimum is not stated |
-| **Genesis** | Members bond `solBSV`, which does not exist until a mint happens (D3). The bootstrap has no path |
+| **Genesis — decided** | Members post a **BSV-side bond**, so no `solBSV` needs to exist first (D16). A capped, explicitly-unbonded first mint is a documented later option, not chosen. It is no longer an open parameter |
 | **Shards** | One threshold key, or groups with their own |
 
 **Three things are open in the built code, and are not governance questions:**
@@ -203,9 +207,9 @@ The book, matching and market-making were removed, so this document absorbs the 
 survived them.
 
 - **The fee is 30 bp to mint and 30 bp to redeem**, set by governance — not discovered.
-- **Capacity is capped by bonds pledged.** With `k = 1` the aggregate bond must be at least the
-  outstanding `solBSV` supply, so total value locked is bounded by total bonded capital. Ten members
-  at 1,000 BSV is roughly **$300k** — a proof of concept, stated plainly.
+- **Capacity is capped by bonds pledged.** With `k = 1` each **two-sided bond** must cover what its
+  side holds, so total value locked is bounded by total bonded capital. Ten members at 1,000 BSV is
+  roughly **$300k** — a proof of concept, stated plainly.
 
 There is no on-chain market, no matching and no liquidity mining. Any market for `solBSV` exists
 outside this system.

@@ -26,13 +26,14 @@ everywhere below.
 | Actor | Wants | Is trusted with | Its worst case |
 |---|---|---|---|
 | **User** | `solBSV` for BSV, and BSV for `solBSV` | Nothing | A deposit that never gets verified inside the window — the one loss with no on-chain remedy |
-| **Federation member** | Fees, pro rata to stake | **A share of the threshold key over the whole reserve**, and its own signed attestations | Its bond, and ejection |
+| **Federation member** | Fees, pro rata to stake | **A share of the threshold ECDSA key over the whole reserve**, a share of the **collective key over the mint-side bonds**, and its own signed attestations | Its bond, and ejection |
 | **Governance** | — (it is a process, not a party) | The upgrade authority, under 85% / 30 days / live signal | Nothing; a proposal that harms holders empties the bridge before it lands |
 
 **The one trust assumption: a threshold of members do not collude.** Everything else is
-verified or evidenced. That assumption is not eliminated — it is bounded, by bonds larger than
-what a member could take and by proofs anyone can submit. The residual is stated in
-§Where this leaves the trust statement.
+verified or evidenced. That assumption is not eliminated — it is bounded, by **two-sided bonds,
+neither inside the reserve** (the program seizes the `solBSV` side; the members seize the BSV side
+collectively under the collective key), by proofs anyone can submit, and by **continuous publication
+of the reserve and supply**. The residual is stated in §Where this leaves the trust statement.
 
 ---
 
@@ -112,7 +113,7 @@ policy rather than on the program.
                 → the member signs THIS redemption individually:
                   id, amount, destination, deadline
                 → recorded as PayoutIntent[id, member]; NOT acted on
-3  PAY        once enough attributed intents exist, the threshold key
+3  PAY        once enough attributed intents exist, the threshold ECDSA key
               signs the BSV payment out of the reserve
 4  FINALIZE   finalize_redeem(item, proof)                            [designed]
                 → payout pays exactly `amount` to `bsv_destination`
@@ -133,7 +134,7 @@ cannot be resolved: `finalize` and `cancel` are mutually exclusive by time.
 |---|---|---|
 | A member never attests | Nothing stalls the others. The other members attest, the threshold is reached, the payment goes out | Nobody |
 | **A threshold of members never attests** | After the deadline, `cancel_redeem` returns the escrow. The User is **denied peg-out for the duration of the deadline**, though not robbed | **The User** — latency, not loss. Open defect **N2**: refusal leaves no signed artifact, so nothing is slashable |
-| A member signs two conflicting intents | It produced its own proof of guilt. Anyone submits both; the bond is seized and the challenger takes the bounty | **The member's bond** |
+| A member signs two conflicting intents | It produced its own proof of guilt. Anyone submits both; the bonds are seized — the `solBSV` side by the program, the BSV side by the members collectively — and the challenger takes the bounty | **The member's bonds** |
 | ~~A member signs an intent matching no redemption~~ | **Deleted (audit F8).** A closed `PegOut` is indistinguishable from one that never existed, so the predicate is undecidable and would false-positive against an honest member who attested before a cancel | — |
 | The payout proof is replayed across two redemptions to one exchange address | It cannot be: the payment carries the redemption's id | Whoever tried it — rejected |
 | The payout is reorged before it is `C_payout` deep | It does not finalize. The reserve can pay again; if not, the deadline returns the escrow | **Nobody.** The reserve does not depend on one transaction surviving |
@@ -150,22 +151,28 @@ the bond prices the risk of that software being modified.
 
 ```
 0  JOIN      stake(amount, script)                                    [designed]
-               → 1,000 BSV bond, posted as solBSV so it is seizable on Solana
+               → 1,000 BSV bond per side (D14): BSV on the mint side, outside
+                 the reserve, under the COLLECTIVE key; solBSV on the redeem
+                 side, seizable on Solana
 1  WATCH     run its own light client; push headers                   [push_header: built]
                → pushing is permissionless, but it is the member's job,
                  so it is a member's node that keeps the view current
                on a reorg: init_staging → push_fork_header → commit_fork
                → commits only if strictly HEAVIER (accumulated chainwork)
-2  CUSTODY   hold a share of the threshold key over the reserve
+2  CUSTODY   hold a share of the threshold ECDSA key over the reserve
                → no single member can move funds
+               and a share of the COLLECTIVE key over the mint-side bonds
+               → a member cannot move its own bond; the members seize it
+                 together, and the slashers are paid from it
 3  ATTEST    sign each payout intent individually                     [designed]
 4  CHALLENGE slash_equivocation(member, id, two signed intents)       [designed]
                → two signatures, one member, conflicting statements:
                  the entire proof. Anyone submits it
 5  EARN      fees pro rata to stake
 6  EXIT      announce_unbond → withdraw_bond after the unbonding period [designed]
-               → requires bond >= k × owed still holds afterwards,
-                 so a member with outstanding obligations CANNOT leave
+               → requires both bonds still to cover what their sides hold
+                 afterwards, so a member with outstanding obligations CANNOT
+                 leave
 ```
 
 **Making the challenger part of the node is the important change.** It was previously an
@@ -175,20 +182,20 @@ unpaid chore nobody owned; it is now a funded job done by the parties with the m
 
 | Failure | What happens | Who bears it |
 |---|---|---|
-| A member equivocates on two intents | `slash_equivocation` — the member's own two signatures are the whole proof | **The member's bond** |
-| A member's key is stolen | The bond is seizable, and its share of the threshold is not enough to move funds alone | **The member** |
+| A member equivocates on two intents | `slash_equivocation` — the member's own two signatures are the whole proof. The `solBSV` side is seized by the program; the BSV side by the members collectively | **The member's bonds** |
+| A member's key is stolen | The bonds are seizable, and its share of the threshold is not enough to move funds alone | **The member** |
 | A member stops running the node | Minting stalls if too few push headers; redemptions stall if too few attest. Fees are not earned | **Everyone, until governance ejects it** |
-| A member wants out while owing | `withdraw_bond` refuses while `bond >= k × owed` fails | — |
-| **A threshold of members colludes** | Every signature is on record, so it is attributable — but there is no cryptographic proof against a valid-signing majority | **The reserve.** This is the one trust assumption, and it is bounded, not removed |
-| The bonded asset loses value in the incident | `solBSV` is the bond **and** the liability, so a reserve loss devalues the bond being seized | **Users**, to the extent of the shortfall. Open defect **N6** |
+| A member wants out while owing | `withdraw_bond` refuses while either bond fails to cover its side | — |
+| **A threshold of members colludes** | Every signature is on record, so it is attributable — but there is no cryptographic proof against a valid-signing majority. **Continuous publication of the reserve and supply is the mitigation** | **The reserve.** This is the one trust assumption, and it is bounded, not removed |
+| The bonds lose value in the incident | The redeem-side bond is `solBSV` and the liability is `solBSV`, so a reserve loss devalues that bond as it is seized. The mint-side bond is BSV, held outside the reserve | **Users**, to the extent of the shortfall. Open defect **N6** |
 | Attribution costs one account per member per redemption | Rent and per-redemption instructions scale as members × concurrent redemptions | The federation, in rent. Open defect **N4** |
-| Genesis: a member must bond `solBSV`, and none exists until a mint happens | There is no path for the first members | **Open. No answer in the design** |
+| Genesis — **decided** | Members post a **BSV-side bond at genesis**, so no `solBSV` needs to exist first (D16). A capped, explicitly-unbonded first mint is a documented later option, not chosen | — |
 
 **`owed` is deliberately not a single counter.** The old model accumulated one number per
 relayer at both mint and accept, and it could not be discharged (T5). Under the federation the
 liability is per-redemption and is attributed by each member's own signature, so there is
-nothing to double-count — but `bond >= k × owed` still needs a definition of `owed` that does
-not grow monotonically, and that is an open item.
+nothing to double-count — and the **two-sided bonds replace the single `bond >= k × owed` check**,
+so no shared `owed` counter needs defining at all.
 
 ---
 
@@ -230,29 +237,30 @@ are frozen; it is that you can always leave before they change.
 |---|---|
 | **A User's worst case in** | A deposit that never verifies inside the 32-hour window. **No on-chain remedy** — real, disclosed, and the strongest argument for the app automating the mint |
 | **A User's worst case out** | Peg-out stalled by member inaction, recovered only by waiting out the deadline and taking `solBSV` back. **Denied service, not loss** — but doc 13's floor argument rests on redemptions being the exit |
-| **A member's worst case** | Its bond, seized on its own two conflicting signatures |
-| **The system's worst case** | A threshold of members colluding. **Bounded by bonds that cost more than they could take — and only if the bonds are large enough and the price holds** |
+| **A member's worst case** | Its bonds, seized on its own two conflicting signatures — the `solBSV` side by the program, the BSV side by the members collectively |
+| **The system's worst case** | A threshold of members colluding. **Bounded by two-sided bonds, neither inside the reserve — and only if they are large enough and the price holds.** The maximum loss is the entire non-member supply |
 
 **Three things this walk exposes that matter more than the old five-actor version:**
 
 1. **The deposit path is now the weakest link, not the redemption path.** Redemptions are
    permissionless to cancel and the escrow always returns. Deposits depend on the window being
    pushed and on `N5` — that a deposit output has not been spent by the members who hold the
-   script.
+   reserve address.
 2. **Refusal is the unattributable failure.** Every escalation the design has needs a signed
    artifact. A member that does nothing signs nothing, so nothing can be proved and nothing
    can be seized. That is a hole in the middle of "the node software is the challenger."
-3. **The bond bounds attribution, not loss.** It answers "who did it, provably." It does not
-   answer "is the loss covered," because the bond is denominated in the asset the loss
-   devalues.
+3. **The bonds bound attribution, not loss.** They answer "who did it, provably." They do not
+   answer "is the loss covered," because the redeem-side bond is denominated in the asset the
+   loss devalues — although the mint-side bond is BSV held outside the reserve.
 
 **The trust statement, plainly:**
 
 > You trust that a **threshold of bonded members do not collude**, and that enough members are
 > running the software to keep the BSV view current and to pay redemptions. Minting itself is
-> trustless. What protects you is a bond that anyone can seize **by submitting a member's own
-> two conflicting signatures**, an exit that **cannot be paused**, and a reserve that **no
-> single member can move**.
+> trustless. What protects you is **two-sided bonds** that can be seized — the program seizes the
+> `solBSV` side automatically, the members seize the BSV side collectively **by a threshold-signed
+> transaction** — an exit that **cannot be paused**, continuous publication of the reserve and
+> supply, and a reserve that **no single member can move**.
 
 That is a trust assumption, stated and bounded — and it **is** custody of the reserve, unlike
 the per-relayer model it replaced. The trade is deliberate: one threshold key instead of many

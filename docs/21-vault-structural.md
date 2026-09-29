@@ -93,7 +93,10 @@ deliberate exception, and it is discussed under §New defect N3 rather than wave
 
 ### BSV side (designed)
 
-**One deposit script for the whole federation** — the threshold script the reserve sits in.
+**One deposit script for the whole federation** — the reserve address, an ordinary **P2PKH**
+address whose key is a **threshold ECDSA** key, never assembled in one place. It is a threshold
+**key**, not a threshold script: there is no multisig and no script that changes when membership
+changes (doc 23, *Threshold ECDSA*; audit F10).
 That replaces the per-relayer registered scripts of docs 19–21 and reverses decision **P8**
 ("every deposit must pay a registered relayer's script"); the reversal is recorded in
 §What dissolved, T12. The script is a **parameter under governance**, and changing it changes
@@ -206,7 +209,8 @@ peg-out work. See §Open items 4.
 ```
 stake(amount, script)            [designed] posts the bond; 1,000 BSV default
 announce_unbond()                [designed] starts the unbonding period
-withdraw_bond()                  [designed] requires bond >= k * owed AFTER; a member
+withdraw_bond()                  [designed] requires bsv_bond >= k * (BSV held) AND
+                                 solbsv_bond >= k * (solBSV held) AFTER; a member
                                  with outstanding obligations cannot leave
 attest_payout(...)               [designed] the per-member signature above
 slash_equivocation(member, redemption_id, two_signed_intents)   [designed]
@@ -268,7 +272,7 @@ failing to enforce BSV-side behaviour that no longer needs enforcing from Solana
 |---|---|---|---|
 | **T1** | `slash` was **forgeable**: the spending transaction need not be in a block, so anyone could craft bytes consuming a public outpoint and burn any relayer's bond; the predicate was a universal quantifier over a set Solana cannot enumerate | **Dissolved** | The predicate no longer contains a spending transaction or a universal quantifier. It is two signatures by one member over conflicting statements about one redemption. The forgery route — a Merkle-free spend — is not part of the new predicate |
 | **T2** | The redesign violated its own class-4 rule: `slash` paid into a pooled "holders' reserve account"; also, burning a bond leaves nothing to transfer | **Changed** | The pooled reserve is now **intentional**: the federation holds it under a threshold key. The self-contradiction is gone because slashing **seizes a live, seizable asset** rather than burning it. The class-4 rule is restated to apply only to the Solana-side escrow — see §The pooled reserve, restated |
-| **T3** | The peg-in fee had no home: the `OP_RETURN` has no amount or fee field, so "mint NET" was undefined, and trusting the relayer's declared fee trusts the party with the incentive to overstate it | **Changed** | The fee is no longer discovered or declared — it is **30 bp, governed** — so the fee is computable from the amount the program verifies. What remains is where the 30 bp physically is: the BSV arrived in the federation's threshold script. See **N1** |
+| **T3** | The peg-in fee had no home: the `OP_RETURN` has no amount or fee field, so "mint NET" was undefined, and trusting the relayer's declared fee trusts the party with the incentive to overstate it | **Changed** | The fee is no longer discovered or declared — it is **30 bp, governed** — so the fee is computable from the amount the program verifies. What remains is where the 30 bp physically is: the BSV arrived at the federation's reserve address. See **N1** |
 | **T4** | Recorded P2 was unanswered: `commit_fork` spliced without re-checking the fork point | **Dissolved** | `fork_parent_hash` is recorded at `init_staging` and re-checked at `commit_fork` (`ForkPointMoved`). It is in the built code, with a test both ways |
 | **T5** | `owed_R` double-counted at mint and accept with only settlement decrementing, so the counter grew monotonically and the bond locked | **Dissolved** | The shared counter is gone. Liability is per-redemption and attributed by the member's own signature; there is no accumulation across mint and redeem to double-count, because member liability does not arise at mint |
 | **T6** | The settle/cancel race was still live: `deadline_slot` was caller-supplied with no `>= now + D` requirement, so a holder could choose a past deadline, keep the BSV and reclaim the escrow | **Changed** | Still a real class, in a new form. The escrow and the deadline are now on the redemption record, and the holder can still choose a short deadline in the hope of being paid **and** refunded. The fix is a **minimum deadline** at `request_redeem` (`deadline_slot >= now + D_MIN`, with `D_MIN` covering payout plus depth), and it must be in the instruction. §Open items 5 |
@@ -290,7 +294,7 @@ precisely because it is weaker in one direction and stronger in another.
 | | |
 |---|---|
 | **What is gone** | The claim that there is no single key worth stealing. There is now one reserve, and a threshold of members can move it |
-| **What replaces it** | No **single** member can move it; misbehaviour by an individual member produces their own signed proof; and the bond must satisfy `bond ≥ k × owed`, so a member cannot leave while owing |
+| **What replaces it** | No **single** member can move it — threshold ECDSA: the address is ordinary P2PKH and the key is shared; misbehaviour by an individual member produces their own signed proof; and the **two-sided bonds** must satisfy `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, so a member cannot leave while owing |
 | **What it does not cover** | A **threshold** of members signing something invalid. Every signature is on record, so it is attributable — but it is a governance matter, not a cryptographic one, and doc 23 says so |
 | **The honest second gap** | A threshold can also simply **refuse to sign** a legitimate redemption. Silence leaves no signed artifact, so nothing is slashable and no challenger can prove anything. The holder is not robbed — `cancel_redeem` returns the escrow after the deadline — but they are denied exit-to-BSV while the deadline runs. Iterated, that is a soft pause on redemptions, which doc 13 says can never be paused. See §New defect N2 |
 
@@ -306,7 +310,7 @@ structural rather than unspecified.
 
 ### N1 — The peg-in fee's physical location is unspecified, and `OP_RETURN` still has no amount · **critical, unspecified** · *the live successor to V3 and T3*
 
-The fee is **30 bp, governed** — but the BSV arrived in the federation's threshold script, and
+The fee is **30 bp, governed** — but the BSV arrived at the federation's reserve address, and
 the program mints `net` while crediting `FeeAccount`. Two consequences follow, and neither is
 currently resolved:
 
@@ -363,7 +367,7 @@ counter was an attempt to avoid precisely this and it failed for other reasons.
 
 `verify_deposit` proves an output paid the deposit script; it does not prove that output is
 **still unspent**. That was tolerable when each relayer had its own float and a bond. Now the
-deposit script is the pool itself: a single threshold script holding the reserve. If the
+deposit script is the pool itself: a single reserve address holding the reserve. If the
 members sign a reserve transaction that spends a deposit output — a consolidation, a payout,
 anything — the deposit remains provable and mintable, and there is no on-chain record that its
 BSV has left. The mint is then unbacked.
@@ -375,17 +379,20 @@ naked-spend challenge (W3): the challenger was removed with the per-relayer mode
 nothing replaced the invariant it protected. It is the most serious defect in this re-audit
 after N1.
 
-### N6 — The bond is denominated in the thing it protects · **medium, structural**
+### N6 — The bond is denominated in the thing it protects · **partly answered by the two-sided bonds**
 
-`bond = 1,000 BSV in solBSV`. The bond and the liability are the same asset, which doc 6
-argues is right because there is no price margin to defend — and for a per-relayer shortfall
-that argument holds. It is weaker for the federation case: a large loss **is** a devaluation of
-`solBSV`, so the bond's purchasing power falls at the exact moment it is being seized. If the
-reserve is impaired enough to matter, the seized bond is worth less in BSV terms by the same
-proportion. This does not make slashing useless — it is the difference between recovery and
-full recovery — but the capacity claim ("ten members at 1,000 BSV is roughly $300k") assumes a
-price that an incident can move. **The bond answers attribution; it does not fully answer
-loss, and the document should not imply that it does.**
+The old single bond was `1,000 BSV in solBSV` — the same asset, and the same reserve, as the
+liability. A large loss **is** a devaluation of `solBSV`, so the seized bond's purchasing power falls
+at the exact moment it is being seized. **The two-sided design answers half of this:** the
+**mint-side bond is denominated in BSV and held outside the reserve**, so it is not the thing it
+protects and it does not enlarge the prize. The **redeem-side bond stays `solBSV`** and remains
+seizable on Solana, so the devaluation argument still applies to that half — while the mint-side bond
+is **held under the collective key and seized by the members collectively**, so it is enforcement by
+a **collective action by the majority** rather than an automatic on-chain rule (doc 13, *The two
+bonds*). This does not make slashing useless — it is the difference
+between recovery and full recovery — but the capacity claim ("ten members at 1,000 BSV is roughly
+$300k") assumes a price that an incident can move. **The bonds answer attribution; they do not fully
+answer loss, and the document should not imply that they do.**
 
 ---
 
@@ -406,14 +413,15 @@ loss, and the document should not imply that it does.**
 7. **Rent.** `PegIn`, `PegInEscrow`, `PegOut`, `PegOutEscrow`, `Marker`, `PayoutIntent` per
    member, `Member`, `Bond`, `Proposal` and `FeeAccount` all carry rent. T11's estimate is
    now a floor, not a total.
-8. **`owed` / bond accounting on the federation side** — the counter is gone, but
-   `bond >= k × owed` still needs a definition of `owed` that does not double-count (T5) and
-   does not grow monotonically (W7's second half).
+8. **Per-side bond accounting on the federation side** — the single `owed` counter is gone and the
+   single `bond >= k × owed` check is **superseded by the two-sided bonds (D14)**. What still needs
+   defining is the rule that turns each side's exposure into a **per-member attributed share** that
+   does not double-count (T5) and does not grow monotonically (W7's second half).
 9. **`prune_marker` and `PayoutIntent` closure.** Intents must be closeable after their
    redemption, or attribution rent accumulates forever.
-10. **Genesis.** Members bond `solBSV`, and no `solBSV` exists until a mint happens. Doc 23
-    leaves this open; this document cannot close it, and the "ordinary bonded path" answer
-    from doc 21 is withdrawn as circular.
+10. **Genesis — decided (D16).** Members post a **BSV-side bond at genesis**, so no `solBSV` exists
+    first. A capped, explicitly-unbonded first mint is a documented later option, not chosen. The
+    earlier "ordinary bonded path" answer from doc 21 is withdrawn as circular.
 
 ---
 

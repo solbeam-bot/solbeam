@@ -8,6 +8,7 @@ finding V1–V10 is addressed below, with the decision that settled it where one
 
 > ⚠️ **SUPERSEDED BY [`21-vault-structural.md`](21-vault-structural.md). SECOND AUDIT: NOT SOUND TO BUILD.** This revision was audited and the fixes do not hold.
 > Four of the claimed corrections are inert or reintroduce the defect. See §Second audit at the end.
+> **Model note, later still:** the `bond_R >= k * owed_R` formulas below are **superseded** by **two-sided bonds, neither inside the reserve** (D14), and the reserve is a **threshold ECDSA key**, not a "threshold script" (D15; audit F10). The text is preserved as history.
 
 **Status: designed, not built.** The shipped program still mints straight to the depositor.
 

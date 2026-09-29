@@ -17,6 +17,7 @@ while the numbers are still provisional.
 | **dec** | **Decided.** A settled design choice |
 | **ph** | **Placeholder.** A starting value that is expected to move |
 | **der** | **Derived.** Computed from other parameters; changing it directly is a bug |
+| **der·superseded** | **Derived, and no longer binding.** Computed from other parameters but replaced by a later decision. One marker, recorded for history |
 | **open** | **Undecided.** No value yet — this is work to do |
 
 ---
@@ -52,17 +53,20 @@ while the numbers are still provisional.
 
 | ID | Name | Value | Description |
 |---|---|---|---|
-| `fed.bond_size` | Member bond | **1,000 BSV** `dec` | The price of admission. Sets the scale limit |
-| `fed.total_bond` | Aggregate bond (tracked) | **derived from bonds** `dec` | A running total on-chain, since members cannot be enumerated. **This is the number the mint gate checks** |
-| `fed.mint_gate` | Bond gates minting | **true** `dec` | **F5.** A mint is refused unless `total_bond ≥ k × (non_bonded_supply + amount)` after it. **The bond IS the float.** Note **non-bonded**: using total supply makes the gate unsatisfiable, since bonded `solBSV` is itself supply |
-| `fed.bond_asset` | Bond denomination | **`solBSV`** `dec` | Deliberately the wrapped asset. A separate asset would need a price oracle to size the cover. **Consequence: the bond does not protect against collusion** — a colluding threshold recovers its own bond and keeps the honest members' bonds plus the non-member supply, so the loss is `B_h + H`, not `H` alone (doc 13, *Collusion*) |
-| `fed.collusion_mitigation` | Against a colluding threshold | **none** `dec` | **Stated risk, not a mechanism.** No on-chain predicate can prove who signed an off-chain threshold signature. Accepted; revisit if one is ever needed |
-| `fed.k` | Bond multiple | **1** `dec` | Aggregate bond ≥ `k ×` outstanding **non-bonded** supply (see `fed.mint_gate` — using total supply makes the gate unsatisfiable). At `k = 1` the bond covers what honest holders could lose, so the system cannot outrun its own collateral; it does **not** make a colluding threshold unprofitable, because the colluders recover their own bond and keep the honest members' bonds and the non-member supply (doc 13, *Collusion*). **Capital inefficiency accepted** — over-collateralising is a member's choice, not a requirement |
-| `fed.threshold` | Signing threshold | **open** | `t` of `n`. **Stated nowhere yet** — this is a real gap |
+| `fed.bond_mint` | Mint-side bond — BSV side | **1,000 BSV** `dec` | The **BSV-side bond**, held **outside the reserve**, sized against the BSV held: `bsv_bond ≥ k × (BSV held)`. **Held under the collective (threshold ECDSA) key, not the member's own**, and seized by the **members collectively** with a threshold-signed transaction; slashing pays the slashers from it. A **collective action by the majority**, not an automatic rule |
+| `fed.bond_key` | Mint-side bond custody | **collective (threshold ECDSA) key** `dec` | **The design requirement the mechanism rests on.** Each member's BSV-side bond must sit under the **collective** key, **not the member's own**. If a member controls their own bond they move it the moment they are caught, or before they act, and there is nothing to slash. The same key primitive as the reserve, pointed at the bond. *Residuals:* a majority could seize an honest member's bond; nothing on BSV compels the members to sign, so the duty to slash is **social** and rests on the majority being honest, on visibility, and on the bounty |
+| `fed.bond_redeem` | Redeem-side bond — `solBSV` side | **1,000 BSV** `dec` | The **`solBSV`-side bond**, seizable on Solana, sized against the `solBSV` held: `solbsv_bond ≥ k × (solBSV held)`. **This side is enforceable.** Neither bond sits inside the reserve |
+| `fed.bond_size` | Nominal bond size | **1,000 BSV** `dec` | Superseded by the two side-specific bonds above; kept as the name of the per-side default |
+| `fed.total_bond` | Aggregate bond (tracked) | **superseded** | The old single running total is replaced by two side-specific aggregates. History: the mint gate used to check it |
+| `fed.mint_gate` | Bonds gate minting | **true** `dec` | **F5.** A mint is refused unless the **BSV-side** bond covers the BSV held after it. **The bonds ARE the float.** The old single check `total_bond ≥ k × (non_bonded_supply + amount)` is **superseded**: bonded `solBSV` was itself supply, so `B ≥ k × supply` demands `B ≥ B + H`; the BSV-side bond is not `solBSV` at all, which is what dissolves that |
+| `fed.bond_asset` | Bond denomination | **split** `dec` | **Superseded by `fed.bond_mint` / `fed.bond_redeem`.** The mint side is BSV, the redeem side `solBSV`; neither sits inside the reserve. No price oracle is needed for either |
+| `fed.collusion_mitigation` | Against a colluding threshold | **transparency** `dec` | **Stated risk, not a mechanism.** No on-chain predicate can prove who signed an off-chain threshold signature. The maximum loss is the whole **non-member supply**. Publishing the reserve and supply continuously converts a hidden theft into a visible one; **visibility is the only remaining defence** against collusion and an unchallenged outpoint spend (doc 07) |
+| `fed.k` | Bond multiple | **1** `dec` | Each side bonds at least `k ×` what it holds: `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`. **Capital inefficiency accepted** — over-collateralising is a member's choice, not a requirement |
+| `fed.threshold` | Signing threshold | **3-of-5** `open` | `t` of `n` for the **threshold ECDSA** key. **Provisional, and a signing-protocol parameter: it sizes nothing on-chain.** The reserve is an ordinary P2PKH address and `DepositScript::SPACE = 38` is correctly sized. It is the number every "no single member can move funds" claim depends on. Changing `t` or `n` is a **re-sharing**, not an on-chain migration |
 | `fed.shards` | Shard count | **open** | One key or several groups. Affects blast radius and latency |
 | `fed.unbond_slots` | Unbonding period | **open** | Must exceed the redemption deadline plus the challenge window |
 | `fed.delegated_staking` | Delegated staking | **disabled** `dec` | **Phase 2.** Lets non-members delegate `solBSV` to a member and share its fee. **Activatable by governance**, not built |
-| `fed.script` | Deposit script | **open** | The reserve pool address deposits pay |
+| `fed.script` | Reserve address (deposit script) | **P2PKH** `dec` | The reserve pool address deposits pay. An **ordinary 25-byte P2PKH script**; the threshold ECDSA key over it is never assembled in one place, so `is_p2pkh` and `DepositScript::SPACE = 38` are **correct, not limitations** (F10) |
 
 ## Governance
 
@@ -70,7 +74,7 @@ while the numbers are still provisional.
 |---|---|---|---|
 | `gov.threshold` | Pass threshold | **85%** `ph` | Share of pledged coins required |
 | `gov.delay` | Delay before effect | **30 days** `ph` | Default delay. **Reducible** by governance, but never below `gov.delay_min`. Redemptions run throughout, so a hostile change that shortens the delay still has to be exited during it |
-| `gov.delay_min` | Minimum delay (**floor**) | **7 days** `dec` | **F7, decided.** `gov.delay` may be raised or lowered by governance, but the reduction is floored here: a cohort of holders always has at least a week to exit. Without a floor, proposal 1 could set the delay to zero — harming nobody, so nobody exits — and proposal 2 would then land instantly |
+| `gov.delay_min` | Minimum delay (**floor**) | **open** (7 days proposed) | **F7.** `gov.delay` may be raised or lowered by governance. **Both readings are defensible and the choice is open:** *with a floor*, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; *without*, the exit window is whatever the current majority allows. It is a judgement about how much the majority is trusted, **not a correctness question** |
 | `gov.signal` | Signal from proposal | **true** `dec` | Live from the moment it is raised, not when it passes |
 | `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. Nothing is immutable — governance could rewrite even `gov.delay_min` — so the exit window, not the rule, is the protection |
 | `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `dec` | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint |
@@ -91,7 +95,7 @@ while the numbers are still provisional.
 | ID | Name | Value | Description |
 |---|---|---|---|
 | `pi.min_peg_in` | Minimum deposit | **1 BSV** `dec` | Prices out the dust griefing |
-| `pi.max_used` | Legacy replay-list cap | **200** `der` `superseded` | Replaced by a nullifier per deposit (decision P5). Until built it caps peg-ins at 200 per window |
+| `pi.max_used` | Legacy replay-list cap | **200** `der·superseded` | **One marker: derived *and* superseded.** Replaced by a nullifier per deposit (decision P5). Until built it caps peg-ins at 200 per window |
 | `pi.op_return_layout` | Deposit commitment | **version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient** `dec` | **Designed.** What is built checks only that the recipient's 32 bytes appear in an `OP_RETURN` |
 
 ## Peg-out
@@ -115,16 +119,23 @@ while the numbers are still provisional.
 
 ## What is genuinely undecided
 
-**Thirteen values are `open`. Four are load-bearing:**
+**Thirteen values are `open`. The load-bearing ones:**
 
-1. **`fed.threshold`** — `t` of `n`. The whole security model rests on it and **it is stated nowhere.**
-2. **`po.deadline` / `po.challenge_window` / `po.payout_confirmations`** — three values that are one security parameter: the window in which a theft can be proven, which the earlier audits identified as the real one.
+1. **`fed.threshold`** — provisional **`3-of-5`**, still `open`. A **signing-protocol** parameter that
+   sizes nothing on-chain, but it is the number every "no single member can move funds" claim depends
+   on, so it must be fixed before launch.
+2. **`po.deadline` / `po.challenge_window` / `po.payout_confirmations`** — three values that are one
+   security parameter: the window in which a theft can be proven, which the earlier audits identified
+   as the real one.
+3. **`gov.delay_min`** — the exit floor, `open` with both readings stated in the row above. It decides
+   whether a majority can shorten the warning; that is a trust judgement, not a correctness question.
+4. **`gov.authority_timelock`** — load-bearing for F4 in the same way `po.deadline` is for redemptions.
 
-The other nine — `lc.cluster_id`, `lc.pow_limit_bits`, `lc.max_staleness_slots`, `fed.shards`,
-`fed.unbond_slots`, `fed.script`, `gov.authority_timelock`, `gov.pause_duration`, `fee.bounty_share`
-— are placeholders that can be filled once the structure is audited. (`gov.authority_timelock` is
-load-bearing for F4 in the same way `po.deadline` is for redemptions; it is listed here only because
-no value has been chosen yet.)
+The remaining placeholders — `lc.cluster_id`, `lc.pow_limit_bits`, `lc.max_staleness_slots`,
+`fed.shards`, `fed.unbond_slots`, `gov.pause_duration`, `fee.bounty_share` — can be filled once the
+structure is audited. **`fed.script` is no longer among them:** the reserve address is a **P2PKH**
+address and `DepositScript::SPACE = 38` is correctly sized, so F10 is a documentation error rather
+than a code defect.
 
 **A note on why this file exists:** several values here (`lc.window_hours`, `fed.bond_size`,
 `gov.threshold`, `fee.mint_bp`) were argued about repeatedly during design. **Once they are one-line
@@ -153,16 +164,18 @@ deposit**, and the margin is the members'. The ATA rent is the one figure that e
 it is recoverable by closing the account — which is why it is a lockup rather than a loss, and why
 it is the honest answer to "who pays for a first-time user".
 
-**This also prices the risk.** A member's return is the fee share against a 1,000 BSV bond whose
+**This also prices the risk.** A member's return is the fee share against two-sided 1,000 BSV bonds whose
 entire purpose is to be lost if it misbehaves. The market for members is the market for that trade.
 
 ---
 
 ## Capital efficiency, deliberately
 
-**Capital inefficiency is accepted, and tying up assets is the point.** At `k = 1` the aggregate bond
-must be at least the outstanding **non-bonded** supply, and a member may over-collateralise if it
-wishes — but nothing forces the bond to *track* the reserve as it grows.
+**Capital inefficiency is accepted, and tying up assets is the point.** At `k = 1` each **two-sided
+bond** must be at least what its side holds — `bsv_bond ≥ k × (BSV held)` and
+`solbsv_bond ≥ k × (solBSV held)` — and a member may over-collateralise if it wishes, but nothing
+forces the bonds to *track* the reserve as it grows. This replaces the **superseded** single-bond
+formula `aggregate_bond ≥ k × non_bonded_supply`.
 
 That is a choice, not an oversight. Making the bond scale with the reserve would mean either forcing
 members to post more capital continuously, or throttling deposits to keep the ratio — both of which

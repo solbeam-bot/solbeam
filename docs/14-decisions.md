@@ -70,8 +70,11 @@ produced their own proof of guilt (D13). **Redemptions are never pausable** (D11
 | **Time is chain-native** | BSV depth and block time from headers; Solana deadlines from slots |
 | **Fees mature with the principal** | A fee withdrawable earlier than its mint would be an exit from maturity |
 | **Fees are governed and paid pro rata to pledged stake** | One fee, 30 bp each way, governed (85% / 30 days). *(Replaces "Same-asset yield": with per-relayer custody removed there are no two staking sides to pay separately)* |
-| **One reserve under a threshold key** | No single member can move it; the bond is `solBSV` the program holds and can seize. *(Reverses "Do not pool the reserve")* |
-| **Confirmed by test** | 27 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers |
+| **One reserve under a threshold ECDSA key** | No single member can move it: the address is an ordinary **P2PKH** address and the key is **never assembled in one place**. **Two-sided bonds, neither inside the reserve** — the `solBSV` side is seized by the **program** automatically, the BSV side by the **members collectively** under the same collective key (not the member's own). *(Reverses "Do not pool the reserve"; corrects audit F10)* |
+| **Three security layers** | A **threshold signature** catches a minority moving funds; **individual attestations** catch a minority's equivocation; a **covenant** (research, later) would catch a colluding majority. None catches a consistent majority. "Double threshold" means **a key plus a paper trail**, not a stronger threshold |
+| **Collusion accepted, transparency is the mitigation** | A colluding threshold can take the reserve; maximum loss is the non-member supply. Continuous publication of the reserve and supply converts a hidden theft into a visible one — an **early deliverable**, not phase-5 monitoring (doc 07) |
+| **Genesis** | Members post a **BSV-side bond**, so no `solBSV` needs to exist first. A capped, explicitly-unbonded first mint is a documented later option, not chosen |
+| **Confirmed by test** | 27 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`** |
 
 ---
 
@@ -86,11 +89,13 @@ reasoning is in [`12-peg-mechanism.md`](12-peg-mechanism.md) §Changes in this r
 | **R1** | **D7** — no governance in the PoC; parameters fixed in code | **D10** — 85% of pledged coins / 30 days / live signal, holding the **upgrade authority** | "No governance" left the upgrade authority as an unowned mint voucher (A5). Governance names who holds it and makes every use visible for 30 days |
 | **R2** | **D2** — fees **discovered** on an order book, bids auto-filling | **A governed fee, 30 bp each way**, changed by 85% / 30 days | The book solved discovery and capacity allocation; a governed fee plus a bond cap solves both more simply. It also removes the one subsystem that never received an adversarial review |
 | **R3** | **Per-relayer deposit scripts and independent keys** — "do not pool the reserve" | **One reserve under a threshold key** (D9) | Per-relayer isolation removed the single key but also removed the single reserve that can be attested to, and left no operator layer to detect, challenge or govern. A threshold key means no single member can move funds |
-| **R4** | **D1** — specialists first; anyone-may-stake a phase-2 goal | **D9** — open membership, **1,000 BSV bond** | A capital gate is objective, seizable and permissionless; nomination is a trusted choice. The phase-2 deferral is gone because the gate is what made it necessary |
+| **R4** | **D1** — specialists first; anyone-may-stake a phase-2 goal | **D9** — open membership, **two-sided 1,000 BSV bonds** | A capital gate is objective, seizable and permissionless; nomination is a trusted choice. The phase-2 deferral is gone because the gate is what made it necessary |
 | **R5** | **D4** — `FLOOR` 12 blocks, **fixed in code**, change mechanism deferred | **12 blocks, a governed parameter** (D10) | The value stands; the named gap was that there was no way to change it. The floor itself is **not** made immutable — the exit window is the protection (D11) |
 | **R6** | **D6** — a peg-in may proceed with no underwriter, explicitly allowed | **Superseded** — there is no per-deposit underwriter to be present or absent | Minting is permissionless and trustless; a deposit pays the federation's script and is backed by the reserve and the bonds. The residual exposure question is re-opened as an open item |
 | **R7** | **O1** — same-asset yield: BSV stakers earn BSV, `solBSV` stakers earn `solBSV` | **Fees paid pro rata to pledged stake** | With one pooled reserve there are no two staking sides; there is one member set and one fee |
 | **R8** | **Gate symmetry** — a pause must close both directions | **D12** — pause stops **mints only**; redemptions are never pausable | The earlier argument treated the exit as a risk to gate. The exit is what makes governance safe: it is the protection, and 30 days of live signal is what makes a hostile change empty the bridge before it lands |
+| **R9** | **A single bond**, `solBSV`, **inside the reserve**; the formula was `aggregate_bond ≥ k × non_bonded_supply` | **Two-sided bonds, neither inside the reserve** (D14; doc 13, *The two bonds*): `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)` | The old formula was a fix for `B ≥ k × total`, which was unsatisfiable — bonded `solBSV` is itself supply, so it demanded `B ≥ B + H`. Its remaining flaw dissolves once the **mint-side bond is not `solBSV` at all**. The `solBSV` side is seized by the **program** automatically; the BSV side sits under the **collective key** and is seized by the **members collectively**, with the slashers paid from it. **Superseded** |
+| **R10** | **"Threshold script"** over the reserve — as if a multisig script enforced the quorum | **Threshold ECDSA key** (D15; audit **F10**): the reserve is an ordinary P2PKH address and the key is never assembled in one place | **The code was right; the description was wrong.** With a multisig, adding or removing a member changes the script and the whole reserve must be swept on-chain, requiring the old quorum. With threshold ECDSA it is a **re-sharing** — the reserve never moves and the address never changes. `fed.threshold` sizes nothing on-chain |
 
 ---
 
@@ -106,23 +111,27 @@ leaving a question open.
 | **D2** | Fees discovered on the order book, bids auto-approving | ✅ **Reversed by R2** → governed 30 bp |
 | **D3** | Genesis — **G2, the vault-gated genesis mint** | ✅ **Shape stands; bootstrap reopened.** G2 answers how the first supply is backed, not how the first members bond |
 | **D4** | `FLOOR` — 12 blocks | ✅ **Partially reversed by R5.** The value stands; it is a governed parameter now |
-| **D5** | Bond multiple — `k = 1`, self-dealing accepted | ✅ **Stands.** The framing changes: there is no per-relayer underwriting to self-deal against, and the `k = 1` collusion-loss consequence is recorded (net gain `B_h + H`, not break-even) |
+| **D5** | Bond multiple — `k = 1`, self-dealing accepted | ✅ **`k = 1` stands, but the formula is superseded by D14.** The old single-bond cover (`aggregate_bond ≥ k × non_bonded_supply`) is replaced by two-sided bonds. The `k = 1` collusion-loss consequence is restated: the maximum loss is the entire non-member supply |
 | **D6** | A peg-in with no underwriter — allowed, explicitly | ✅ **Superseded by R6**; residual re-opened as an open item |
 | **D7** | Governance — none in the PoC | ✅ **Reversed by R1** → **D10** |
 | **D8** | The reserve invariant — monitored, not enforced | ✅ **Stands.** A threshold key changes who holds the reserve, not what a Solana program can see |
-| **D9** | Membership — **open, 1,000 BSV bond** posted as `solBSV` | ✅ **Settled**, new |
+| **D9** | Membership — **open**, bonds required | ✅ **Settled**, new; **updated by D14** — two-sided bonds, neither inside the reserve |
 | **D10** | Governance — **85% of pledged coins / 30 days / live signal**, holds the upgrade authority | ✅ **Settled**, new |
 | **D11** | The floor — **the exit, not immutability**; redemptions never pausable | ✅ **Settled**, new |
 | **D12** | Pause — **mints only**, lower threshold, auto-lifts | ✅ **Settled**, new |
 | **D13** | Slashing — **self-proving equivocation** on individually-signed intents | ✅ **Settled**, new |
+| **D14** | Bonds — **two-sided**, one per direction, **neither inside the reserve** | ✅ **Settled**, new. Supersedes the single-bond formula (R9) |
+| **D15** | Custody — **threshold ECDSA**, not a multisig script | ✅ **Settled**, new. Corrects audit F10 (R10) |
+| **D16** | Genesis — **BSV-side bond** | ✅ **Settled**, new. The capped unbonded first mint is recorded as a later option |
 
-### D3 — Genesis: G2, the vault-gated genesis mint
+### D3 — Genesis: the vault-gated mint, and the BSV-side bond
 
 The genesis mint lands in the program vault and is released only once a matching BSV deposit is
 verified. No unbacked window exists at any point, so there is nothing to attack and nothing to keep
-quiet about. **What the federation model reopens:** G2 answers *how the first supply is backed*, but
-not *how the first members bond* — the bond is `solBSV`, and no `solBSV` exists until a mint
-happens. **The genesis bootstrap is now an open item** — see §Still open.
+quiet about. **The federation model's answer to *how the first members bond* is now decided (D16):**
+members post a **BSV-side bond at genesis**, so no `solBSV` needs to exist first. The alternative — a
+**capped, explicitly-unbonded first mint** — is recorded as a documented later option, not chosen,
+because it leaves the first mint backed by nothing but the members' word.
 
 ### D4 — `FLOOR` — 12 blocks
 
@@ -132,31 +141,38 @@ attacking** — a reorg must out-mine it — while maturity sets **the time avai
 low floor makes attacks cheap and therefore frequent, which raises the number of chances for a
 detection failure to slip through.
 
-### D5 — Bond multiple — `k = 1`
+### D5 — Bond multiple — `k = 1`, under the two-sided formula
 
-`bond ≥ k × owed` (with `k = 1`). `solBSV` and BSV are the same asset, so any deviation is an
-arbitrage and closes. **The consequence is recorded plainly:** at `k = 1` the bond covers the
-**non-bonded** supply, so the system cannot outrun its own collateral — but a colluding threshold is
-**not break-even.** It recovers its own bond and keeps the *honest members'* bonds plus the
-non-member supply: net gain `B_h + H`, i.e. **1.15×** the non-member supply alone at an 85% threshold
-and **1.49×** at 51% (see doc 13, *Collusion is a stated risk*). What makes collusion unattractive is
-the 30-day live signal and the exit, not the bond's excess size. The bond's other job is covering a
-member's provable misbehaviour and abandonment.
+**`k = 1` stands, but the single-bond formula is superseded by D14.** The cover is now two-sided:
+`bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, with **neither bond inside the
+reserve**. The earlier statement `aggregate_bond ≥ k × non_bonded_supply` — itself a fix for the
+unsatisfiable `B ≥ k × total` — is **superseded**: bonded `solBSV` was part of the supply it was
+meant to cover, which the BSV-side bond now avoids by not being `solBSV` at all.
+
+**The consequence is restated rather than carried over:** the maximum loss from a colluding
+threshold is the **entire non-member supply**. The old `B_h + H` figure and its 1.15× / 1.49×
+multiples were computed for the single-bond model, where the bonds sat inside the reserve; the
+two-sided bonds supersede that arithmetic. What makes collusion unattractive is the live signal, the
+exit, and **transparency** — not the bond's excess size. The bonds' other job is covering a member's
+provable misbehaviour and abandonment.
 
 ### D8 — The reserve invariant — monitored, not enforced
 
 `custodied BSV ≥ outstanding solBSV` is published and monitored, and **the protocol cannot enforce
 it** — the reserve is off-chain BSV the program cannot read. The website shows the ratio; the
-program does not check it.
+program does not check it. **Under D14/D16 this is promoted from a monitoring task to an early
+deliverable** (doc 07): for collusion and for an unchallenged outpoint spend, visibility is the only
+defence that remains.
 
-### D9 — Membership — open, 1,000 BSV bond
+### D9 — Membership — open, two-sided bonds
 
-**Anyone with a 1,000 BSV bond may join.** The bond is posted as `solBSV`, because it must be
-seizable on Solana, and `bond ≥ k × owed` must always hold, so **a member cannot leave while
-owing**. Leaving requires announcing and waiting the unbonding period. Fees are earned pro rata to
-pledged stake. **The bond size is the scale limit, and that is stated rather than implied:** with
-`k = 1`, total value locked is capped by total bonds pledged — ten members at 1,000 BSV is roughly
-**$300k** of capacity. That is a proof of concept.
+**Anyone who posts the bonds may join.** There are **two bonds, one per direction** (D14): a
+**BSV-side bond** held outside the reserve and sized against the BSV held, and a **`solBSV`-side
+bond**, seizable on Solana, sized against the `solBSV` held. **Neither sits inside the reserve**, and
+a member cannot leave while owing on either side. Leaving requires announcing and waiting the
+unbonding period. Fees are earned pro rata to pledged stake. **The bond sizes are the scale limit,
+and that is stated rather than implied:** with `k = 1`, total value locked is capped by total bonds
+pledged — ten members at 1,000 BSV is roughly **$300k** of capacity. That is a proof of concept.
 
 ### D10 — Governance — 85% / 30 days / live signal
 
@@ -204,15 +220,67 @@ cancel. There is no enforceable predicate for an off-chain threshold signature o
 documentation says the slashing contract *"will become a voting system … Right now, it is a
 placeholder."* We copy the half that shipped and say plainly that the rest has no precedent.
 
+### D14 — Two-sided bonds
+
+**Two bonds, one per direction, each denominated in the asset that side holds, and neither inside the
+reserve:**
+
+```
+mint side     bsv_bond    ≥ k × (BSV held in the reserve)     BSV, OUTSIDE the reserve
+redeem side   solbsv_bond ≥ k × (solBSV held)                 solBSV, seizable on Solana
+```
+
+This replaces the single-bond formula `aggregate_bond ≥ k × non_bonded_supply` (R9).
+
+| Bond | Where | Who seizes | How |
+|---|---|---|---|
+| `solBSV` (redeem side) | Solana | **The program** | An instruction, on proof — automatic |
+| **BSV** (mint side) | A BSV script under the **collective key** | **The members collectively** | A threshold-signed transaction moving the bond |
+
+**The design requirement that makes the BSV side real:** each member's bond must sit under the
+**collective (threshold ECDSA) key, not the member's own.** If a member controls their own bond they
+move it the moment they are caught, or before they act, and there is nothing to slash. Under the
+collective key a member **cannot** move their own bond and the federation **can** — the same
+primitive as the reserve, pointed at the bond. **Slashing pays the slashers from the seized bond**,
+which is what makes the collective action happen.
+
+**Two residuals, stated honestly.** (1) A **majority could seize an honest member's bond** — the
+symmetric risk of collective custody, resting on the same majority already trusted with the reserve.
+(2) The **obligation to slash is social, not on-chain**: nothing on BSV compels the members to sign,
+so it rests on the majority being honest, on visibility, and on the bounty. It is a **collective
+action by the majority**, not an automatic rule.
+
+### D15 — Threshold ECDSA, not a multisig script
+
+**The reserve address is an ordinary P2PKH address, and the key is a threshold ECDSA key whose shares
+are never assembled in one place.** This corrects audit **F10** (R10): the code was right and the
+description was wrong.
+
+- `is_p2pkh` requiring a 25-byte P2PKH script is **correct**; `DepositScript::SPACE = 38` is
+  **correctly sized**
+- **"No single member can move funds" is true because the key is shared**, not because a script
+  enforces it
+- With a multisig, adding or removing a member changes the script and the whole reserve must be swept
+  on-chain, requiring the old quorum. With threshold ECDSA it is a **re-sharing** — the reserve never
+  moves and the address never changes
+- **`fed.threshold` sizes nothing on-chain.** Provisional **`3-of-5`**, marked `open` (doc 24). It is a
+  **signing-protocol** parameter, and it is the number every "no single member" claim depends on
+
+### D16 — Genesis: a BSV-side bond
+
+**Decided: members post a BSV-side bond at genesis**, so no `solBSV` needs to exist first. The
+**alternative** — a **capped, explicitly-unbonded first mint** — is recorded as a documented later
+option, with the reason it was not chosen: it leaves the first mint backed by nothing but the
+members' word.
+
 ---
 
 ## Not settled, and deliberately out of scope for the PoC
 
 | | |
 |---|---|
-| **The genesis bootstrap** | Members bond `solBSV`, which does not exist until a mint happens. The first members need a path (D3's G2 shape does not supply one) |
 | **Sharding the threshold key** | One key across all members, or several groups with their own? Shards contain theft and signing latency, at the cost of coordination |
-| **The threshold key's shape** | Threshold value, key generation, signing protocol, and the attribution rule that turns system-wide `owed` into a per-member share |
+| **The threshold key's shape** | Key generation and signing protocol for the **threshold ECDSA** key, and the attribution rule that turns system-wide `owed` into a per-member share. The *value* is provisional `3-of-5` (`open`) |
 | **The vault's re-audit** | The current vault design carries unfixed findings and should be re-audited against this model, since several were caused by trying to enforce BSV-side behaviour the federation now handles differently |
 | **The unbacked exposure bound** | Whether an explicit cap is wanted on reserve exposure before the bond set is large enough (the residual of R6/D6) |
 | **Independent audit** | The critical defects found so far were found by our own adversarial review, which is not the same as an audit by someone with no stake in the answer |

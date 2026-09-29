@@ -17,7 +17,7 @@ that one is right.
 |---|---|
 | **A light client on Solana** | Verifies BSV proof of work against the real difficulty rule (**cw-144**) and Merkle inclusion of a transaction in a block |
 | **A vault** | Every mint lands here rather than in your wallet, and leaves only when the program is satisfied — or is burned if it isn't |
-| **A bonded federation** | Members run nodes, hold the reserve under a **threshold key**, relay headers, sign payouts, and challenge theft. Open membership, 1,000 BSV bond |
+| **A bonded federation** | Members run nodes, hold the reserve under a **threshold ECDSA key**, relay headers, sign payouts, and challenge theft. Open membership, **two-sided bonds** — the BSV side held under the same collective key and seized by the members |
 
 ---
 
@@ -45,7 +45,7 @@ there is nothing to dump and no innocent buyer to inherit the loss.
 ```
 1  ESCROW    solBSV into the vault; a BSV destination and a deadline are set
 2  ATTEST    members sign payout intents individually, on Solana
-3  PAY       the threshold key signs the BSV payment
+3  PAY       the threshold ECDSA key signs the BSV payment
 4  SETTLE    the payout is proved against the light client; the escrow burns
    or
 5  CANCEL    permissionless after the deadline: the escrow returns to you
@@ -78,10 +78,10 @@ like any other token, and can be used in Solana DeFi.
 |---|---|
 | **Minting is trustless, given the deployed program** | The program verifies BSV proof of work and Merkle inclusion itself. No member's signature, no committee vote and no oracle mints anything |
 | **Reversal is trustless** | The program compares its own stored header hashes. A reorg is a fact about headers, not a report from anyone |
-| **The reserve is trusted, and bounded** | The BSV sits under a **threshold key**, so no single member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain** |
-| **There is a federation** | Bonded members, open entry at 1,000 BSV. They are paid to carry the risk, and the bond *is* the risk |
+| **The reserve is trusted, and bounded** | The BSV sits under a **threshold ECDSA key** — an ordinary P2PKH address whose key is never assembled in one place — so no single member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**: the program seizes the `solBSV` side, the members seize the BSV side collectively |
+| **There is a federation** | Bonded members, open entry. They are paid to carry the risk; the bonds are held under the collective key, not each member's own |
 | **There is governance** | 85% of pledged coins, 30 days, signalled live. It holds the upgrade authority — see *the floor* below |
-| **No oracle** | No external metric gates anything. Minting is gated by the bond; peg-outs by the threshold key |
+| **No oracle** | No external metric gates anything. Minting is gated by the bonds; peg-outs by the threshold key |
 | **Market layer is external** | Liquidity comes from Solana venues. SOLBEAM is the wrapper, not the market |
 | **FOSS** | The light client, programs and node software are open source |
 
@@ -99,9 +99,12 @@ exposed. That is a disclosure obligation, not a mechanism.
 
 **A colluding threshold can take the reserve, and nothing prevents it.** There is no on-chain
 predicate that proves which members signed an off-chain threshold signature, so there is nothing to
-slash on. The maximum loss is the entire non-member supply, and **the bond does not reduce it** — a
-bond denominated in the asset it protects is a round trip, funded by a deposit into the reserve it is
-meant to cover. This is a measured, accepted risk; see [`13-summary.md`](13-summary.md).
+slash on. The maximum loss is the entire **non-member supply**. The bonds are outside the reserve, so
+they do not enlarge the prize — but they do not reduce the loss either. This is a stated, accepted
+risk; **the mitigation is transparency**, which is promoted to an early deliverable: publishing the
+reserve and supply continuously converts a hidden theft into a visible one, and for collusion and an
+unchallenged outpoint spend that is the defence that remains. See [`13-summary.md`](13-summary.md)
+and [`07-roadmap.md`](07-roadmap.md).
 
 ---
 

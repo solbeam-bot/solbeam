@@ -11,7 +11,11 @@ Plain-English definitions of the terms used in this documentation.
 
 **Atomic (in "atomic wrapper")** — here it means the wrapper is 1:1 and minting is authorised purely by a proof: the deposit either verifies on Solana or it doesn't, with no discretionary approval. It does **not** mean redemption is instantaneous.
 
-**Bond** — the collateral a **federation member** lodges on Solana to join: **1,000 BSV, posted as `solBSV`**, so it is seizable on-chain by the program. **`bond ≥ k × owed` must always hold**, with `k ≥ 1`, which is what stops a member leaving while it still owes — a bond withdrawable on demand is not a bond. Because `k = 1`, total value locked is capped by total bonds pledged: ten members at 1,000 BSV is roughly **$300k** of capacity, and that is the proof of concept's scale limit. Fees are earned **pro rata to stake**.
+**Bond** — the collateral a **federation member** lodges to join. **Two bonds, one per direction, and neither inside the reserve:** a **BSV-side bond** held outside the reserve and sized against the BSV held, and a **`solBSV`-side bond** sized against the `solBSV` held, which is the leg the program seizes on-chain. **Each must cover what its side holds** (`k = 1`), which is what stops a member leaving while it still owes — a bond withdrawable on demand is not a bond. **The BSV-side bond is held under the collective key, not the member's own, and is seized by the members collectively** with a threshold-signed transaction, the slashers being paid from it — a **collective action by the majority**, not an automatic rule. Total value locked is capped by total bonds pledged: ten members at 1,000 BSV is roughly **$300k** of capacity, the proof of concept's scale limit. Fees are earned **pro rata to stake**.
+
+**Bond (single, old)** — *superseded.* The former single **`solBSV`** bond inside the reserve, governed by `bond ≥ k × owed` and later `aggregate_bond ≥ k × non_bonded_supply`. Both are replaced by the two-sided bonds above; a bond denominated in, and held inside, the thing it protected was funded by a deposit into the very reserve it was meant to cover.
+
+**Bond custody (mint side)** — the requirement that each member's **BSV-side bond sits under the collective (threshold ECDSA) key, not the member's own.** If a member controls their own bond they move it the moment they are caught, and there is nothing to slash. Under the collective key a member cannot move it and the federation can — the same primitive as the reserve, pointed at the bond. Two residuals: a **majority could seize an honest member's bond**, and the **duty to slash is social, not on-chain.**
 
 **Burn** — destroying `solBSV`. A reorg that is followed causes the **vault** to burn tokens that were minted but never released; a settled redemption burns the escrow. Supply on a failed path is unchanged.
 
@@ -25,7 +29,7 @@ Plain-English definitions of the terms used in this documentation.
 
 **Exit window** — the **floor of the system**, and deliberately not a constitution. Because redemptions **can never be paused**, a governance change takes **30 days** with **live signal from the moment it is raised**, so a proposal that would harm holders empties the bridge before it lands. The residual, stated plainly: a holder who does not watch and does not act within 30 days is exposed.
 
-**Federation member** — **an operator running software**, not a person exercising judgement. Anyone with a **1,000 BSV bond** may join; there is no manual approval of any transaction. Each node watches both chains, verifies independently with its own light client, signs payout intents individually, and challenges theft automatically. Holders of the reserve do so under a **threshold key**. Closest analogue: running a staked validator.
+**Federation member** — **an operator running software**, not a person exercising judgement. Anyone who posts the **two-sided bonds** may join; there is no manual approval of any transaction. Each node watches both chains, verifies independently with its own light client, signs payout intents individually, and challenges theft automatically. Holders of the reserve do so under a **threshold ECDSA key**, never assembled in one place. Closest analogue: running a staked validator.
 
 **FLOOR** — the **minimum deposit confirmation depth**, **12 BSV blocks**. It is the depth a deposit waits: depth is not a term of a bid, because there is no book. `FLOOR` is a **governable parameter** (85% of pledged coins, 30 days), which is why it can be raised against a changing hash rate without a program redeploy. See *maturity*.
 
@@ -43,15 +47,15 @@ Plain-English definitions of the terms used in this documentation.
 
 **Pause** — an emergency stop for **new mints only**. **Redemptions continue, always**, and the pause lifts automatically after N days unless renewed. Pausing inbound is a safety valve; pausing outbound is taking hostages, so the two are deliberately not bundled. Because the power is bounded it can carry a lower threshold (a simple majority of pledged coins) than a governance change.
 
-**Payout intent** — a federation member's **individual signature**, cast on Solana, approving a specific BSV payout for a redemption. Intents are recorded, so every approval is **attributed** to a member. Once enough attributed intents exist, the **threshold key** produces the BSV payout. Because members sign individually rather than as one opaque group, a member that signs two conflicting intents has produced its own proof of guilt — see *equivocation*.
+**Payout intent** — a federation member's **individual signature**, cast on Solana, approving a specific BSV payout for a redemption. Intents are recorded, so every approval is **attributed** to a member. Once enough attributed intents exist, the **threshold ECDSA key** produces the BSV payout. Because members sign individually rather than as one opaque group, a member that signs two conflicting intents has produced its own proof of guilt — see *equivocation*.
 
 **Peg-in / peg-out** — moving value into the wrapper (BSV → `solBSV`) and back out (`solBSV` → BSV). Peg only: there is no exchange mechanism, no order book and no leverage.
 
 **Pledged coins** — the `solBSV` members have pledged as bonds. Governance thresholds are counted against these: **85% of pledged coins** to pass, and a simple majority for a bounded pause.
 
-**Proof-of-reserves** — a published, independently checkable statement that the BSV held by the peg matches the `solBSV` supply. **The model does not specify one:** the reserve is native BSV under a threshold key and the Solana program cannot read it.
+**Proof-of-reserves** — a published, independently checkable statement that the BSV held by the peg matches the `solBSV` supply. **The model previously did not specify one; it is now an early deliverable (doc 07).** The reserve is native BSV under a threshold ECDSA key and the Solana program cannot read it, so publication is the only way to make the ratio visible — and for the cases nothing can enforce, **visibility is the remaining defence**.
 
-**Reserve** — the native BSV backing `solBSV`, held by the federation under a **threshold key**. It is **trusted, and bounded**: no single member can move it, and what protects a holder is a bond that anyone can seize by proving misbehaviour on-chain.
+**Reserve** — the native BSV backing `solBSV`, held by the federation under a **threshold ECDSA key**; the address is an ordinary **P2PKH** address and the key is never assembled in one place. It is **trusted, and bounded**: no single member can move it, and what protects a holder is a bond that anyone can seize by proving misbehaviour on-chain, plus the exit window and continuous publication of the ratio.
 
 **SIGHASH_FORKID** — the signature-hash scheme BSV requires for transaction signing. SOLBEAM implements it directly.
 
@@ -67,7 +71,7 @@ Plain-English definitions of the terms used in this documentation.
 
 **Trust-minimised** — a small, bounded trust assumption remains, but it is enforced economically (bonds, slashing) and by on-chain proofs rather than by promises.
 
-**Unbonding period** — the notice a member must serve before its bond is released. Its length is an **undecided parameter** (doc 23 lists it with no default). Without it a member could take on obligations, withdraw its bond, and be gone before anyone could slash; `bond ≥ k × owed` must still hold at withdrawal.
+**Unbonding period** — the notice a member must serve before its bond is released. Its length is an **undecided parameter** (doc 23 lists it with no default). Without it a member could take on obligations, withdraw its bond, and be gone before anyone could slash; **both bonds must still cover what their sides hold** at withdrawal.
 
 **Upgrade authority** — the program's upgrade key, which can in principle change anything. Under the federation model it is **held by governance** — 85% of pledged coins and a 30-day delay with live signal — rather than being an unowned gap. It cannot pause redemptions.
 
@@ -81,9 +85,10 @@ These are kept only so that older documents can be read. **None of them is part 
 
 - **Order book / "the book"** — **removed.** Stakers posted liquidity and the book matched by price then time. The fee is now a **governed 30 bp**, and capacity is capped by bonds pledged, which solves both jobs more simply.
 - **Discovered fee** — **removed** with the book. The fee is a governed parameter.
-- **Bonded relayer** — **superseded** by *federation member*. There are no per-relayer independent keys and no per-relayer deposit scripts; the reserve is under one threshold key.
-- **`owed_R` / exposure / relayer consent** — **superseded.** The per-relayer liability accounting was the old model's way of bonding individual deposits. The federation bond secures `owed` at the member level.
-- **Hot wallet / naked spend** — **superseded.** There is no hot float and no pooled reserve; the earlier analysis that a hot float is a written option is the reasoning that led to bonding in `solBSV`, and it is historical.
+- **Bonded relayer** — **superseded** by *federation member*. There are no per-relayer independent keys and no per-relayer deposit scripts; the reserve is under one **threshold ECDSA** key.
+- **"Threshold script"** — **superseded wording.** It implied a multisig script over the reserve. The design is a threshold **ECDSA key** over an ordinary P2PKH address, never assembled in one place, so membership changes are a re-sharing rather than an on-chain sweep (audit F10).
+- **`owed_R` / exposure / relayer consent** — **superseded.** The per-relayer liability accounting was the old model's way of bonding individual deposits. The two-sided bonds replace the single `owed`-based cover.
+- **Hot wallet / naked spend** — **superseded.** There is no hot float; the earlier analysis that a hot float is a written option is historical, and the reasoning now leads to a **BSV-side bond held outside the reserve** rather than a `solBSV` bond inside it.
 - **The two gates** — **superseded** by the vault's own release-and-burn rule: the program decides from its own stored headers, with no separate gate parameters to enforce.
 - **Cold reserve / covenant, tranche, veto-only cosigner** — **superseded.** There is no pooled, covenant-locked reserve and no tranche schedule.
 

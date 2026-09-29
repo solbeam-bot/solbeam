@@ -277,8 +277,8 @@ Against a 1 BSV minimum deposit (~$30) that is about **0.52%**, comparable to th
 | | |
 |---|---|
 | **The program upgrade authority** (A5) | Can mint arbitrarily by replacing the program. **Now held by governance** (85% / 30 days / live signal). The residual is the threshold over a small bond set |
-| **The reserve is a threshold key, not a covenant** (A6) | No covenant, and no timelocks on BSV to fall back on. **The threshold key is the mitigation**; the covenant track is the destination |
-| **The reserve balance is off-chain** (A4) | Monitored, not verified (D8). The **bonded stake** is on-chain `solBSV` and seizable; the BSV behind it is not readable by the program |
+| **The reserve is a threshold ECDSA key, not a covenant** (A6) | No covenant, and no timelocks on BSV to fall back on. **The threshold key is the mitigation** — the reserve is an ordinary P2PKH address and the key is never assembled in one place, so the P2PKH check is correct rather than a limitation (audit F10); the covenant track is the destination |
+| **The reserve balance is off-chain** (A4) | Monitored, not verified (D8). The **`solBSV`-side bond** is on-chain and seized by the program; the **BSV-side bond** is held under the collective key and seized by the members collectively; the reserve's BSV itself is not readable by the program, which is why **continuous publication is an early deliverable** |
 | **Refunds need a signature** (A15) | No on-chain return-to-sender path exists |
 | **Detection depends on somebody pushing headers** | A funded member job under the federation — see P7 |
 
@@ -287,8 +287,7 @@ Against a 1 BSV minimum deposit (~$30) that is about **0.52%**, comparable to th
 1. **The vault's instruction set.** Still the largest design gap: release, burn, escrow and return
    do not exist even on paper in a form that has been audited, so there is nothing to audit and
    P8/P10 depend on it. It should be **re-audited against this model**.
-2. **The threshold key.** Threshold value, key generation, the signing protocol, the per-member
-   attribution of `owed`, and what happens during a resharing or a member's exit.
+2. **The threshold ECDSA key.** Key generation, the signing protocol, what happens during a resharing or a member's exit, and the attribution rule that turns each side's exposure into a per-member share. The *value* is provisional `3-of-5`, `open` (doc 24).
 3. **Cross-chain replay.** Design fixed (P11); **no test creates a second deployment and asserts
    rejection.**
 4. **The `used_deposits` counterfactual.** X2 argued the missing `seeds` constraint was not
@@ -302,13 +301,13 @@ gap is deleted rather than paid down.)*
 
 ## 6. Still open — the new items
 
-1. **The genesis bootstrap.** Members bond `solBSV`, which does not exist until a mint happens. The
-   first members need a path; the G2 vault-gated genesis mint (D3) answers how the first supply is
-   backed but not how the first bond is posted.
+1. **The genesis bootstrap — decided.** Members post a **BSV-side bond at genesis**, so no `solBSV`
+   needs to exist first (D16). A capped, explicitly-unbonded first mint is a documented later
+   option, not chosen.
 2. **Sharding.** One threshold key across all members, or several groups with their own? Shards
    contain both theft and signing latency, at the cost of coordination.
-3. **The threshold-key choice.** The threshold value itself, and how it trades against signing
-   latency and the 30-day exit.
+3. **The signing-threshold value.** Provisional `3-of-5`, `open`, and how it trades against signing
+   latency and the 30-day exit. It sizes nothing on-chain.
 4. **The vault re-audit.** Doc 21 is the current vault design and carries unfixed findings. It
    should be re-audited against the federation model, since several findings came from trying to
    enforce BSV-side behaviour that the federation now handles by different means.
@@ -319,8 +318,8 @@ gap is deleted rather than paid down.)*
 ## The decisions this document needs
 
 1. **The ATA rent** — submitter pays, recommended above.
-2. **The genesis bootstrap** — how the first members bond.
-3. **The threshold key** — value, key generation, and the attribution rule.
+2. **The genesis bootstrap — decided** (D16): a BSV-side bond at genesis.
+3. **The signing threshold** — provisional `3-of-5`, `open`; key generation and the attribution rule.
 
 Everything else here is either fixed, decided, moot under the federation model, or explicitly
 accepted.
