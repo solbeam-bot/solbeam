@@ -11,12 +11,14 @@
 > book (the book is removed; D2 reversed). Every figure below is recomputed for the federation
 > model. The **10 bp** numbers that used to run through this document are **stale**.
 >
-> **Two corrections to the earlier arithmetic, both stated rather than absorbed:**
-> 1. **Account rent is `(bytes + 128) × 5,080 lamports`.** That is what `solana rent` reports:
->    3,480 lamports per byte-year against a two-year exemption, plus Solana's 128-byte account
->    overhead. The earlier **5,080 lamports per byte** figure applied no overhead to the large
->    accounts and is **replaced**. The byte counts are unchanged and measured from the code:
->    `LightClient` **10,103 B**, `ForkStaging` **10,069 B**.
+> **The arithmetic, stated so it stops being re-litigated:**
+> 1. **Account rent is `(bytes + 128) × 5,080 lamports`**, and **the 128-byte overhead is already
+>    inside that 5,080.** Measured: `solana rent 0` = 650,240 lamports = 128 × 5,080, and
+>    `solana rent 165` = 1,488,440 = 293 × 5,080. A rate of 6,960 is an **older toolchain's**
+>    constant and overstates every figure here by about **37%**. This has now been wrong in the
+>    same direction twice, both times by substituting a recalled constant for a measured one.
+>    The byte counts are unchanged and measured from the code: `LightClient` **10,103 B**,
+>    `ForkStaging` **10,069 B**.
 > 2. The method is unchanged: **measured constants, and honesty about which costs recur.**
 
 Figures use the measured constants: **5,000 lamports** per signature on Solana, the rent formula
