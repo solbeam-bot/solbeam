@@ -23,3 +23,4 @@
 * [21. The vault — structural redesign](21-vault-structural.md) — **current**
 * [22. The flow — every actor's journey](22-the-flow.md)
 * [23. The federation — membership, powers, and the floor](23-federation.md)
+* [24. Parameters and variables](24-parameters.md) — **the reference file**
