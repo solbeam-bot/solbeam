@@ -11,6 +11,58 @@
 > [`13-summary.md`](13-summary.md) is the authoritative model; where this document and that one
 > disagree, that one is right.
 
+## Why the header chain, and not just Merkle proofs
+
+**The question every reader asks, and the answer is a reorg.**
+
+A deposit claim carries a Merkle proof and the 80-byte header. So why relay every header rather
+than just the proofs? Because a Merkle proof establishes two different things only one of which it
+can:
+
+| What must be true | How |
+|---|---|
+| The transaction is in **this block** | **Merkle proof** — cheap, supplied by the claimant |
+| **This block is on the chain** | The header chain — or somebody's word for it |
+
+A proof folds a transaction to a Merkle root. A fake block has a perfectly valid root, so the proof
+alone proves inclusion in *a* block, never in *the* chain. Checking that needs the chain.
+
+### A tip does not help
+
+"Post the proof and the latest header" sounds like it closes the gap, and it does not. A bare tip is
+a hash; to know the claimant's block is on the chain ending at that tip you need **every header
+between them**. And once a claimant supplies that path, the program must check it — linkage *and*
+proof of work, which is cw-144. So the question returns to where it started.
+
+### The reorg is the decisive case
+
+Suppose a deposit is proven against block H, minted into the vault — and the client then never sees
+the chain again, only proofs. **Then H is reorged out by a heavier branch.**
+
+**Nothing in the situation is detectably wrong.** The Merkle proof was true when made and is still
+verifiable. It is simply no longer *about the chain*. And no proof can say *"the block I proved
+three days ago is no longer canonical"* — because **a proof is about the past, and a reorg is a
+change in the present.**
+
+So without the chain:
+
+- **`burn_staged` is impossible.** It works by comparing the stored hash at a height against what the
+  client now holds. With no chain there is nothing to compare against
+- **A deposit becomes final on first proof** — which is the exact failure the vault exists to prevent
+- **A depositor reorged out of their own deposit keeps the tokens** *and* gets the BSV back
+
+**The header chain is not there for proof of work. It is there so that a reorg is visible.** That is
+the role no proof can play, and it is why the chain is relayed rather than the proofs alone.
+
+### Each part does a job the others cannot
+
+```
+header chain on Solana  →  a reorg is visible, so the vault can burn
+Merkle proof per claim  →  inclusion, cheap, supplied by the claimant
+cw-144 on-chain         →  the chain cannot be faked with easy blocks
+147-ancestor seed       →  the client can start at all
+```
+
 ## Three parts
 
 ```
