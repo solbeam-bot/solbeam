@@ -28,3 +28,4 @@
 * [26. The reference architecture — what we take from RenVM](26-reference-architecture.md)
 * [27. Gap analysis — SOLBEAM against RenVM](27-gap-analysis.md)
 * [28. State of the project — a summary for review](28-state-of-the-project.md) — **start here**
+* [29. Miner-attested hashrate, and the latency question](29-miner-attestations-and-latency.md)
