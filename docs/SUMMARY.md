@@ -26,3 +26,4 @@
 * [24. Parameters and variables](24-parameters.md) — **the reference file**
 * [25. Audit — the federation model](25-audit-federation.md) — **blocking findings**
 * [26. The reference architecture — what we take from RenVM](26-reference-architecture.md)
+* [27. Gap analysis — SOLBEAM against RenVM](27-gap-analysis.md)
