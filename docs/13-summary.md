@@ -123,6 +123,19 @@ lands.**
 **The residual, stated plainly:** a holder who does not watch and does not act within 30 days is
 exposed. That is a disclosure obligation, not a mechanism.
 
+### Where the money comes from
+
+**The fee is gross, and it is the only revenue.** 30 bp on mint and 30 bp on redeem cover the real
+transaction costs — Solana fees, BSV relay — and **the remainder is the bonded members' income**,
+shared pro rata to stake. At the 1 BSV minimum the non-refundable cost of a mint is about **$0.001**
+against a **$0.09** fee, so the margin is the members', and the one cost that exceeds the fee
+(first-time ATA rent, $0.115) is **refundable**.
+
+**Members are paid to carry the risk, and the bond is the risk.** Their return is the fee share; their
+exposure is 1,000 BSV that exists to be lost if they misbehave. Whether that trade is attractive is
+a market question, not a design one — which is why the fee is a governed parameter rather than a
+constant.
+
 ### Pause
 
 **Mints can be paused. Redemptions cannot.** Pausing inbound is a safety valve; pausing outbound is

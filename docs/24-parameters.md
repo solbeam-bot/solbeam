@@ -74,8 +74,8 @@ while the numbers are still provisional.
 
 | ID | Name | Value | Description |
 |---|---|---|---|
-| `fee.mint_bp` | Peg-in fee | **30 bp** `ph` | Governed. **Its physical location is unspecified — see N1** |
-| `fee.redeem_bp` | Peg-out fee | **30 bp** `ph` | Governed |
+| `fee.mint_bp` | Peg-in fee (**gross**) | **30 bp** `dec` | **Covers all transaction fees; the remainder is member income.** Its physical location is unspecified — see N1 |
+| `fee.redeem_bp` | Peg-out fee (**gross**) | **30 bp** `dec` | As above: costs first, remainder to bonded members pro rata |
 | `fee.bounty_share` | Challenger bounty | **open** | Share of a slashed bond paid to whoever proves the misbehaviour |
 
 ## Peg-in
@@ -118,3 +118,29 @@ The rest — `lc.cluster_id`, `fed.unbond_slots`, `fed.script`, `gov.pause_durat
 **A note on why this file exists:** several values here (`lc.window_hours`, `fed.bond_size`,
 `gov.threshold`, `fee.mint_bp`) were argued about repeatedly during design. **Once they are one-line
 config, arguing about the number stops blocking the specification.** That is the point.
+
+---
+
+## The revenue model
+
+**The fee is gross.** A 30 bp charge on mint and on redeem covers the real transaction costs, and
+**whatever is left is the income of the bonded members**, shared pro rata to stake. There is no
+other revenue.
+
+At the **1 BSV minimum** that is a useful sanity check rather than a projection:
+
+| Per mint (1 BSV ≈ $30) | |
+|---|---|
+| Fee collected at 30 bp | **$0.090** |
+| Solana transaction fees (mint + its share of header pushes) | ~$0.001 |
+| BSV relay at 1 sat/byte | ~$0.00007 |
+| First-time ATA rent | $0.115 — **refundable, a lockup not a cost** |
+| **Non-refundable cost** | **~$0.001** |
+
+**So the fee covers the non-refundable cost by roughly two orders of magnitude at the minimum
+deposit**, and the margin is the members'. The ATA rent is the one figure that exceeds the fee, and
+it is recoverable by closing the account — which is why it is a lockup rather than a loss, and why
+it is the honest answer to "who pays for a first-time user".
+
+**This also prices the risk.** A member's return is the fee share against a 1,000 BSV bond whose
+entire purpose is to be lost if it misbehaves. The market for members is the market for that trade.
