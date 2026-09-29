@@ -78,12 +78,13 @@ cw-144 on-chain         →  the chain cannot be faked with easy blocks
                                   sign payouts and challenge theft
 ```
 
-The division of trust is the design: **minting and reversal are trustless** — the program checks
+The division of trust is the design: **the deposit is verified and reversal is trustless** — the program checks
 BSV proof of work itself and compares its own stored header hash — while the **reserve is trusted
-and bounded**, held under a **threshold ECDSA key** that no single member can move, and protected by
-**two-sided bonds** anyone can act on: the program seizes the `solBSV` side automatically, the members
-seize the BSV side collectively under the same collective key. The one assumption is that a threshold
-of members do not collude; **continuous publication of the reserve and supply is the mitigation** that
+and bounded**, held under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway threshold ECDSA key plus the
+**Greycore**'s — that neither the gateway majority nor the Greycore can move alone, and protected by
+**two-sided bonds (the float)** anyone can act on: the program seizes the `solBSV` side automatically, the members
+seize the BSV side collectively under the same collective key. The one assumption is that the gateway
+threshold **together with the Greycore** does not collude; **continuous publication of the reserve and supply is the mitigation** that
 makes a theft visible. [`04-trust-model.md`](04-trust-model.md) is the honest account of it.
 
 ---
@@ -302,9 +303,10 @@ what mitigates it by minting automatically.
 2. **Members sign payout intents individually**, on Solana. This is the attribution mechanism:
    because each member signs separately, a member who signs two conflicting intents has produced
    **their own proof of guilt** — see [Slashing](04-trust-model.md#slashing--self-proving-misbehaviour).
-3. **Once enough attributed intents exist, the threshold ECDSA key signs the BSV payment.** The
-   reserve is under a threshold key — an ordinary P2PKH address whose key is never assembled in one
-   place — so this needs a quorum and **no single member can move it**.
+3. **Once enough attributed intents exist, the gateway threshold ECDSA key signs and the Greycore
+   co-signs the BSV payment.** The reserve script is a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's
+   threshold key plus the **Greycore**'s key, and **both must sign** — so no gateway majority and no
+   Greycore can move the reserve alone.
 4. **Settlement is proved, not asserted.** The payout transaction is proved against the light
    client — inclusion and amount — and the escrow **burns**. Unlike a report from a signer, this is
    something the program can check.

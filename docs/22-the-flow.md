@@ -159,8 +159,8 @@ the bond prices the risk of that software being modified.
                  so it is a member's node that keeps the view current
                on a reorg: init_staging → push_fork_header → commit_fork
                → commits only if strictly HEAVIER (accumulated chainwork)
-2  CUSTODY   hold a share of the threshold ECDSA key over the reserve
-               → no single member can move funds
+2  CUSTODY   hold a share of the gateway threshold ECDSA key over the reserve
+               → no gateway majority can move funds; the GREYCORE co-signs every spend
                and a share of the COLLECTIVE key over the mint-side bonds
                → a member cannot move its own bond; the members seize it
                  together, and the slashers are paid from it
@@ -260,9 +260,10 @@ are frozen; it is that you can always leave before they change.
 > trustless. What protects you is **two-sided bonds** that can be seized — the program seizes the
 > `solBSV` side automatically, the members seize the BSV side collectively **by a threshold-signed
 > transaction** — an exit that **cannot be paused**, continuous publication of the reserve and
-> supply, and a reserve that **no single member can move**.
+> supply, and a reserve that **no gateway majority and no Greycore can move alone**.
 
 That is a trust assumption, stated and bounded — and it **is** custody of the reserve, unlike
-the per-relayer model it replaced. The trade is deliberate: one threshold key instead of many
+the per-relayer model it replaced. The trade is deliberate: one **2-of-2 reserve script** — the
+gateway's threshold key plus the **Greycore**'s — instead of many
 floats, attribution that actually works, and an honest statement of what the threshold can
 still do.

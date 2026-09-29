@@ -10,8 +10,10 @@
 > **removed**; the fee is a **governed 30 bp**; the reserve is held by a **bonded federation under
 > a threshold ECDSA key**; and there **is** governance — 85% of pledged coins, 30 days, live signal,
 > holding the upgrade authority, with redemptions never pausable. **The single `bond ≥ k × owed`
-> formula quoted below is superseded by two-sided bonds, neither inside the reserve (D14), and the
-> phrase "threshold script" is wrong — it is a threshold key (D15, audit F10).**
+> formula quoted below is superseded by two-sided bonds, neither inside the reserve (D14), now
+> stated as **the float**; and the reserve is a **2-of-2 multisig with the Greycore**, so the
+> earlier "there is a threshold key, not a threshold script" reading is **superseded — F10 is
+> reversed** (D15).**
 >
 > It is kept because it is the record of that refresh, and because its closing caution — that a
 > refresh must be checked against claims rather than vocabulary — is still the right one. **Use

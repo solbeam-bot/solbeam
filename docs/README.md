@@ -17,7 +17,7 @@ that one is right.
 |---|---|
 | **A light client on Solana** | Verifies BSV proof of work against the real difficulty rule (**cw-144**) and Merkle inclusion of a transaction in a block |
 | **A vault** | Every mint lands here rather than in your wallet, and leaves only when the program is satisfied — or is burned if it isn't |
-| **A bonded federation** | Members run nodes, hold the reserve under a **threshold ECDSA key**, relay headers, sign payouts, and challenge theft. Open membership, **two-sided bonds** — the BSV side held under the same collective key and seized by the members |
+| **A bonded federation** | Members run nodes, hold the reserve under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the **Greycore**'s, both required — relay headers, sign payouts, and challenge theft. Membership is **admitted by the Greycore**, and **two-sided bonds** (the float) — the BSV side held under the same collective key and seized by the members |
 
 ---
 
@@ -76,12 +76,12 @@ like any other token, and can be used in Solana DeFi.
 
 | | |
 |---|---|
-| **Minting is trustless, given the deployed program** | The program verifies BSV proof of work and Merkle inclusion itself. No member's signature, no committee vote and no oracle mints anything |
+| **The deposit is verified; the backing is reported** | The program verifies BSV proof of work and Merkle inclusion itself. **The program verifies deposits; the federation reports backing** — it reports spent deposit outpoints, because Solana cannot read the BSV UTXO set |
 | **Reversal is trustless** | The program compares its own stored header hashes. A reorg is a fact about headers, not a report from anyone |
-| **The reserve is trusted, and bounded** | The BSV sits under a **threshold ECDSA key** — an ordinary P2PKH address whose key is never assembled in one place — so no single member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**: the program seizes the `solBSV` side, the members seize the BSV side collectively |
-| **There is a federation** | Bonded members, open entry. They are paid to carry the risk; the bonds are held under the collective key, not each member's own |
+| **The reserve is trusted, and bounded** | The BSV sits under a **2-of-2 `OP_CHECKMULTISIG`** — the federation's **threshold ECDSA** gateway key (never assembled in one place) **and** the **Greycore**'s key, both required — so no gateway majority and no Greycore can move it alone. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**: the program seizes the `solBSV` side, the members seize the BSV side collectively |
+| **There is a federation** | Bonded members, **admitted by the Greycore**. They are paid to carry the risk; the bonds are the **float** and are held under the collective key, not each member's own |
 | **There is governance** | 85% of pledged coins, 30 days, signalled live. It holds the upgrade authority — see *the floor* below |
-| **No oracle** | No external metric gates anything. Minting is gated by the bonds; peg-outs by the threshold key |
+| **No price oracle** | No external price or data feed gates anything. Minting is gated by a verified proof plus a coverage floor; peg-outs by the gateway threshold key and the **Greycore co-signature** |
 | **Market layer is external** | Liquidity comes from Solana venues. SOLBEAM is the wrapper, not the market |
 | **FOSS** | The light client, programs and node software are open source |
 

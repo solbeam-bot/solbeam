@@ -23,15 +23,18 @@ detail. Specifically:
 - **There is a federation and there is governance.** Every finding here that rests on **D7** ("no
   governance in the PoC"), on an unpaid permissionless challenger, on a per-relayer bond
   (`bond_R ≥ k × owed_R`) or on **per-relayer independent keys** describes a system that is no
-  longer the design. The reserve is now held by a bonded federation under a **threshold ECDSA
-  key**, the **node software is the challenger**, and slashing is **self-proving equivocation** on
+  longer the design. The reserve is now held by a bonded federation under a **2-of-2
+  `OP_CHECKMULTISIG`** — a **threshold ECDSA** gateway key plus the **Greycore**'s — the **node
+  software is the challenger**, and slashing is **self-proving equivocation** on
   individually-signed payout intents. **Later still, the bond formula itself was superseded:** the
   single `bond_R ≥ k × owed_R` (and its successor `aggregate_bond ≥ k × non_bonded_supply`) is
-  replaced by **two-sided bonds, neither inside the reserve** (D14), and **"threshold script" is
-  wrong wording** — it is a threshold **key** (D15, correcting audit F10).
+  replaced by **two-sided bonds, neither inside the reserve** (D14), now stated as **the float**; and
+  **"threshold script" is no longer wrong** — with the **Greycore co-signing** the reserve genuinely
+  is a 2-of-2 multisig, and **F10 is reversed** (D15).
 - **A6 (one pooled deposit script) is answered differently.** The federation holds the reserve
-  under a **threshold ECDSA key**, so the fix is no longer per-relayer scripts; A6 is retained as
-  history — and the P2PKH address is the correct shape, not a defect (F10).
+  under a **2-of-2 script with the Greycore**, so the fix is no longer per-relayer scripts; A6 is
+  retained as history — and the P2PKH shape is **superseded**: `is_p2pkh` must change and
+  `DepositScript::SPACE` must grow to ~71 bytes (F10 reversed).
 - **F2/D6 is no longer the design's posture.** This audit is right that in the shipped code *every*
   peg-in is the unbacked path, because no vault, federation or bond exists. That remains true of
   the code; it is no longer the model the system is being built to.

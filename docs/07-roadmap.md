@@ -33,7 +33,7 @@ rather than an orphaned risk.
 | **Transparency — reserve and supply published continuously** | The reserve balance and the `solBSV` supply published as a live, public backing ratio | **Promoted from a phase-5 monitoring task to an early deliverable.** For the two cases nothing can enforce — a colluding threshold, and an unspent-outpoint spend nobody challenges — **visibility is the only remaining defence**, and it must exist before real value does |
 | ~~**F6 — the replay-list ceiling**~~ **CLOSED** | `MIN_PEG_IN` enforced, and `MAX_USED = 200` sized or replaced | A hard ceiling of **200 peg-ins per 32-hour window**, with no attacker required. An open defect in code that exists |
 | **The vault** | Every mint lands in a program-owned token account; released after maturity, burned if a reorg is followed | The component the rest of the design rests on. It gives reversibility without a freeze authority and removes the window in which a fraudulent mint could be sold |
-| **The federation** | Open membership, **two-sided bonds** (1,000 BSV per side), members running software only, and the reserve held under a **threshold ECDSA key** | Turns individually-trusted keys into a threshold over the reserve, and makes the parties with the most to lose the ones who watch. The BSV-side bond sits under the same collective key, so the members can seize it |
+| **The federation** | Greycore-admitted membership, **two-sided bonds** (1,000 BSV per side, the float), members running software only, and the reserve held under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway threshold key plus the Greycore's | Turns individually-trusted keys into a threshold over the reserve **with a Greycore co-signature**, and makes the parties with the most to lose the ones who watch. The BSV-side bond sits under the same collective key, so the members can seize it |
 | **Governance** | **85% of pledged coins, 30 days, live signal**, holding the **upgrade authority**; redemptions never pausable; pause stops **mints only** | Gives the system a change mechanism that is slower than its exit: a hostile proposal empties the bridge before it lands |
 | **Slashing** | **Self-proving equivocation** — members sign payout intents individually, so signing two conflicting intents is its own evidence | The proof is on-chain and needs no judgement; anything weaker cannot attribute fault from a threshold signature |
 | **Peg-out** | Escrow into the vault, individually-signed payout intents, the threshold signature, settlement proved against the light client, and a permissionless cancel after the deadline | Turns a one-way wrapper into a two-way peg. Failure returns; it never mints, so supply is unchanged on every path |
@@ -61,8 +61,10 @@ later option, not chosen, because it leaves the first mint backed by nothing but
    transparently while peg-out is finished.
 6. **Mainnet, peg-out live, small caps.** Escrow, payout intents, the threshold signature, and the
    cancel path exercised in production.
-7. **Raise caps.** Capacity is capped by bonds pledged, so raising it means more members or larger
-   bonds — and only after audits and after the invariants hold in production for a sustained period.
+7. **Raise caps.** The bond is the **float** and no longer a capacity ceiling — the earlier "capacity
+   is capped by bonds pledged" claim is **withdrawn** — so scaling means growing the **float**, adding
+   members (admitted by the Greycore) and enlarging the Greycore, and only after audits and after the
+   invariants hold in production for a sustained period.
 
 ## Milestones
 
@@ -72,8 +74,8 @@ later option, not chosen, because it leaves the first mint backed by nothing but
   after maturity.
 - A reorg followed inside the maturity window burns the staged tokens, and the depositor ends
   exactly where they started.
-- A federation is formed from **open membership** at the two-sided 1,000 BSV bonds, and holds the
-  reserve under a **threshold ECDSA key**.
+- A federation is formed from **Greycore-admitted members** at the two-sided 1,000 BSV float, and holds the
+  reserve under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway threshold key plus the Greycore's.
 - A governance proposal passes at **85% of pledged coins** and takes effect after **30 days**,
   with redemptions live throughout.
 - A redemption completes end-to-end: escrow → signed payout intents → BSV payout → proof → settlement.

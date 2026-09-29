@@ -9,7 +9,7 @@ pending item.
 ---
 
 > ⚠️ **SUPERSEDED BY [`21-vault-structural.md`](21-vault-structural.md).** This first draft was audited and found broken; the corrected design is in doc 21 (doc 20 was the intermediate revision, itself superseded).
-> **Model note, later still:** the per-relayer bond formulas below (`bond_R >= k * owed_R`) are **superseded** by **two-sided bonds, neither inside the reserve** (D14), and the reserve is a **threshold ECDSA key**, not a "threshold script" (D15; audit F10). The text is preserved as history.
+> **Model note, later still:** the per-relayer bond formulas below (`bond_R >= k * owed_R`) are **superseded** by **two-sided bonds, neither inside the reserve** (D14), now stated as **the float**; and the reserve is a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the **Greycore**'s — so the earlier "threshold key, not a threshold script" note is itself **superseded by the reversal of F10** (D15). The text is preserved as history.
 > An adversarial review of the first draft found four critical defects, three of them inherent to
 > the design as described rather than merely unspecified. They are listed in §Audit findings at the
 > end and the design needs a revision pass before any code is written.

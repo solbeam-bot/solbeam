@@ -8,7 +8,7 @@
 >
 > **Rewritten for the federation model, 2026-09-29.** The system is now three parts: a **light
 > client** on Solana, a **vault** every mint lands in, and a **bonded federation** holding the
-> reserve under a **threshold key**. This revision removes the order book and discovered fees, the
+> reserve under a **2-of-2 script with the Greycore**. This revision removes the order book and discovered fees, the
 > per-relayer independent keys, and the "no governance" posture, and records each as a **reversal
 > with a reason** rather than a silent edit — see §Changes in this revision. The reasoning that
 > still holds is kept: reorg handling, block-time signals, the loss-landing analysis, the tiered
@@ -38,7 +38,7 @@ Four things are easy to conflate, so this document names them apart:
 |---|---|
 | **The program** | The on-chain Solana program. Consensus. Consults nothing external |
 | **The peg** (or the bridge) | The whole mechanism — program, federation, deposits, redemptions |
-| **The federation** | The bonded member set that holds the reserve under a threshold key, relays headers, signs payout intents and challenges. Members run software, not judgement |
+| **The federation** | The bonded member set that holds the reserve under a **2-of-2 script — the gateway threshold key plus the Greycore's** — relays headers, signs payout intents and challenges. Members run software, not judgement |
 | **The website** | `solbeam.me`. Parameters, the published surface, status. **Nothing here is consensus** |
 | **Monitoring** | The published surface: parameters, external metrics, reserve ratio, Solana liveness |
 
@@ -52,12 +52,12 @@ in this document, because it could mean any of the four.
 
 | | |
 |---|---|
-| **Minting** | **Trustless, given the deployed program.** The program verifies BSV proof of work and Merkle inclusion directly: no member's signature, no committee vote and no oracle mints anything. **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked, and the exit window is the real guarantee |
+| **Minting** | **The deposit is verified; the backing is reported.** The program verifies BSV proof of work and Merkle inclusion directly, and **the federation reports spent deposit outpoints** because Solana cannot read the BSV UTXO set. **The program verifies deposits; the federation reports backing** — not a new trust assumption, since the federation is already trusted with the reserve. **The program's upgrade authority is the other exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked, and the exit window is the real guarantee |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone |
-| **The reserve** | **Trusted, and bounded.** The BSV is held under a threshold key by the federation. No single member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
+| **The reserve** | **Trusted, and bounded.** The BSV is held under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the **Greycore**'s, and both must sign. No gateway majority and no Greycore can move it alone. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
 
-**The one trust assumption: a threshold of federation members do not collude.** Everything else is
-verified. That assumption is not eliminated — it is **bounded**, by bonds and by proofs anyone can
+**The one trust assumption: the gateway threshold and the Greycore do not collude.** Everything else is
+verified, except the **reported spent-outpoint record**. That assumption is not eliminated — it is **bounded**, by the Greycore co-signature, by bonds and by proofs anyone can
 submit. §The federation's bonds close the hole states the bound exactly, including where it is
 weaker than an earlier draft claimed.
 
@@ -68,10 +68,10 @@ carries the same reversals in register form.
 
 | Previously | Now | Why |
 |---|---|---|
-| **The order book**, with the fee **discovered** per bid (D2) | **A governed fee, 30 bp each way** | The book solved fee discovery and capacity allocation; a governed fee plus a bond cap solves both more simply, and the book was the one subsystem that never received an adversarial review |
-| **Per-relayer deposit scripts and independent keys** (the A6 posture: "do not pool the reserve") | **One reserve under a threshold key** | Per-relayer isolation removed the single key but also removed the thing that makes a reserve auditable. Under a threshold key no single member can move funds, and the bond remains seizable on-chain. The reversal is honest about the cost: there is now a reserve to secure |
+| **The order book**, with the fee **discovered** per bid (D2) | **A governed fee, 30 bp each way** | The book solved fee discovery and capacity allocation; a governed fee solves both more simply (the "bond cap" once cited here is **withdrawn** — the bond is the float), and the book was the one subsystem that never received an adversarial review |
+| **Per-relayer deposit scripts and independent keys** (the A6 posture: "do not pool the reserve") | **One reserve under a 2-of-2 script with the Greycore** | Per-relayer isolation removed the single key but also removed the thing that makes a reserve auditable. Under a 2-of-2 no gateway majority and no Greycore can move funds, and the bond remains seizable on-chain. The reversal is honest about the cost: there is now a reserve to secure |
 | **D7 — no governance in the PoC** | **85% of pledged coins / 30 days / live signal**, holding the **upgrade authority** | "No governance" left the upgrade authority as an unowned mint voucher (A5). Governance does not remove that power; it names who holds it and makes every use visible for 30 days |
-| **Specialists-only staking** (D1) | **Open membership, two-sided 1,000 BSV bonds** | A capital gate is a better filter than a nomination, and it makes the member set permissionless |
+| **Specialists-only staking** (D1) | **Greycore-admitted membership, two-sided 1,000 BSV bonds** | The Greycore is the trusted, non-operational body that finds and admits replacement members; the bonds are the float and the capital gate is objective |
 | **`FLOOR` fixed in code** (D4) | **12 blocks, a governed parameter** | The value stands; the change mechanism that was a named gap is now governance |
 | **Detection paid by nobody** (P7) | **Detection is a member job**, funded from fees and bounties | The challenger was an unpaid chore nobody owned; under the federation it is done by the parties with the most to lose |
 | Anything resting on **enforcing BSV-side behaviour from Solana** (per-deposit consent, the hot float cap, a relayer-script registry) | **Handled by the federation or dropped** | The program cannot see or spend off-chain BSV. Where a mechanism assumed it could, the mechanism was wrong, not merely unbuilt |
@@ -102,7 +102,7 @@ Two rules cover every row:
 
 **The one residual judgement is `FLOOR` itself** — a policy value, not a measurement: 12 BSV
 blocks, and since this revision a **governed parameter** rather than a constant (D4-revised, D10).
-The design has no oracles; it does have parameters somebody has to choose, and *that* is the thing
+The design has no price oracle; it does have parameters somebody has to choose, and *that* is the thing
 worth arguing about.
 
 ## Recommended state
@@ -137,7 +137,8 @@ there is nothing to dump and no innocent buyer to inherit the loss.
 ```
   1. ESCROW    solBSV moves into the vault; a BSV destination and a deadline are set
   2. ACCEPT    federation members sign payout INTENTS individually, on Solana
-  3. PAY       once enough attributed intents exist, the threshold key signs the BSV payment
+  3. PAY       once enough attributed intents exist, the gateway threshold key signs and the
+               Greycore co-signs the BSV payment (both are required by the 2-of-2 script)
   4. SETTLE    the payout is proved against the light client; the escrow burns
      or
   4'. CANCEL   permissionless after the deadline: the escrow returns to the holder
@@ -162,9 +163,10 @@ cancel path are the only time limits, and they run in the holder's favour.
 | **P5** | `MIN_PEG_IN` | **1 BSV** | economic | Decided (P5, doc 18): makes dust griefing a capital-lockup attack rather than a fee attack |
 | **P6** | `MAX_PEG_IN` | 10,000 BSV | economic | Per *transaction* only; see §The aggregate mint cap |
 | **P7** | Mint fee / redeem fee | **30 bp each** | economic | **Governed** (D2-replaced). Deducted where the value moves; paid to members pro rata to pledged stake |
-| **P8** | Membership bond | **1,000 BSV per side** (D14): BSV on the mint side, **outside the reserve**; `solBSV` on the redeem side | **safety** | Open entry (D9). Each side must cover what it holds, so a member cannot leave while owing |
-| bond `k` | bond multiple | `k = 1` (D5) | **safety** | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`. **The old single `bond ≥ k × owed` is superseded.** The `solBSV` side is checkable and seized on-chain; the BSV side sits under the **collective key** and is seized by the **members collectively** |
-| `fed.threshold` | signing threshold | **3-of-5 provisional**, `open` | **safety** | `t` of `n` for the **threshold ECDSA** key. A **signing-protocol** parameter: it sizes nothing on-chain |
+| **P8** | Membership bond | **1,000 BSV per side** (D14): BSV on the mint side, **outside the reserve**; `solBSV` on the redeem side | **safety** | Admission is by the **Greycore** (D9/D15). **The bond is the float** — working capital for transfers — not a capital requirement sized against the reserve. Each side carries a coverage floor, so a member cannot leave while owing |
+| bond `k` | bond coverage floor | `k = 1` (D5) | **safety** | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`. **A solvency floor, not a capacity ceiling:** the `n/t` arithmetic and the `~$180k` / `$300k` figures are **withdrawn** (doc 26 §5). **The old single `bond ≥ k × owed` is superseded.** The `solBSV` side is checkable and seized on-chain; the BSV side sits under the **collective key** and is seized by the **members collectively** |
+| `fed.threshold` | gateway signing threshold | **4-of-N, `N` open** — number deferred | **safety** | `t` of `n` for the gateway **threshold ECDSA** key — one leg of the reserve's **2-of-2** with the Greycore |
+| `fed.greycore_size` / `fed.greycore_threshold` | Greycore size / threshold | **`open`** | **safety** | The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose who do not run the reserve. The Greycore **co-signs every reserve spend** and **admits members** |
 | **P9** | Governance | **85% of pledged coins / 30 days / live signal** | **safety** | Holds the upgrade authority (D10). All four numbers are parameters |
 | **P10** | Pause | **mints only**, lower threshold, auto-lifts | **safety** | Redemptions are never pausable (D12) |
 
@@ -274,20 +276,22 @@ engineered away.
 
 What the change buys, and why it is worth stating rather than hiding:
 
-- **No single member can move the reserve.** A threshold signature is required, so the failure mode
-  is *a threshold colluding*, not *one key stolen*. It is a threshold **key**, never assembled in one
-  place — not a multisig script (audit F10).
+- **No gateway majority — and no Greycore — can move the reserve.** The reserve script is a **2-of-2
+  `OP_CHECKMULTISIG`**: the gateway's threshold ECDSA key (never assembled in one place) plus the
+  **Greycore**'s, and both must sign. The failure mode is *the gateway quorum colluding with the
+  Greycore*, not *one key stolen*. **This reverses audit F10:** the deposit script genuinely is a
+  multisig, so `is_p2pkh` must change and `DepositScript::SPACE` must grow to ~71 bytes.
 - **The bonds are a capital gate.** Members post two-sided bonds, one per direction and **neither
   inside the reserve**; the `solBSV` side is seizable on-chain, so the member set is permissionless
   but not anonymous. The BSV side is held under the **collective key** and seized by the **members
   collectively**, with the slashers paid from it — a collective action by the majority, not an
   automatic rule, since nothing on BSV compels them to sign.
 - **There is exactly one reserve to attest to.** With distributed custody, "is the reserve whole?"
-  is a question about every relayer at once. With one threshold-held reserve it is one address, one
+  is a question about every relayer at once. With one 2-of-2 reserve it is one address, one
   attested balance and one published ratio.
-- **The peg-out path has a signing set, not a discretion.** Members sign intents individually and
-  the threshold key signs only once enough attributed intents exist, so no member chooses *whether*
-  to pay.
+- **The peg-out path has a signing set, not a discretion.** Members sign intents individually, the
+  gateway threshold key signs and the **Greycore co-signs** only once enough attributed intents exist,
+  so no member chooses *whether* to pay.
 
 **What is not claimed:** the reserve is still **trusted** — that is the honest word in doc 13's
 table, and it should not be softened to "trustless". What bounds it is the two-sided bonds and the
@@ -326,10 +330,12 @@ expensive, and **none of them is detection**:
    fraud never reaches a market.
 3. **The bond.** Every member's `solBSV` bond is held by the program and seizable on proof.
 
-The **threshold key** is what stops one member moving the reserve; it is not reorg insurance and
-does not bound a fraudulent mint. The **bond** is sized against `owed` and answers a member's
-provable misbehaviour, not the mint — but under the federation the total bonded stake is also the
-scale limit, which is what makes it the buffer. See §The federation's bonds close the hole.
+The **2-of-2 script** — the gateway threshold key plus the **Greycore** — is what stops one member
+moving the reserve; it is not reorg insurance and
+does not bound a fraudulent mint. The **bond** is the float and answers a member's
+provable misbehaviour, not the mint. **The earlier claim that the total bonded stake is the scale
+limit is withdrawn:** the bond is the float, and the reserve is constrained by the **Greycore
+co-signature**. See §The federation's bonds close the hole.
 
 Detection — the gates above — is a further layer. It reduces the window of opportunity and it
 protects honest users from being caught mid-flight. It is not what makes the peg safe: **a gate
@@ -354,8 +360,9 @@ and a successful reorg attack violates it by creating supply with nothing behind
 **The invariant is monitored, not enforced** (D8). `custodied BSV ≥ outstanding solBSV` is
 published and shown as a ratio on the website, and **the protocol cannot enforce it**, because the
 reserve is off-chain BSV the program cannot read. The program does not check it. D8 **stands**
-under the federation model: a threshold key changes who holds the reserve, not what a Solana
-program can see.
+under the federation model: a **2-of-2 script with the Greycore** changes who holds the reserve, and
+the program still cannot read it. **The one input the federation reports is the spent-outpoint
+record**, because Solana cannot read the BSV UTXO set.
 
 ### A fraudulent mint has more than one exit
 
@@ -380,9 +387,10 @@ Only one mechanism attacks the fraud itself rather than its exit:
   more than the fraud is worth. Every other control silently assumes the fraudulent mint has
   already happened.
 - **The vault and maturity**, which make a detected fraud reversible rather than merely bounded.
-- **The threshold key**, which means no single member can move the reserve.
-- **The bonds.** The total bonded stake caps the value the system can hold at once (`k = 1`), and
-  it is what a fraud ultimately lands on.
+- **The 2-of-2 script** — the gateway threshold key plus the Greycore — which means no gateway
+  majority and no Greycore can move the reserve alone.
+- **The bonds.** The float, with a coverage floor; the earlier "total bonded stake caps the value the
+  system can hold" is **withdrawn** — the reserve is constrained by the **Greycore co-signature**.
 
 The honest consequence, which belongs in the document rather than in a footnote: **if depth is too
 low, the loss lands on DEX LPs and exchanges, and the protocol cannot compensate them.** They are
@@ -413,11 +421,11 @@ chose it.
 
 > `bonded stake  ≥  maximum mintable within one reorg window`
 
-**And the scale limit is the same number, stated rather than implied.** With `k = 1`, total value
-locked is capped by total bonds pledged: ten members at 1,000 BSV is roughly **~$180k** of capacity.
-That is a proof of concept. It also means the bound is **tight rather than generous** — at `k = 1`
-the bonds *equal* what a colluding threshold could take, not more than it. §What the bond answers
-says what that implies.
+**The earlier "scale limit is the same number" claim is withdrawn.** With `k = 1` it used to say
+total value locked is capped by total bonds pledged — ten members at 1,000 BSV is roughly `~$180k` —
+but **the bond is the float**, not a capital requirement sized against the reserve, and the `~$180k`
+/ `$300k` figures are **withdrawn** (doc 26 §5). **What constrains the reserve is the Greycore
+co-signature.** §What the bond answers says what that implies.
 
 **Three tiers, in order:**
 
@@ -435,7 +443,7 @@ the bonds present when they are needed.
 
 ### What the bond answers — and what it does not
 
-The bonds are **performance bonds sized against what each side holds** — `bsv_bond ≥ k × (BSV held)`
+The bonds are **the float**, with a **coverage floor** of what each side holds — `bsv_bond ≥ k × (BSV held)`
 and `solbsv_bond ≥ k × (solBSV held)` (D14; the older "sized against `owed`" is superseded). They
 answer a member's **provable misbehaviour** — self-proving equivocation on a payout intent — making
 it punishable: the `solBSV` side is a chain fact the program seizes; the BSV side is seized by the
@@ -510,7 +518,7 @@ block-time spacing** — signal 2.
 | S1 | Clean peg-in | Deposit proven at `FLOOR`; mint staged in the vault; released after 144 blocks; fee 30 bp to the federation | Nobody |
 | S2 | Reorg **below** the deposit block, while the mint is staged | The staged tokens **burn**. Re-inclusion does **not** restore the mint by itself: the deposit identity `(txid, vout)` stays in the replay list, so it cannot be minted again until the burn also removes its replay entry (**F1**). With that entry removed, the re-mined deposit mints normally | Nobody, once F1 is implemented — the depositor keeps the BSV the reorg returned |
 | S3 | Reorg **after** a mint, depth ≥ `FLOOR` | If the mint is **still staged**, the program burns it. Only a mint that has already **released** cannot be reversed — no freeze authority, by design. New mints pause; depth and the bonds carry the rest | The federation's bonds, if depth was too low and release had happened |
-| S4 | Clean peg-out | Members sign intents; the threshold key pays; the payout is proved; the escrow burns; the fee is paid | Nobody |
+| S4 | Clean peg-out | Members sign intents; the gateway threshold key signs and the Greycore co-signs; the payout is proved; the escrow burns; the fee is paid | Nobody |
 | S5 | Payout reorged after it was proved | The payout proof no longer matches the client's window; settlement does not complete and the **escrow returns to the holder** after the deadline. Supply is unchanged. The federation has lost the BSV it paid — the bond is not reorg insurance | The federation (its reserve) |
 | S6 | No threshold signature before the deadline | Deadline expires → the **escrow is returned** to the holder, permissionlessly. Nothing mints; supply is unchanged | Nobody loses tokens; the members who failed to sign are at fault |
 | S7 | **The attack** — fraudulent mint then peg-out | The vault stages the mint; a reorg of depth ≥ `FLOOR` burns it; the intent set refuses an unauthorised payout; the bonds bound what a release can extract | The bonds, if detection fails and the mint released; otherwise nobody |
@@ -563,7 +571,7 @@ Each table records the options, the reasoning, and the verdict. The recommended 
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Bonded federation, one reserve under a threshold key** ✅ | No single key can move funds; open membership with a 1,000 BSV capital gate; one reserve to attest to; detection is a funded member job | A threshold can collude; there is now a reserve to secure; the bond set is the scale limit |
+| **Bonded federation, one reserve under a 2-of-2 script with the Greycore** ✅ | No gateway majority and no Greycore can move funds alone; Greycore-admitted members with a 1,000 BSV float per side; one reserve to attest to; detection is a funded member job | The gateway quorum plus the Greycore can collude; there is now a reserve to secure; the bond is the float, not a scale limit |
 | Per-relayer deposits, independent keys *(the previous design)* | Removes the pooled reserve, so there is no single key worth stealing and no reserve contract to audit | Fragments custody and liability across N scripts; "is the reserve whole?" becomes a question about every relayer; has no threshold or governance layer |
 | Single nominated custodian | Simplest | Nomination is a trusted choice; one key worth stealing |
 | Fully trustless reserve (covenant) | Removes the spending key entirely | Pre-mainnet and unaudited; `OP_CAT`/`OP_MUL` in-script verification. Still the destination, not a prerequisite |
@@ -580,7 +588,7 @@ Each table records the options, the reasoning, and the verdict. The recommended 
 
 | Option | Pros | Cons |
 |---|---|---|
-| **The reserve's balance and the intent set** ✅ | A payout requires enough attributed intents *and* the threshold key; there is no way to pay out more than the reserve holds; redemptions are never paused | Capacity is one pooled number; a redemption larger than the reserve returns the escrow rather than paying |
+| **The reserve's balance and the intent set** ✅ | A payout requires enough attributed intents *and* the gateway threshold key plus the Greycore co-signature; there is no way to pay out more than the reserve holds; redemptions are never paused | Capacity is one pooled number; a redemption larger than the reserve returns the escrow rather than paying |
 | Per-transaction max only | Trivial | Several large redemptions can all pass and collectively exceed the reserve, so escrows are returned rather than paid |
 | No cap | Maximum freedom | The reserve is drainable in one transaction |
 | Pause redemptions | "Bounds" the outflow | **Rejected.** Pausing outbound is taking hostages; it destroys the exit that makes governance safe (D11, D12) |
@@ -669,8 +677,9 @@ it **holds the upgrade authority**.
 ### Resolved from review
 
 6. **Fee mechanism — reversed: a governed fee, 30 bp each way.** The order book and discovered
-   fees are **removed**. A governed fee plus a bond cap solves what the book solved — discovery and
-   capacity allocation — more simply, and the book was the one subsystem that never received an
+   fees are **removed**. A governed fee solves what the book solved — discovery and
+   capacity allocation — more simply (the "bond cap" once cited here is **withdrawn**: the bond is
+   the float), and the book was the one subsystem that never received an
    adversarial review. The fee is a parameter, changed by 85% / 30 days, and it is disclosed. The
    alternatives once considered — the book, a user-set fee with open fulfilment, an exclusive epoch
    right — are recorded as rejected.
@@ -689,10 +698,11 @@ that works is an **aggregate cap per window**.
 
 But decision 4 applies to it too: it is **set conservatively as policy, not derived**, because
 deriving it needs the same two oracles we have excluded. It is a coarse backstop beneath `FLOOR`,
-not a calibrated constant — and it is secondary to the two bounds that need no oracle at all:
+not a calibrated constant — and it is secondary to the two bounds that need no price oracle at all:
 
 - **`FLOOR` set at 12 blocks**, which is what makes out-mining the honest chain expensive;
-- **the bonded stake**, which limits what a *successful* attack can extract.
+- **the Greycore co-signature**, which stops the gateway majority moving funds alone; the bonded
+  stake is the **float** and is no longer a capacity bound.
 
 All of these are **published and disclosed**. The disclosure matters more than the value: a user
 should be able to see `FLOOR`, maturity, the cap and the bonded stake before they transact.
@@ -742,15 +752,15 @@ What has and has not changed:
 - **Minting still has no privileged participant.** Advancing headers is permissionless, the program
   verifies proof of work and inclusion itself, and the mint authority is a program PDA. A forged
   header costs real work rather than one hash (A1).
-- **The reserve is a threshold, not a key.** No single member can move it, and the bond that backs
-  each member is `solBSV` the program holds and can seize.
+- **The reserve is a 2-of-2, and the gateway leg is a threshold.** No gateway majority and no
+  Greycore can move it alone, and the bond that backs each member is `solBSV` the program holds and can seize.
 - **Redemption trust is bounded and explicit.** Members sign payout intents individually; the
-  threshold key signs only once enough attributed intents exist; and a member who signs two
+  gateway threshold key signs and the **Greycore co-signs** only once enough attributed intents exist; and a member who signs two
   conflicting intents has produced their own proof of guilt. A **threshold that colludes** is the
   residual, and it is a governance matter with the 30-day exit as the answer — not something to be
   argued away.
 
-### How maturity stops a reorg mint, with no oracle and nobody to trust
+### How maturity stops a reorg mint, from the program's own headers
 
 This is the part worth stating precisely, because it is where the design succeeds:
 
@@ -823,8 +833,8 @@ the single `owed` counter and the single `bond ≥ k × owed` formula are replac
 `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, so that a bond is no longer the
 same asset, or inside the same reserve, as the liability it covers. **What is new in this revision,
 and what is not yet designed:** the exact rule that turns each side's exposure into a per-member
-attributed share. Under a threshold key every member is exposed to the whole reserve's obligations,
-so the attribution rule is part of the threshold-key design, and it is listed as an open item.
+attributed share. Under the 2-of-2 script every member is exposed to the whole reserve's obligations,
+so the attribution rule is part of the key design, and it is listed as an open item.
 
 ## Is the buffer a protocol input? — yes, and it can be checked
 
@@ -877,7 +887,7 @@ covenant track. The design now chooses the **committee, with teeth**:
 
 | Shape | Reserve key | Needs |
 |---|---|---|
-| **Pooled, threshold ECDSA key** ✅ | A threshold of members | Two-sided bonds, open membership, self-proving slashing, the exit window, and continuous publication of the ratio |
+| **Pooled, 2-of-2 with the Greycore** ✅ | The gateway threshold key plus the Greycore | Two-sided bonds (the float), Greycore-admitted membership, self-proving slashing, the exit window, and continuous publication of the ratio |
 | Pooled, single key | One key | Unacceptable — one theft drains everything |
 | **Distributed per relayer** *(the previous design)* | Each relayer's own key | Nothing beyond a seizable bond, but there is no threshold, no governance layer and no single reserve to attest to |
 | Pooled, covenant | Script enforces the burn proof | `OP_CAT`, `OP_MUL`, in-script verification — pre-mainnet and unaudited |
@@ -908,7 +918,7 @@ PEG IN — BSV to solBSV
 PEG OUT — solBSV to BSV
   1  ESCROW    solBSV moves into the program's vault; a BSV destination and deadline are set
   2  ACCEPT    members sign payout intents individually, on Solana
-  3  PAY       enough attributed intents -> the threshold key signs the BSV payment
+  3  PAY       enough attributed intents -> the gateway threshold key signs and the Greycore co-signs
   4  SETTLE    the payout is proved against the light client; the escrow burns; fee to the members
      or
   4' CANCEL    permissionless after the deadline: the escrow returns to the holder
@@ -924,17 +934,17 @@ back to the sender.** Every failure path is a return rather than a mint.
 [`14-decisions.md`](14-decisions.md) is the register; the reasoning behind each is here, with
 reversals marked. Every reversal is dated **2026-09-29**.
 
-### D1 — Who may join: **REVERSED — open membership, 1,000 BSV bond**
+### D1 — Who may join: **REVERSED — Greycore-admitted membership, 1,000 BSV bond**
 
 *Was:* specialists first, anyone-may-stake a phase-2 goal.
 
-*Now:* **anyone who posts the two-sided 1,000 BSV bonds may join.** A capital gate is a better filter than a
-nomination: it is objective, it is seizable, and it makes the member set permissionless. The
+*Now:* **the Greycore — the trusted, non-operational body — finds and admits replacement members**, and
+members post the **two-sided 1,000 BSV bonds (the float)**. The
 phase-2 deferral is gone because the gate is the thing that made it necessary.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Open entry with two-sided 1,000 BSV bonds** ✅ | Permissionless; the bonds are both the gate and the collateral; fees pro rata to stake | Capital is fragmented across members; the bond set is the scale limit |
+| **Greycore-admitted members with two-sided 1,000 BSV float** ✅ | Trusted admission with objective bond requirements; fees pro rata to stake | Requires a trusted admission body; the bond is the float, not a scale limit |
 | Specialists-only, nominated | Sophisticated parties who can price reorg and custody risk | Nomination is a trusted choice; excludes everyone else; no objective entry rule |
 | Delegated staking (retail pledges to an operator) | Deep liquidity; a familiar model | Retail cannot assess operator risk, so slashing lands on people who could not evaluate it |
 
@@ -1013,20 +1023,21 @@ survives contact with a reserve. The full reasoning is in [`23-federation.md`](2
 
 **Settled, and unchanged by the federation.** `custodied BSV ≥ outstanding solBSV` is published and
 monitored, and **the protocol cannot enforce it** — the reserve is off-chain BSV the program cannot
-read. The website shows the ratio; the program does not check it. A threshold key changes who holds
-the reserve, not what a Solana program can see.
+read. The website shows the ratio; the program does not check it. A **2-of-2 script with the Greycore**
+changes who holds the reserve, not what a Solana program can see — though the **reported
+spent-outpoint record** is what the program checks a mint against.
 
 ### D9–D13 — new and settled under the federation model
 
 | ID | Decision | Note |
 |---|---|---|
-| **D9** | **Open membership, two-sided bonds** (1,000 BSV per side), **neither inside the reserve** | Reverses D1; updated by **D14**. A member cannot leave while owing on either side |
+| **D9** | **Greycore-admitted membership, two-sided bonds** (1,000 BSV per side, the float), **neither inside the reserve** | Reverses D1; updated by **D14**. A member cannot leave while owing on either side; **leaver-shares are an open finalisation item** |
 | **D10** | **Governance: 85% of pledged coins, 30 days, live signal, holds the upgrade authority** | Reverses D7. All four numbers are parameters |
 | **D11** | **The floor is the exit, not immutability** | No immutable floor, deliberately; redemptions are never pausable. The residual — a holder who does not watch for 30 days — is disclosed |
 | **D12** | **Pause stops mints only** | A lower threshold than a governance change, and it lifts automatically. Pausing outbound is taking hostages |
 | **D13** | **Slashing is self-proving equivocation** on individually-signed intents | Copied from what RenVM actually shipped; the cryptographic half only. A colluding threshold is a governance matter |
-| **D14** | **Two-sided bonds**, one per direction, **neither inside the reserve**; the BSV side under the **collective key**, seized by the members collectively | Supersedes the single-bond formula. Slashing pays the slashers from the seized bond |
-| **D15** | **Threshold ECDSA, not a multisig script** — the reserve is an ordinary P2PKH address | Corrects audit **F10**: the code was right and the description was wrong. `fed.threshold` sizes nothing on-chain |
+| **D14** | **Two-sided bonds, the float**, one per direction, **neither inside the reserve**; the BSV side under the **collective key**, seized by the members collectively | Supersedes the single-bond formula. The `k × (held)` line is a coverage floor, **not a capacity ceiling**; slashing pays the slashers from the seized bond |
+| **D15** | **A 2-of-2 `OP_CHECKMULTISIG`** — the gateway threshold key plus the **Greycore**'s | **Reverses audit F10:** with the Greycore co-signing, the deposit script genuinely is a multisig, so `is_p2pkh` must change and `DepositScript::SPACE` must grow to ~71 bytes. `fed.threshold` = 4-of-N, `N` open |
 | **D16** | **Genesis: a BSV-side bond** | No `solBSV` needs to exist first. A capped, explicitly-unbonded first mint is a documented later option, not chosen |
 
 ## Audit findings
@@ -1041,9 +1052,9 @@ the federation model changes what the finding means.
 | **A1** | **The difficulty target was read from the header being checked.** `bits` came from the submitted header and `check_daa` returned `true` unconditionally, so the target was attacker-chosen and proof of work was vacuous — anyone could append headers and mint with no hashpower. Every "forging `FLOOR` blocks must out-mine the chain" claim here was false against the code. **Regtest masked it**: `0x207fffff` is already the largest encodable target, so no easier one exists there | critical | **Fixed** — the target is now computed per block by cw-144, verified 324/324 against real mainnet headers. Test added |
 | **A2** | `set_checkpoint` and `set_paused` were **unauthenticated**: `authority` was a bare `Signer` compared to nothing, so any key could rewrite the trusted root or halt minting | critical | **Fixed** — authority stored, `has_one` enforced. The deploy-time race on `initialize` remains (P1) |
 | **A3** | `verify_deposit` never constrained `mint`, so anyone could submit a valid public deposit against a counterfeit mint and burn the replay slot — stranding the real deposit for ~0.001 SOL | critical | **Fixed** — pinned to the `[b"mint"]` PDA |
-| **A4** | The staking buffer is off-chain BSV — unverifiable and unseizable, so `S ≥ M` was unenforceable as written | critical | **Superseded by the federation model.** The bonded stake is `solBSV` the program holds and can seize, and the scale limit caps value locked by bonds pledged; the reserve's BSV itself is still off-chain and unreadable, and is still monitored rather than enforced (D8) |
+| **A4** | The staking buffer is off-chain BSV — unverifiable and unseizable, so `S ≥ M` was unenforceable as written | critical | **Superseded by the federation model.** The bonded stake is `solBSV` the program holds and can seize — and it is the **float**, not a scale limit (that claim is withdrawn); the reserve's BSV itself is still off-chain and unreadable, and is still monitored rather than enforced (D8) |
 | **A5** | The **program upgrade authority is an unconditional mint voucher.** Safety parameters are Rust `const`s, so "loosening needs a new program" and "ship a new program" are the same power | critical | **Owned by governance now (D10).** Governance holds the upgrade authority, so the power is named rather than unowned; the 30-day live signal and the never-pausable exit are what bound it. It is not removed |
-| **A6** | The peg-in destination is a **P2PKH key, not a covenant** — the entry point for the whole reserve is a raw key | critical | **Reversed by design decision.** The reserve is pooled under a **threshold ECDSA key** (D9/D15); no single member can move it, and the key is never assembled in one place. **This is correct, not a defect** — the P2PKH check is right and the reserve address does not change when membership changes (audit F10). The covenant track remains the destination |
+| **A6** | The peg-in destination is a **P2PKH key, not a covenant** — the entry point for the whole reserve is a raw key | critical | **Reversed by design decision, and then the P2PKH shape was itself reversed.** The reserve is pooled under a **2-of-2 `OP_CHECKMULTISIG`** (D9/D15) — the gateway threshold key plus the **Greycore**'s, both required. **F10 is reversed:** `is_p2pkh` must change and `DepositScript::SPACE` must grow to ~71 bytes. The covenant track remains the destination |
 | **A7** | **The replay key included `height`**, so a deposit re-included at a different height after a reorg minted twice | serious | **Fixed** — identity is `(txid, vout)`; height stored only for pruning. Confirmed in code |
 | **A8** | The staging escrow is **not implemented**, and `UsedDeposits` stores no recipient or amount, so reversing N credited mints needs an off-chain indexer | serious | **Open** — the vault is designed, not built |
 | **A9** | `MAX_USED = 200` against a `WINDOW` of 192 is a cheap peg-in shutdown; `MIN_PEG_IN`/`MAX_PEG_IN` are unimplemented | serious | **Decided (P5)** — `MIN_PEG_IN = 1 BSV` plus a **nullifier PDA** per minted deposit, which removes the ceiling. Not built |
@@ -1070,8 +1081,9 @@ than open questions; each is a known simplification or an unbuilt part of the cu
 | Deferred | From | Note |
 |---|---|---|
 | **The genesis bootstrap — decided** | D16 | Members post a **BSV-side bond at genesis**, so no `solBSV` needs to exist first. A capped, explicitly-unbonded first mint is a documented later option, not chosen |
-| **Sharding the threshold key** | D9 | One key across all members, or several groups with their own? Shards contain theft and latency at the cost of coordination |
-| **The threshold key's shape** | D9/D15 | Key generation and signing protocol for the **threshold ECDSA** key, and the attribution rule that turns each side's exposure into a per-member share. The *value* is provisional `3-of-5`, `open` (doc 24) |
+| **Sharding the gateway key** | D9 | One gateway key across all members, or several groups with their own? Shards contain theft and latency at the cost of coordination |
+| **The key design** | D9/D15 | Key generation and signing protocol for the gateway **threshold ECDSA** key and the **Greycore**'s, and the attribution rule that turns each side's exposure into a per-member share. `fed.threshold` = **4-of-N** with `N` deferred; `fed.greycore_size` / `fed.greycore_threshold` `open` |
+| **Leaver-shares** | D9 | A departing member retains a valid share, so the effective threshold degrades with churn. Key rotation (the reserve moves and `deposit_script` changes) or proactive re-sharing (needs the leaver's cooperation). Not finalised in the PoC |
 | **The vault's re-audit** | — | The current vault design carries unfixed findings; it should be re-audited against this model, since several findings came from trying to enforce BSV-side behaviour the federation now handles differently |
 | **The unbonding period** | D9 | Longer than the redemption deadline plus the challenge window; the value is a parameter |
 | **Bounding the unbacked path** | D6 | Whether an explicit exposure cap is wanted before the bond set is large enough (doc 23, question 3) |

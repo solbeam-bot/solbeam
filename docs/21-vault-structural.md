@@ -93,15 +93,25 @@ deliberate exception, and it is discussed under §New defect N3 rather than wave
 
 ### BSV side (designed)
 
-**One deposit script for the whole federation** — the reserve address, an ordinary **P2PKH**
-address whose key is a **threshold ECDSA** key, never assembled in one place. It is a threshold
-**key**, not a threshold script: there is no multisig and no script that changes when membership
-changes (doc 23, *Threshold ECDSA*; audit F10).
+**One deposit script for the whole federation** — the reserve address, a **2-of-2
+`OP_CHECKMULTISIG`**:
+
+```
+OP_2  <gateway threshold key>  <greycore key>  OP_2  OP_CHECKMULTISIG
+```
+
+One leg is the gateway's **threshold ECDSA** key, never assembled in one place; the other is the
+**Greycore**'s key. **Both must sign**, so no gateway majority and no Greycore can move funds alone,
+and the Greycore polices every reserve spend (doc 23, *The reserve script*; doc 26 §3).
 That replaces the per-relayer registered scripts of docs 19–21 and reverses decision **P8**
 ("every deposit must pay a registered relayer's script"); the reversal is recorded in
-§What dissolved, T12. The script is a **parameter under governance**, and changing it changes
-which deposits are acceptable to a future mint — which is the new hazard recorded as
-§New defect N5.
+§What dissolved, T12.
+
+**It is a multisig, and that reverses audit F10 here.** With a Greycore the deposit script genuinely
+is a 2-of-2, so `is_p2pkh` **must change** and `DepositScript::SPACE` **must grow** to ~71 bytes,
+against the current 38. The script is a **parameter under governance**, and changing it — including
+changing a **Greycore key** — changes which deposits are acceptable to a future mint, which is the
+hazard recorded as §New defect N5.
 
 ---
 
@@ -294,7 +304,7 @@ precisely because it is weaker in one direction and stronger in another.
 | | |
 |---|---|
 | **What is gone** | The claim that there is no single key worth stealing. There is now one reserve, and a threshold of members can move it |
-| **What replaces it** | No **single** member can move it — threshold ECDSA: the address is ordinary P2PKH and the key is shared; misbehaviour by an individual member produces their own signed proof; and the **two-sided bonds** must satisfy `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, so a member cannot leave while owing |
+| **What replaces it** | No single member — and no gateway majority — can move it: the reserve script is a **2-of-2 `OP_CHECKMULTISIG` with the Greycore**, the gateway key is threshold ECDSA and never assembled in one place, and misbehaviour by an individual member produces their own signed proof. The **two-sided bonds** are the float and carry a `k × (held)` coverage floor, so a member cannot leave while owing |
 | **What it does not cover** | A **threshold** of members signing something invalid. Every signature is on record, so it is attributable — but it is a governance matter, not a cryptographic one, and doc 23 says so |
 | **The honest second gap** | A threshold can also simply **refuse to sign** a legitimate redemption. Silence leaves no signed artifact, so nothing is slashable and no challenger can prove anything. The holder is not robbed — `cancel_redeem` returns the escrow after the deadline — but they are denied exit-to-BSV while the deadline runs. Iterated, that is a soft pause on redemptions, which doc 13 says can never be paused. See §New defect N2 |
 
@@ -363,7 +373,7 @@ instruction per member per redemption. This interacts with T11's rent increase a
 paying — but the design should state the cost and the cap, because the retired per-relayer
 counter was an attempt to avoid precisely this and it failed for other reasons.
 
-### N5 — The deposit script is the mint gate, and it is only a script · **high, unspecified**
+### N5 — The deposit script is the mint gate, and it is only a script · **resolved: the federation reports spent outpoints**
 
 `verify_deposit` proves an output paid the deposit script; it does not prove that output is
 **still unspent**. That was tolerable when each relayer had its own float and a bond. Now the
@@ -372,12 +382,17 @@ members sign a reserve transaction that spends a deposit output — a consolidat
 anything — the deposit remains provable and mintable, and there is no on-chain record that its
 BSV has left. The mint is then unbacked.
 
-The fix is to **anchor minting to an unspent output**, which means either a Solana record of
-spent outpoints that the federation must maintain, or a rule that reserve spends never touch
-unreleased deposit outputs. **Neither is designed.** This is the residual of the old
-naked-spend challenge (W3): the challenger was removed with the per-relayer model, and
-nothing replaced the invariant it protected. It is the most serious defect in this re-audit
-after N1.
+**Resolved by decision 3.** Solana cannot read the BSV UTXO set, so the federation's software
+**reports spent deposit outpoints to Solana**, and the program **checks mints against that record**.
+The federation is an **accepted oracle for what Solana cannot see** — and this is **not a new trust
+assumption**, because the federation is already trusted with the reserve: a party that can take the
+whole reserve is not meaningfully constrained by an honesty request. The honest restatement is
+**"The program verifies deposits. The federation reports backing."**
+
+The alternative — a rule that reserve spends never touch unreleased deposit outputs — is **not
+adopted**. This is the residual of the old naked-spend challenge (W3): the challenger was removed
+with the per-relayer model, and the reported outpoint record is what replaced the invariant it
+protected. The record's **format and write path are unspecified** and are carried as an open item.
 
 ### N6 — The bond is denominated in the thing it protects · **partly answered by the two-sided bonds**
 
@@ -390,9 +405,11 @@ seizable on Solana, so the devaluation argument still applies to that half — w
 is **held under the collective key and seized by the members collectively**, so it is enforcement by
 a **collective action by the majority** rather than an automatic on-chain rule (doc 13, *The two
 bonds*). This does not make slashing useless — it is the difference
-between recovery and full recovery — but the capacity claim ("ten members at 1,000 BSV is roughly
-~$180k") assumes a price that an incident can move. **The bonds answer attribution; they do not fully
-answer loss, and the document should not imply that they do.**
+between recovery and full recovery. **The capacity claim that used to sit here — "ten members at
+1,000 BSV is roughly ~$180k" — is withdrawn:** the bond is the float, not a capital requirement sized
+against the reserve, and both the `~$180k` and `$300k` figures are withdrawn (doc 26 §5). **The bonds
+answer attribution and keep transfers liquid; they do not fully answer loss, and the document should
+not imply that they do.**
 
 ---
 
@@ -402,7 +419,8 @@ answer loss, and the document should not imply that they do.**
    `WINDOW − MATURITY` is the detection budget and is only 48 blocks at the proposed
    values — zero at the maximum committed depth, because the clocks coincide.
 2. **`N1` — the peg-in fee's physical location** must be specified before vault code.
-3. **`N5` — the deposit-script spend problem**: minting is not anchored to an unspent output.
+3. **`N5` — resolved in principle, format unspecified.** Minting is anchored to the federation's
+   **reported spent-outpoint record** (decision 3); what remains is the record's format and write path.
 4. **The payout proof.** The destination address must be recoverable from the payout output
    script for `finalize_redeem` to verify it, and the same Merkle machinery must be reused.
    Not designed in detail.
@@ -428,8 +446,9 @@ answer loss, and the document should not imply that they do.**
 ## What this document does not claim
 
 - It does not claim the vault is sound to build. It classifies the history, states the design
-  the model implies, and names six new defects, of which **N1 and N5 are unresolved and
-  critical**.
+  the model implies, and names six new defects, of which **N1 is unresolved and critical**, **N5 is
+  resolved in principle** by the reported spent-outpoint record (format unspecified), and **N6's
+  capacity claim is withdrawn**.
 - It does not claim the federation exists. **Nothing in §The federation side is built.**
 - It does not claim the built code implements the vault. `verify_deposit` today mints gross,
   straight to the depositor, with no escrow, no marker, no maturity and no fee.

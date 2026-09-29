@@ -44,7 +44,7 @@
 |---|---|---|
 | **BSV light client** (Solana program) | **Built** | Holds a checkpoint plus a rolling window of **192 BSV headers**. It answers one question — *is this transaction in this block, and is that block still canonical?* — by verifying proof-of-work and Merkle inclusion. Difficulty is implemented as **cw-144**, the rule the SV Node's `src/pow.cpp` uses, replayed against real mainnet headers at **324/324 exact**. Each of the 52-byte records carries the block hash, its cumulative chainwork and its timestamp, which is what the rule consumes. **This is what makes minting permissionless: the proof is the authorisation** |
 | **The vault** (program-owned token account + a record per pending item) | **Designed, not built** | **Every mint lands here first, never with the depositor.** The program releases the staged `solBSV` once `MATURITY` passes with the deposit still canonical, or **burns** it if a reorg is followed. The release decision is made from the program's own stored headers — it compares the hash stored when the deposit was proven against the hash it holds now — so it needs no reporter. Because the tokens are in an account the program owns, releasing or burning is disposing of what it holds, which is what makes a mint reversible **without a freeze authority**. The current design carries unfixed audit findings and is being re-audited against this model; see [`21-vault-structural.md`](21-vault-structural.md) |
-| **The federation** — bonding, threshold custody, governance, slashing | **Designed, not built** | A set of **open-membership, bonded members** (**two-sided bonds**, 1,000 BSV per side) who run software rather than exercising judgement. Each runs its own light client, relays headers, **signs payout intents individually** (which is what makes misbehaviour self-proving), and challenges theft. The reserve is held under a **threshold ECDSA key**, so **no single member can move it**. **A bond can be seized by proving misbehaviour on-chain** — the program seizes the `solBSV` side, the members seize the BSV side collectively — and that, not the absence of trust, is what protects the reserve. See [`23-federation.md`](23-federation.md) |
+| **The federation** — bonding, Greycore co-signature, governance, slashing | **Designed, not built** | A set of **Greycore-admitted, bonded members** (**two-sided bonds, the float**, 1,000 BSV per side) who run software rather than exercising judgement. Each runs its own light client, relays headers, **signs payout intents individually** (which is what makes misbehaviour self-proving), and challenges theft. The reserve is held under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the **Greycore**'s — so **no gateway majority and no Greycore can move it alone**. **A bond can be seized by proving misbehaviour on-chain** — the program seizes the `solBSV` side, the members seize the BSV side collectively — and that, not the absence of trust, is what protects the reserve. See [`23-federation.md`](23-federation.md) |
 | **The website** | Not built | Parameter display, status and the external metrics. **No consensus role at all** — it can be replaced or ignored without the program noticing |
 
 `solBSV` itself is a classic SPL token: 8 decimals, **no freeze authority**, its mint authority a
@@ -83,16 +83,18 @@ verify than to run, but the tooling is unaudited and, in the cheapest cases, res
 
 ## Where the BSV sits
 
-**One reserve, under a threshold ECDSA key.** The BSV lives at the federation's reserve address — an
-ordinary **P2PKH** address — spendable only by a **threshold signature** the members produce. The key
-is **never assembled in one place**; there is a threshold **key**, not a threshold script (audit
-F10). Three properties matter, and they are the whole of the custody story:
+**One reserve, under a 2-of-2 `OP_CHECKMULTISIG`.** The BSV lives at the federation's reserve script —
+the gateway's **threshold ECDSA** key plus the **Greycore**'s key — spendable only when **both** sign.
+The gateway key is **never assembled in one place**. **The deposit script genuinely is a multisig, which
+reverses audit F10:** `is_p2pkh` must change and `DepositScript::SPACE` must grow to ~71 bytes (from
+38). Three properties matter, and they are the whole of the custody story:
 
-- **No single member can move it.** That is a property of the shared key, not a promise about
-  behaviour, and not a script that enforces it.
-- **It is trusted, and that is stated.** A threshold of members who collude can take the reserve,
-  and the maximum loss is the entire non-member supply. The design does not pretend otherwise; it
-  **bounds** the assumption with two-sided bonds and with proofs anyone can submit, and it makes the
+- **No gateway majority — and no Greycore — can move it alone.** That is a property of the 2-of-2
+  script and the shared gateway key, not a promise about behaviour.
+- **It is trusted, and that is stated.** The gateway quorum **acting with the Greycore** can take the
+  reserve, and the maximum loss is the entire non-member supply. The design does not pretend otherwise;
+  it **bounds** the assumption with the Greycore co-signature, two-sided bonds and proofs anyone can
+  submit, and it makes the
   theft **visible** by publishing the reserve and supply continuously (doc 07).
 - **The bonds are two-sided and outside the reserve.** The mint side is native BSV held outside the
   reserve **under the collective key, not the member's own**; the redeem side is `solBSV`, seized by

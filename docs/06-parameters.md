@@ -18,10 +18,11 @@ is the point of the governance design — except where the note says otherwise.
 |---|---|---|---|
 | **Mint fee** | **30 bp**, governed | economic | Replaces the discovered order-book fee (D2, superseded) |
 | **Redeem fee** | **30 bp**, governed | economic | Same fee in the other direction |
-| **Bond — mint side (`fed.bond_mint`)** | **1,000 BSV**, BSV, **outside the reserve**, under the **collective key** | **safety** | Sized against the BSV held. **Held under the collective key, not the member's own**, and seized by the **members collectively** with a threshold-signed transaction; slashing pays the slashers from it. A collective action by the majority, not an automatic rule (doc 13, *The two bonds*) |
-| **Bond — redeem side (`fed.bond_redeem`)** | **1,000 BSV**, posted as `solBSV` | **safety** | Sized against the `solBSV` held; must be seizable on Solana. **Neither bond sits inside the reserve** |
-| **Bond multiple `k`** | **1** | **safety** | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`. The old single formula `aggregate_bond ≥ k × non_bonded_supply` is **superseded** (D14) |
-| **Signing threshold (`fed.threshold`)** | **3-of-5 provisional**, `open` | **safety** | `t` of `n` for the **threshold ECDSA** key. A **signing-protocol** parameter: it sizes nothing on-chain |
+| **Bond — mint side (`fed.bond_mint`)** | **1,000 BSV**, BSV, **outside the reserve**, under the **collective key** | **safety** | **The bond is the float** — working capital for transfers — not a capital requirement sized against the reserve and not a capacity ceiling. **Held under the collective key, not the member's own**, and seized by the **members collectively** with a threshold-signed transaction; slashing pays the slashers from it. A collective action by the majority, not an automatic rule (doc 13, *The two bonds*) |
+| **Bond — redeem side (`fed.bond_redeem`)** | **1,000 BSV**, posted as `solBSV` | **safety** | **The float**, seizable on Solana. **Neither bond sits inside the reserve**; the `k` line is a coverage floor, not a capacity ceiling |
+| **Bond coverage floor `k`** | **1** | **safety** | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, checked on mint and exit. A **solvency floor, not a capacity ceiling**. The old single formula `aggregate_bond ≥ k × non_bonded_supply` is **superseded** (D14), and the `n/t` capacity arithmetic built on `k` is **withdrawn** (doc 26 §5) |
+| **Gateway signing threshold (`fed.threshold`)** | **4-of-N, `N` open** — the number is deferred | **safety** | `t` of `n` for the gateway **threshold ECDSA** key. One leg of the reserve's **2-of-2 `OP_CHECKMULTISIG`** with the Greycore; the gateway key emits one signature |
+| **Greycore size / threshold** | `fed.greycore_size` / `fed.greycore_threshold`, both **`open`** | **safety** | The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose who do not run the reserve. **The Greycore co-signs every reserve spend** and **finds and admits replacement members** |
 | **Governance threshold** | **85% of pledged coins** | **safety** | The proposal bar |
 | **Governance delay** | **30 days** | **safety** | Signal time between passing and taking effect. **This is the exit window** |
 | **Signal** | **live from the moment it is raised** | **safety** | The proposal is visible while it is only a proposal |
@@ -132,7 +133,7 @@ what became of each rather than rewriting it silently.
 | **P5** | `RECENT_REORG_WINDOW` = 12 h, enforced-or-monitored undecided | **Superseded.** The vault compares stored hashes; there is no separate window parameter |
 | **P6** | `TIP_STALENESS` = 2 h | **Superseded** as a parameter; `set_paused` is the built authority-gated safety valve when the tip stops advancing |
 | **P7** | `MIN_PEG_IN` = 10 BSV | **Superseded** — an economic parameter, no longer specified |
-| **P8** | `MAX_PEG_IN` = 10,000 BSV | **Superseded.** The real bound is the bond: total value locked is capped by total bonds pledged |
+| **P8** | `MAX_PEG_IN` = 10,000 BSV | **Superseded.** The nominal bound is the bond's coverage floor; the earlier "total value locked is capped by total bonds pledged" is **withdrawn** — the bond is the float, and the reserve is constrained by the Greycore co-signature |
 | **P9** | `MAX_PEG_OUT` = 10,000 BSV | **Superseded.** A redemption is bounded by the reserve and the payout path, not a per-transaction number |
 | **P10** | `HOT_FLOAT_CAP` | **Removed with the pooled float.** There is one reserve under a **threshold ECDSA key**, and the two-sided bonds are the bound |
 | **—** | bond `k` = 1 (D5) | **`k = 1` kept, formula superseded** (D14): two-sided bonds replace `bond ≥ k × owed` |
@@ -162,7 +163,9 @@ before they change.**
 
 | Unspecified | Note |
 |---|---|
-| **The signing threshold** | Provisional **3-of-5**, `open`. It sizes nothing on-chain, but every "no single member" claim depends on it (doc 24) |
+| **The signing threshold** | **`fed.threshold` = 4-of-N**, `N` a variable and the number deferred. One leg of the reserve's 2-of-2 script with the Greycore (doc 24) |
+| **The Greycore** | `fed.greycore_size` and `fed.greycore_threshold`, both `open` — the second signer set on the reserve script |
+| **Leaver-shares** | An open finalisation item: a departing member retains a valid share, so the effective threshold degrades with churn. Key rotation or proactive re-sharing (doc 23) |
 | **Unbonding period** | Must outlast the payout deadline; no default |
 | **Pause threshold and duration** | "A majority of pledged coins" and "N days" — neither is fixed |
 | **Challenge bounty share** | How a seizure splits between the wronged holder and the challenger |
@@ -207,9 +210,12 @@ The book, matching and market-making were removed, so this document absorbs the 
 survived them.
 
 - **The fee is 30 bp to mint and 30 bp to redeem**, set by governance — not discovered.
-- **Capacity is capped by bonds pledged.** With `k = 1` each **two-sided bond** must cover what its
-  side holds, so total value locked is bounded by total bonded capital. Ten members at 1,000 BSV is
-  roughly **~$180k** — a proof of concept, stated plainly.
+- **The bond is the float, and it does not cap capacity.** The two-sided bonds carry a **coverage
+  floor** (`k = 1` per side), checked on mint and exit, but the earlier claim that total value locked
+  is bounded by bonded capital is **withdrawn** — as is its `~$180k` figure. Sizing the bond against
+  the reserve produced an impossible inequality twice, and the `n/t` multiple is RenVM's own
+  bribery-cost calculation, which does not apply to a bond that is the float (doc 26 §5). **What
+  constrains the reserve is the Greycore co-signature**, not the bond.
 
 There is no on-chain market, no matching and no liquidity mining. Any market for `solBSV` exists
 outside this system.

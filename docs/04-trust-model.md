@@ -22,16 +22,16 @@ mode this document exists to prevent.
 
 | | |
 |---|---|
-| **Minting** | **Trustless, given the deployed program.** A Solana program verifies BSV proof of work (cw-144) and Merkle inclusion directly. **No member's signature, no committee vote and no oracle mints anything.** The program's **upgrade authority** is the one exception — it can re-anchor the checkpoint — so production must hold it under a threshold and a timelock |
+| **Minting** | **The deposit is verified; the backing is reported.** A Solana program verifies BSV proof of work (cw-144) and Merkle inclusion directly. **The program verifies deposits. The federation reports backing** — Solana cannot read the BSV UTXO set, so the software reports **spent deposit outpoints** and the program checks mints against that record. Not a new trust assumption: the federation is already trusted with the reserve. The program's **upgrade authority** is the other exception — it can re-anchor the checkpoint — so production must hold it under a threshold and a timelock |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. **A reorg is a fact about headers, not a report from anyone** |
-| **The reserve** | **Trusted, and bounded.** BSV under a **threshold ECDSA** key held by the federation — an ordinary P2PKH address whose key is never assembled in one place. No single member can move it. What protects you is a **bond that anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
+| **The reserve** | **Trusted, and bounded.** BSV under a **2-of-2 `OP_CHECKMULTISIG`** — the federation's **threshold ECDSA** gateway key (never assembled in one place) **and** the **Greycore**'s key, and **both must sign**. No gateway majority and no Greycore can move it alone. What protects you is a **bond that anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
 
 | Property | Status |
 |---|---|
 | Backing (1 `solBSV` = 1 BSV) | `custodied BSV ≥ outstanding solBSV` — **monitored, not enforced.** The reserve is off-chain BSV the program cannot read (D8). The mint path enforces its half of it today |
-| Reserve custody | **Threshold ECDSA key.** The address is ordinary P2PKH; no single member can move it. *Designed, not built* |
-| Membership | **Open.** Two-sided bonds, software rather than manual approval. *Designed, not built* |
-| Bonds | **Two-sided, one per direction, neither inside the reserve**: `bsv_bond ≥ k × (BSV held)` in native BSV held outside the reserve, and `solbsv_bond ≥ k × (solBSV held)` in `solBSV`. **The BSV-side bond is held under the collective key and seized by the members collectively** (the slashers are paid from it); the `solBSV` side is seized by the program automatically. `k = 1`; no oracle. *Designed, not built* |
+| Reserve custody | **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the Greycore's. No gateway majority and no Greycore can move it alone. *Designed, not built* |
+| Membership | **Admitted by the Greycore** — the trusted, non-operational body finds and admits replacement members. Two-sided bonds, software rather than manual approval. *Designed, not built* |
+| Bonds | **Two-sided, one per direction, neither inside the reserve, and the bond is the float** — working capital for transfers, with `k × (held)` a coverage floor rather than a capacity ceiling. `bsv_bond ≥ k × (BSV held)` in native BSV held outside the reserve; `solbsv_bond ≥ k × (solBSV held)` in `solBSV`. **The BSV-side bond is held under the collective key and seized by the members collectively** (the slashers are paid from it); the `solBSV` side is seized by the program automatically. `k = 1`; no price oracle; the `n/t` capacity arithmetic and the `~$180k`/`$300k` figures are **withdrawn**. *Designed, not built* |
 | Slashing | **Self-proving equivocation** on individually-signed payout intents. *Designed, not built* |
 | Reversibility | The vault: a program-owned account, so a staged mint can be burned or released with **no freeze authority**. *Designed, not built* |
 | Censorship of mints | **None** — anyone can mint, for anyone |
@@ -93,9 +93,9 @@ script-expressible.
 So at the instant of redemption, *some key must exist*. This is a property of the two chains, not a
 shortcut in the design. SOLBEAM's response is to make that key:
 
-- **a threshold, not a key** — no single member can move the reserve, so the object worth
-  compromising is a quorum rather than one operator, and it is a threshold **ECDSA key** rather than
-  a script;
+- **a 2-of-2 script, with the gateway leg a threshold** — no gateway majority and no Greycore can move
+  the reserve, so the object worth compromising is the gateway quorum **plus** the Greycore, and the
+  gateway leg is a threshold **ECDSA key**;
 - **bounded by bonds that cover their own sides** — the redeem side is `solBSV`, the same unit as that
   exposure; the mint side is native BSV held **outside the reserve**, so neither bond is funded by a
   deposit into the thing it covers, and no BSV price move shrinks either relative to what it protects;
@@ -205,8 +205,8 @@ problem because nobody has to solve it. *Designed, not built.*
 | Fake deposit proof | **Rejected by the light client** — proof of work under cw-144 and Merkle inclusion. The retarget is implemented, so a real chain is followed rather than stalled; the open item is X3, that the rule is hard-coded |
 | Mint staged, then a reorg is followed | The vault **burns** the staged tokens, from its own stored header hash. The depositor's BSV is reorged away with the deposit, and they end where they started. Nobody else is affected. *Designed, not built* |
 | Reorg after the vault has released | `FLOOR` (12 blocks) and `MATURITY` (144 blocks) are what make out-mining the honest chain cost more than the fraud is worth |
-| A single member tries to move the reserve | It cannot: the reserve is under a **threshold ECDSA key** — an ordinary P2PKH address whose key is never assembled in one place. *Designed, not built* |
-| A **threshold** of members colludes | The assumed risk, and the one the whole design is bounded against. **Two-sided bonds, neither inside the reserve** (`k = 1`; the `solBSV` side seized by the program, the BSV side seized collectively by the members) are what make it expensive; equivocation is self-proving, and **continuous publication** makes the theft visible. It is **not** made impossible |
+| A single member — or the gateway majority — tries to move the reserve | It cannot alone: the reserve is under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the **Greycore**'s — and **both must sign**. *Designed, not built* |
+| The gateway quorum colludes **with the Greycore** | The assumed risk, and the one the whole design is bounded against. The **2-of-2 co-signature** means the gateway majority alone cannot move funds; a colluding Greycore is the residual. **Two-sided bonds** (the float, with a coverage floor; the `solBSV` side seized by the program, the BSV side seized collectively by the members) price it, equivocation is self-proving, and **continuous publication** makes the theft visible. It is **not** made impossible |
 | A member signs two conflicting payout intents | **Self-proving.** Two signatures are the entire proof; anyone can submit and take the bounty. *Designed, not built* |
 | Nobody fulfils a redemption | The deadline passes and the escrow is **returned to the holder**, permissionlessly. Supply is unchanged and the bond is not additionally transferred, because the returned escrow already makes them whole |
 | A payout is reorged away | It must be paid again; if it is not, the deadline returns the escrow. An ordinary reorg of a valid signed transaction self-heals, because the transaction returns to the mempool and re-mines |
@@ -250,8 +250,8 @@ cannot be hidden.**
 **This is also where the earlier "naked option" argument went.** That analysis asked what happens
 when a key holder spends an idle float with no redemption attached, and answered: the float is the
 operator's own money, the bond does not cover it, and no `k` reaches it. Under the federation that
-object no longer exists — **there is one reserve, and it is under a threshold key rather than in
-someone's hot wallet** — so the question is no longer about a float at all. It is the quorum
+object no longer exists — **there is one reserve, and it is under a 2-of-2 script with the Greycore
+rather than in someone's hot wallet** — so the question is no longer about a float at all. It is the quorum
 question above, and it is answered the same way: state it, bound it, do not pretend it is closed.
 
 ## Why the bonds are denominated in what they protect, not a stablecoin
@@ -303,21 +303,21 @@ The threshold signature exists only because a BSV key cannot verify a Solana bur
 `OP_CAT` and `OP_MUL` are active, script size is effectively unlimited, and in-script Groth16/STARK
 verification has been demonstrated (BSVM, MIT, pre-mainnet and unaudited).
 
-If it works, there is no threshold key, no bond against custody and no price mismatch — the reserve
+If it works, there is no threshold key, no Greycore co-signature, no bond against custody and no price mismatch — the reserve
 releases itself against a valid proof. That is the research track, and it is why SOLBEAM keeps the
 redemption authority behind a replaceable boundary: the token, the mint path and the light client do
 not change when it lands.
 
-Until it lands, the threshold key is the honest answer, and the two-sided bonds are what bound it.
+Until it lands, the gateway threshold key plus the **Greycore co-signature** is the honest answer, and the two-sided bonds are what price misbehaviour.
 
 ## What we ask you to trust — plainly
 
 1. **The checkpoint.** The light client starts from a block hash taken on faith. It is published,
    buried deep, and the only thing not proven.
-2. **The reserve threshold.** BSV sits under a threshold key. **No single member can move it**, but
-   a quorum that colludes can. What bounds that is the bond and the on-chain proof of
-   misbehaviour — not the absence of trust. There is no covenant, and BSV has no timelocks to fall
-   back on.
+2. **The reserve script.** BSV sits under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway threshold key
+   plus the Greycore's. **No gateway majority and no Greycore can move it alone**, but both colluding
+   can. What bounds that is the co-signature, the bond, and the on-chain proof of misbehaviour — not
+   the absence of trust. There is no covenant, and BSV has no timelocks to fall back on.
 3. **The code being correct.** Not independently audited. Our own adversarial review found three
    critical defects fixed (a vacuous proof-of-work check, an unauthenticated checkpoint path, an
    unconstrained mint) and two serious ones (a replay key that double-minted after a reorg, and a

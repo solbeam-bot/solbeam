@@ -13,23 +13,23 @@ order book, no leverage. Branding **SOLBEAM**, ticker `solBSV`, 8 decimals, MIT.
    a transaction in a block.
 2. **A vault.** Every mint lands in a program-owned token account rather than the depositor's. It
    leaves when the program is satisfied, and it can be burned if it isn't.
-3. **A bonded federation** holding the reserve under a **threshold key**, relaying headers, signing
-   payouts and challenging theft. **Open membership, 1,000 BSV bond**; members run software, not
+3. **A bonded federation** holding the reserve under a **2-of-2 script with the Greycore**, relaying headers, signing
+   payouts and challenging theft. **Greycore-admitted membership, 1,000 BSV float**; members run software, not
    judgement.
 
 ## What is trustless, and what is not
 
 | | |
 |---|---|
-| **Minting** | **Trustless, given the deployed program.** The program verifies BSV proof of work and Merkle inclusion directly: no member's signature, no committee vote and no oracle mints anything. **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked, and the 30-day exit is the real guarantee |
+| **Minting** | **The deposit is verified; the backing is reported.** The program verifies BSV proof of work and Merkle inclusion directly. **The program verifies deposits; the federation reports backing** — it reports spent deposit outpoints because Solana cannot read the BSV UTXO set; not a new trust assumption. **The program's upgrade authority is the other exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked, and the 30-day exit is the real guarantee |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone |
-| **The reserve** | **Trusted, and bounded.** The BSV is under a threshold key, so no single member can move it. What protects you is a **bond anyone can seize by proving misbehaviour on-chain** |
+| **The reserve** | **Trusted, and bounded.** The BSV is under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the **Greycore**'s, both required — so no gateway majority and no Greycore can move it alone. What protects you is a **bond anyone can seize by proving misbehaviour on-chain** |
 
-**The one trust assumption: a threshold of federation members do not collude.** It is not
-eliminated; it is bounded — by a bond that must cover the non-bonded supply, by an exit window
-that never closes, and by proofs anyone can submit. It does **not** make collusion unprofitable:
-the bond is `solBSV`, so a colluding threshold recovers its own bond and keeps the honest members'
-bonds and the non-member supply with it.
+**The one trust assumption: the gateway threshold and the Greycore do not collude.** It is not
+eliminated; it is bounded — by the **Greycore co-signature** (the gateway majority cannot move funds
+alone), by an exit window that never closes, and by proofs anyone can submit. It does **not** make
+collusion unprofitable: a colluding gateway-plus-Greycore can take the reserve, and the maximum loss
+is the entire non-member supply.
 
 ## Governance, and the floor that is an exit
 

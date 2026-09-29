@@ -26,19 +26,25 @@ two conflicting things has produced **their own proof of guilt**, which anyone c
 
 ## Membership
 
-**Open.** Anyone who posts the bonds may join — unlike Zcash's federation, whose membership is
-fixed. Open entry with a capital gate, so the set is permissionless but not anonymous.
+**Admission is the Greycore's job.** The **Greycore** — the trusted, non-operational body — **finds
+and admits replacement members**. Members post the bonds; entry has a capital gate, so the set is
+permissioned but not anonymous, and the Greycore is the body that decides who is in it. That is the
+same shape as the reference, where the second set is chosen by governance rather than by chance.
 
 - **Two bonds, one per direction** (doc 13, *The two bonds*): a **BSV-side bond** held **outside the
-  reserve** and sized against the BSV held, and a **`solBSV`-side bond**, because that leg must be
-  seizable on Solana, sized against the `solBSV` held
+  reserve**, and a **`solBSV`-side bond**, because that leg must be seizable on Solana. **The bond is
+  the float** — working capital for transfers — not a capital requirement sized against the reserve
 - **Neither bond sits inside the reserve**
 - Fees are earned **pro rata to stake**
 - Leaving: announce, wait the unbonding period, withdraw if still covered on **both** sides
+- **A leaver's shares are an open finalisation item** — see §Open — for finalisation: leaver-shares
 
-**The bond size is the scale limit.** With `k = 1`, total value locked is capped by total bonds
-pledged — ten members at 1,000 BSV is roughly ~$180k of capacity. That is a proof of concept, and it
-is better to say so than to imply otherwise.
+**The bond is the float, and the reserve is constrained by the Greycore, not the bond.** The bond is
+**working capital that lets the federation serve redemptions**, sized for transfer throughput, not
+against the reserve. The reading that bond size caps total value locked is **withdrawn**, and the
+`~$180k` capacity figure computed from it is **withdrawn** (doc 26 §5). **What constrains the reserve
+is the Greycore's co-signature on every reserve spend.** That is a proof of concept, and it is better
+to say so than to imply otherwise.
 
 **The BSV-side bond is enforced by the members, not by the Solana program.** It sits under the
 **collective (threshold ECDSA) key** — the same primitive as the reserve, pointed at the bond — and
@@ -51,31 +57,46 @@ and the **obligation to slash is social, not on-chain**.
 
 ---
 
-## Threshold ECDSA, not a multisig script
+## The reserve script: threshold ECDSA **plus** a Greycore co-signature
 
-**The reserve address is an ordinary P2PKH address.** The key is a **threshold ECDSA** key, as RenVM
-used: shares are held by the members, and a payout needs `t` of `n` of them to cooperate. The key is
-**never assembled in one place.** This is the correct reading of the reserve, and it corrects audit
-**F10** — the P2PKH check was right and the description was wrong (doc 25, F10).
+**The reserve script is a 2-of-2 `OP_CHECKMULTISIG`:**
 
-- `is_p2pkh` requiring a 25-byte P2PKH script is **correct**, not a limitation
-- `DepositScript::SPACE = 38` is **correctly sized** and does not need to grow
-- **"No single member can move funds" is true because the key is shared**, not because a script
-  enforces it
-- The phrase **"threshold script"** is wrong and is removed everywhere: there is a threshold **key**,
-  not a threshold script. A threshold script would imply a multisig, which is a different and much
-  worse design
+```
+OP_2  <gateway threshold key>  <greycore key>  OP_2  OP_CHECKMULTISIG
+```
 
-**Why it matters practically.** With a multisig, adding or removing a member changes the script, so
-**the entire reserve must be swept on-chain to the new script**, requiring the old quorum to
-cooperate. With threshold ECDSA, a member joins or leaves by **re-sharing the key** — a DKG-style
-ceremony — and **the reserve never moves, the address never changes, and no on-chain migration
-happens.** That is the whole reason to use threshold ECDSA rather than a script.
+**One leg is the gateway's threshold ECDSA key.** As RenVM used: shares are held by the members, a
+payout needs `t` of `n` of them to cooperate, and the key is **never assembled in one place**. The
+threshold group emits **one** signature however many members signed.
 
-**So `fed.threshold` sizes nothing on-chain.** It is a parameter of the **signing protocol**, not of
-a script. **Provisional `3-of-5`, marked `open`** (doc 24) — it is the number every "no single
-member" claim depends on, and it sizes no account and no script. Changing `t` or `n` later is a
-re-sharing, not a migration; larger `n` costs only coordination, not space.
+**The other leg is the Greycore's key.** **Both must sign**, so:
+
+- the gateway majority **cannot move funds alone** — this fixes the collective-key hostage problem
+- the Greycore cannot move funds alone
+- **the Greycore polices every reserve spend**, which is what the reference does
+
+**The Greycore is trusted third parties, not node operators.** RenVM's own words are *"Darknodes that
+have developed reputations with the community"*, chosen by governance and with a stake in the
+system's safety: **people with reputations to lose, who do not run the reserve.** We mirror the
+reference deliberately, because the precedent is good.
+
+**This reverses audit F10, and the reversal is explicit.** With a Greycore the deposit script
+genuinely **is** a multisig, so:
+
+- `is_p2pkh` **must change** — it can no longer require a 25-byte P2PKH script
+- `DepositScript::SPACE` **must grow** to ~71 bytes for the 2-of-2, against the current 38
+- F10's conclusion — *"the code is right, the docs are wrong"* — **was itself too quick and is
+  reversed**: the code is right only for a P2PKH reserve, and the reserve is no longer P2PKH
+- The earlier claim that "the P2PKH check is correct, not a limitation" is **superseded**
+
+**What still holds.** The *gateway* key is threshold ECDSA, so changing the gateway's `t` or `n` is a
+**re-sharing**, not a migration — the gateway key's address does not change and the reserve does not
+move for that reason. **Changing the Greycore's key does change the deposit script**, so that one
+membership change does require moving the reserve.
+
+**`fed.threshold` = 4-of-N, with `N` a variable.** The number is arbitrary and deferred. It is the
+gateway signing threshold; the Greycore's **size** and **threshold** are separately `open`
+(`fed.greycore_size`, `fed.greycore_threshold`, doc 24).
 
 ---
 
@@ -88,10 +109,11 @@ software being modified. It is closest to **running a staked validator**.
 | Job | How |
 |---|---|
 | Watch both chains and verify **independently** | Each node runs its own light client; it does not take the others' word |
-| Hold the reserve under a **threshold ECDSA key** | No single member can move funds: the reserve is an ordinary P2PKH address, but the key is never assembled in one place |
+| Hold the reserve under the **2-of-2 `OP_CHECKMULTISIG`** | The gateway's **threshold ECDSA** key plus the **Greycore** key. **Both must sign**, so no gateway majority and no Greycore can move funds alone |
 | Hold the **mint-side bonds** under the **same collective key** | The bond is *not* under the member's own key, so a caught member cannot move it. The members seize it by signing a threshold transaction, and the slashers are paid from it — a collective action by the majority, not an automatic rule |
 | **Sign payout intents individually** | Recorded on Solana, so every approval is attributed |
-| Produce the threshold signature for the BSV payout | Only once enough attributed intents exist |
+| Produce the threshold signature for the BSV payout | Only once enough attributed intents exist, and the **Greycore co-signs** it before the 2-of-2 script will spend |
+| **Report spent deposit outpoints** | Solana cannot read the BSV UTXO set, so the software reports which deposit outpoints have been spent and the program checks mints against that record. **Not a new trust assumption:** the federation is already trusted with the reserve (doc 13, *What is trustless*) |
 | **Challenge theft** | The node software *is* the challenger |
 
 **Making the challenger part of the node is the important change.** It was previously an unpaid
@@ -208,7 +230,9 @@ Changeable by 85% with a 30-day delay:
 | Redeem fee | **30 bp** |
 | Bond — `fed.bond_mint` (BSV side) | 1,000 BSV, **outside the reserve** |
 | Bond — `fed.bond_redeem` (`solBSV` side) | 1,000 BSV, **seizable on Solana** |
-| Signing threshold — `fed.threshold` | **3-of-5 provisional, `open`.** A **signing-protocol** parameter; sizes nothing on-chain |
+| Gateway signing threshold — `fed.threshold` | **4-of-N, `N` open.** The number is **arbitrary and deferred**; it is the gateway's threshold signer count |
+| Greycore size — `fed.greycore_size` | **`open`** |
+| Greycore threshold — `fed.greycore_threshold` | **`open`** — the second signature on the reserve script |
 | `gov.delay_min` (exit floor) | **`open`** — 7 days proposed. With a floor a majority cannot take the warning away; without one the window is whatever the majority allows |
 | Unbonding period | — |
 | Governance threshold / delay | 85% / 30 days |
@@ -230,7 +254,7 @@ program upgrade — previously an orphaned risk with no owner.
 |---|---|
 | **D7** — no governance in the PoC | 85% / 30 days / live signal, holding the upgrade authority |
 | **D2** — fees discovered on an order book | **30 bp, governed** |
-| Per-relayer keys, each individually trusted | **Threshold ECDSA key** over the reserve — an ordinary P2PKH address, the key never assembled in one place |
+| Per-relayer keys, each individually trusted | **A 2-of-2 reserve script** — the gateway's threshold ECDSA key plus the Greycore's key, both required |
 | A single `solBSV` bond inside the reserve | **Two-sided bonds, neither inside the reserve** (doc 13, *The two bonds*) |
 | An unpaid permissionless challenger | **The node software**, funded from fees and bounties |
 | An immutable floor | **The exit window** is the floor |
@@ -238,8 +262,32 @@ program upgrade — previously an orphaned risk with no owner.
 | "Monitoring" as a late phase-5 activity | **Continuous publication of reserve and supply as an early deliverable** — the only defence where nothing is enforceable |
 
 **The order book is redundant.** It solved fee discovery and capacity allocation; a governed fee
-plus a bond cap solves both more simply — and deleting it removes the one subsystem that never
-received an adversarial review.
+solves both more simply — and deleting it removes the one subsystem that never received an
+adversarial review. **The "bond cap" that used to be cited here is withdrawn:** the bond is the
+float, not a capacity ceiling, and the reserve is constrained by the Greycore co-signature.
+
+---
+
+## Open — for finalisation: leaver-shares
+
+**The problem.** A member who leaves **retains a valid share of the reserve key**, because nothing
+invalidates it. The effective threshold therefore **degrades with churn**: at **4-of-N, four former
+members together still hold four valid shares**, so the threshold is a property of the current member
+set only in name.
+
+**Two remedies, both real work:**
+
+1. **Key rotation** — the reserve moves on-chain to a newly generated key, so **`deposit_script` must
+   change**. This is RenVM's answer, every epoch. The built program fixes `deposit_script` once in
+   `initialize_bridge` with no instruction to change it, so rotation is currently unimplementable.
+2. **Proactive re-sharing** — a protocol that invalidates old shares of the *same* key. It **needs
+   the departing member's cooperation**, and it is not specified anywhere.
+
+**The Greycore is the natural admission body**, and admission is where the standards belong. Members
+will need **equipment requirements, sufficient stake, and standing with exchanges and miners**.
+
+**The PoC deliberately does not finalise this.** It is recorded as an open finalisation item rather
+than resolved.
 
 ---
 
@@ -256,3 +304,12 @@ received an adversarial review.
 4. **Vault design** — doc 21 is the current vault design and carries unfixed findings. It should be
    re-audited against this model, since several of its findings were caused by trying to enforce
    BSV-side behaviour that the federation now handles by different means
+5. **Leaver-shares — open, for finalisation.** A departing member retains a valid share, so the
+   effective threshold degrades with churn. **Key rotation** (the reserve moves and `deposit_script`
+   changes) or **proactive re-sharing** (needs the leaver's cooperation). See §Open — for
+   finalisation: leaver-shares
+6. **The Greycore's composition and standards** — size (`fed.greycore_size`), threshold
+   (`fed.greycore_threshold`) and admission criteria are all `open`. Members will need equipment
+   requirements, sufficient stake and standing with exchanges and miners
+7. **The spent-outpoint record** — the federation reports spent deposit outpoints to Solana (doc 21,
+   N5 resolved by this); the record's format and the write path are unspecified

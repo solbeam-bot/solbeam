@@ -39,24 +39,27 @@ of operators, and their track record is mixed.
 SOLBEAM's answer is a **bonded federation** — and that is a deliberate change from earlier drafts
 of this document, which described an operator-less design. The honest division is:
 
-- **Minting is trustless, given the deployed program.** A Solana program verifies BSV proof of work (under BSV's real rule,
-  **cw-144**) and Merkle inclusion itself. No member's signature, no committee vote and no oracle mints anything.
-  **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, which is why production must hold it under a threshold and a timelock.
+- **The deposit is verified; the backing is reported.** A Solana program verifies BSV proof of work (under BSV's real rule,
+  **cw-144**) and Merkle inclusion itself. **The program verifies deposits. The federation reports backing** — Solana cannot read
+  the BSV UTXO set, so the software reports **spent deposit outpoints** and the program checks mints against that record. That is
+  **not a new trust assumption**: the federation is already trusted with the reserve.
+  **The program's upgrade authority is the other exception** — it can re-anchor the checkpoint, which is why production must hold it under a threshold and a timelock.
 - **Reversal is trustless.** The program compares its own stored header hash against the one a
   deposit was proven with. A reorg is a fact about headers, not a report from anyone.
-- **The reserve is trusted, and bounded.** The BSV sits under a **threshold ECDSA key** held by the
-  federation — an ordinary P2PKH address whose key is never assembled in one place — so no single
-  member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour
+- **The reserve is trusted, and bounded.** The BSV sits under a **2-of-2 `OP_CHECKMULTISIG`** — the
+  federation's **threshold ECDSA** gateway key (never assembled in one place) **and** the **Greycore**'s
+  key. **Both must sign**, so neither the gateway majority nor the Greycore can move funds alone, and the
+  Greycore polices every reserve spend. What protects a holder is a **bond anyone can seize by proving misbehaviour
   on-chain** — the program seizes the `solBSV` side, the members seize the BSV side collectively —
   not the absence of trust.
 
-That leaves **one trust assumption: a threshold of federation members do not collude.** It is not
-eliminated. It is bounded — by bonds that exceed what the members could take, by a 30-day governed
-exit window during which redemptions never pause, and by proofs anyone can submit.
+That leaves **one trust assumption: a threshold of federation members, together with the Greycore, do not collude.** It is not
+eliminated. It is bounded by the **Greycore co-signature**, which stops the gateway majority moving funds alone; by a 30-day
+governed exit window during which redemptions never pause; and by proofs anyone can submit.
 
-The scale limit follows from the same fact, and it is stated rather than implied: with `k = 1`,
-value locked is capped by the bonds pledged. Ten members at the canonical **1,000 BSV** bond is
-roughly **~$180k** of capacity. That is a proof of concept, and it says so.
+The bond is **the float** — working capital for transfers — and it is **not the scale limit**. The claim that total
+value locked is capped by bonds pledged is **withdrawn**, along with its `~$180k` figure: the reserve is constrained by the
+**Greycore co-signature**, not the bond. That is a proof of concept, and it says so.
 
 ---
 
