@@ -16,7 +16,7 @@ described as working that are specified but not built. §1 is kept as history, n
 
 - **The light client** — trusted checkpoint, a 192-block rolling window storing a block hash, chainwork and time
   per header, linkage, and proof of work with the target taken **from the chain** rather than from
-  the submitted header. 27 on-chain tests.
+  the submitted header. 34 on-chain tests.
 - **`solBSV`** — classic SPL, 8 decimals, no freeze authority, mint authority a program PDA.
 - **The mint** — verifies a deposit against the window: Merkle fold, on-chain transaction parsing,
   exact output script, confirmation depth, replay refusal. Then mints.
@@ -65,7 +65,7 @@ posture, not a seeded-book special case.
 | | Defect | Effect |
 |---|---|---|
 | ~~**F7**~~ | ~~`expected_bits` is set at `initialize` and never updated~~ | **Fixed by W1.6.** The retarget is cw-144, from the node's `src/pow.cpp`, and it is verified against real data: **324/324 mainnet headers predicted exactly**. The old `bits == expected_bits` requirement is gone for every header with 147 records behind it |
-| **F6** | `MAX_USED = 200` with `MIN_PEG_IN` unimplemented | **A hard ceiling of 200 peg-ins per 32-hour window**, with no attacker required |
+| **F6** | ~~`MAX_USED = 200`~~ — **the list is removed; replay is a nullifier PDA** (P5, built). `MIN_PEG_IN` still unimplemented | **A hard ceiling of 200 peg-ins per 32-hour window**, with no attacker required |
 | **C3** | `initialize` accepts any header meeting **its own** declared `bits` | The first caller picks the trusted root *and* its difficulty |
 | **A6** | One bridge-wide P2PKH deposit script | The pooled reserve the design removes |
 | **A5** | Program upgrade authority | Out of scope for the PoC; recorded so it is not forgotten |
@@ -319,7 +319,7 @@ An earlier draft called DAA "a flag, not an omission". That was wrong, and the c
 
 ### 4.3 Test scope
 
-> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (27 on-chain tests). Cases 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row. Case 2.5 (DAA) is built and is covered by the mainnet replay.
+> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (34 on-chain tests). Cases 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row. Case 2.5 (DAA) is built and is covered by the mainnet replay.
 
 | # | Case | Expected |
 |---|---|---|
@@ -588,7 +588,7 @@ Indicative, one focused developer. Note that Phase 1 is new work that the earlie
 | **Phase 0** — environment, bootstrap, doctor | 2–3 days | ✅ **Done.** `doctor.sh`: 19 ok, 1 warning, 0 failures on the x86_64 droplet |
 | **Phase 1A** — synthetic chain + deposit proof | 3–4 days | ✅ **Done.** |
 | **Phase 1B** — real SV Node format pin | 1–2 days | ✅ **Done.** Took four live iterations, all on `getmerkleproof2`'s wire format |
-| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 27 on-chain tests. Chainwork comparison is built (W1.7), exercised by the mainnet fixture replay |
+| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 34 on-chain tests. Chainwork comparison is built (W1.7), exercised by the mainnet fixture replay |
 | **Phase 3** — burn, relayer, bond, deadline, challenge | 1–1.5 weeks | Includes the misbehaving-relayer mode |
 | **Testnet repeat** (BSV testnet + Solana devnet) | 2–3 days | **Not blocked** — the retarget is implemented (W1.6, cw-144, verified 324/324). What to watch is **X3**: the rule is hard-coded, so a BSV consensus change would need a redeploy |
 | **Total to a demoable PoC** | **~5–6 weeks** | |

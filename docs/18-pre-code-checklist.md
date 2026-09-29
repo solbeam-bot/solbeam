@@ -148,7 +148,7 @@ is now an owner, not in the sense that no code change is needed. That distinctio
 
 ### P5 — The replay list is a cheap shutdown and a hard ceiling · **decided, not built**
 
-`MAX_USED = 200` with `MIN_PEG_IN` unimplemented. Two hundred dust deposits block every peg-in for
+~~`MAX_USED = 200`~~ — **the list is removed; replay is a nullifier PDA** (P5, built). `MIN_PEG_IN` still unimplemented. Two hundred dust deposits block every peg-in for
 the rest of the window, repeatably. Independently, it caps the protocol at **200 peg-ins per
 32 hours** with no attacker at all.
 
@@ -157,7 +157,7 @@ one-satoshi self-deposits previously cost dust; they now cost 200 BSV. **But it 
 attack, not a fee attack:** the attacker *receives tokens* for every deposit. Real, but not
 prohibitive.
 
-**(b) The 200-per-window ceiling — NOT fixed.** The account is `8 + 4 + (MAX_USED × 44) + 1` bytes
+**(b) The 200-per-window ceiling — NOW FIXED.** The list is removed; replay is a nullifier PDA keyed `(txid, vout)` storing its own deposit height. *(The paragraph below is the historical finding.)* The account is `8 + 4 + (MAX_USED × 44) + 1` bytes
 against a 10,240-byte cap, so one account holds at most **232** entries — about 100 mints a day.
 That is a capacity limit, not a safety one, and it would bite in ordinary use.
 

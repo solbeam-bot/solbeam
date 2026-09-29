@@ -4,7 +4,7 @@ The order is deliberate: **the built system now follows a real chain**, then the
 rest of the design rests on, then the federation and the parts that need bonds and adjudication.
 
 > **Built or designed?** The light client with cw-144, `solBSV`, the mint and fork staging are
-> built and pass **27 on-chain tests**. **The vault, the bonded federation, threshold custody,
+> built and pass **34 on-chain tests**. **The vault, the bonded federation, threshold custody,
 > governance, slashing and all of peg-out are designed and not built.**
 > [`13-summary.md`](13-summary.md) is canonical; [`23-federation.md`](23-federation.md) is the
 > federation in detail.
@@ -31,7 +31,7 @@ rather than an orphaned risk.
 | Step | What ships | Why this order |
 |---|---|---|
 | **Transparency — reserve and supply published continuously** | The reserve balance and the `solBSV` supply published as a live, public backing ratio | **Promoted from a phase-5 monitoring task to an early deliverable.** For the two cases nothing can enforce — a colluding threshold, and an unspent-outpoint spend nobody challenges — **visibility is the only remaining defence**, and it must exist before real value does |
-| **F6 — the replay-list ceiling** | `MIN_PEG_IN` enforced, and `MAX_USED = 200` sized or replaced | A hard ceiling of **200 peg-ins per 32-hour window**, with no attacker required. An open defect in code that exists |
+| ~~**F6 — the replay-list ceiling**~~ **CLOSED** | `MIN_PEG_IN` enforced, and `MAX_USED = 200` sized or replaced | A hard ceiling of **200 peg-ins per 32-hour window**, with no attacker required. An open defect in code that exists |
 | **The vault** | Every mint lands in a program-owned token account; released after maturity, burned if a reorg is followed | The component the rest of the design rests on. It gives reversibility without a freeze authority and removes the window in which a fraudulent mint could be sold |
 | **The federation** | Open membership, **two-sided bonds** (1,000 BSV per side), members running software only, and the reserve held under a **threshold ECDSA key** | Turns individually-trusted keys into a threshold over the reserve, and makes the parties with the most to lose the ones who watch. The BSV-side bond sits under the same collective key, so the members can seize it |
 | **Governance** | **85% of pledged coins, 30 days, live signal**, holding the **upgrade authority**; redemptions never pausable; pause stops **mints only** | Gives the system a change mechanism that is slower than its exit: a hostile proposal empties the bridge before it lands |

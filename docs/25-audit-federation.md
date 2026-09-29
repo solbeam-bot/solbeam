@@ -6,7 +6,7 @@ set is **F1, F3, F4, F5, F7, F8** — and it is *not* the set doc 21 named.
 The single most important result is **F1**, because it invalidates a claim the project had been
 treating as settled: the light client, believed built and verified, **cannot run on a real BSV chain.**
 
-> **Status update, current.** **F1, F2 and F3 are fixed and verified:** **27 on-chain tests pass with
+> **Status update, current.** **F1, F2 and F3 are fixed and verified:** **34 on-chain tests pass with
 > 0 failing**, including **160 real mainnet headers driven through `push_header`** and a real mainnet
 > branch through `push_fork_header`. The **initialiser vulnerability is fixed** (see F4).
 > **F10 was a documentation error, not a code defect** — the P2PKH check was right and this audit's

@@ -74,7 +74,7 @@ produced their own proof of guilt (D13). **Redemptions are never pausable** (D11
 | **Three security layers** | A **threshold signature** catches a minority moving funds; **individual attestations** catch a minority's equivocation; a **covenant** (research, later) would catch a colluding majority. None catches a consistent majority. "Double threshold" means **a key plus a paper trail**, not a stronger threshold |
 | **Collusion accepted, transparency is the mitigation** | A colluding threshold can take the reserve; maximum loss is the non-member supply. Continuous publication of the reserve and supply converts a hidden theft into a visible one — an **early deliverable**, not phase-5 monitoring (doc 07) |
 | **Genesis** | Members post a **BSV-side bond**, so no `solBSV` needs to exist first. A capped, explicitly-unbonded first mint is a documented later option, not chosen |
-| **Confirmed by test** | 27 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`** |
+| **Confirmed by test** | 34 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`** |
 
 ---
 

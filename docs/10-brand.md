@@ -1,7 +1,7 @@
 # 10. Brand & visual language
 
 > **Built or specified?** The light client with cw-144, the `solBSV` token, the mint and fork
-> staging exist today and pass **27 on-chain tests**. **The vault, the bonded federation,
+> staging exist today and pass **34 on-chain tests**. **The vault, the bonded federation,
 > threshold custody, governance, slashing and all of peg-out are designed, not built.**
 > [`13-summary.md`](13-summary.md) is the authoritative account.
 

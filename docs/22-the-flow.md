@@ -14,7 +14,7 @@ everywhere below.
 | | |
 |---|---|
 | **Light client** | **Built.** Checkpoint plus a rolling window of **192** BSV headers — **32 hours** — in one account of **10,107 bytes**, with a **52-byte** record per header (block hash, cumulative chainwork, timestamp). cw-144 verified against **324/324** real mainnet headers |
-| **Token and mint** | **Built.** 27 on-chain tests, with negative controls. `verify_deposit` mints gross, straight to the depositor |
+| **Token and mint** | **Built.** 34 on-chain tests, with negative controls. `verify_deposit` mints gross, straight to the depositor |
 | **BSV-side peg-in** | **Built.** 51/51 synthetic, 21/21 against a live SV Node |
 | **Vault, federation, threshold custody, slashing, governance, peg-out** | **Designed, not built.** Everything in this document after the mint step |
 | **Order book** | **Removed.** A governed 30 bp fee replaces it |

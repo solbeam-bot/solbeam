@@ -304,18 +304,14 @@ headers; deadlines come from Solana slots.
 | | |
 |---|---|
 | **Light client** | **Built.** cw-144 implemented and verified against 324/324 real mainnet headers, and the **instruction path** — not just the pure function — is exercised by **160 real mainnet headers through `push_header`** (27 tests, 0 failing). Audit F1/F2/F3 are fixed and verified |
-| **Token and mint** | **Built.** 27 on-chain tests, with negative controls |
+| **Token and mint** | **Built.** 34 on-chain tests, with negative controls |
 | **BSV-side peg-in** | **Built.** 51/51 synthetic, 21/21 against a live SV Node |
 | **Vault** | **Designed, not built.** Rewritten against this model after two audits of the **pre-federation** vault (V1–V10, W1–W11, T1–T12): **28 of 33 findings dissolved on the model change**, 6 remain, two blocking |
 | **Federation** | **Designed, not built.** Threshold **ECDSA** custody, two-sided bonds, governance, slashing |
 | **Peg-out** | **Designed, not built** |
 | **Order book** | **Removed.** A governed 30 bp fee replaces it |
 
-**A ceiling worth naming:** the built program caps the used-deposit list at `MAX_USED = 200` per
-window, which bounds peg-ins to 200 per 32 hours *with no attacker at all*. **Decision P5 replaces
-that list with a nullifier per minted deposit, removing the ceiling** — decided, not built. Until it
-is, a volume spike cannot be served, which bounds the "redemptions never pause" story from the
-peg-in side.
+**~~A ceiling worth naming~~ — closed.** The built program used to cap the used-deposit list at `MAX_USED = 200` per window, which bounded peg-ins to 200 per 32 hours *with no attacker at all*. **Decision P5 replaced the list with a nullifier PDA per minted deposit, and it is now built** — replay is a per-`(txid, vout)` account, so there is no list, no ceiling and no pruning by capacity. `prune_nullifier` closes a nullifier only once its stored `deposit_height < window_start`.
 
 **Open, and not dressed up:** the vault's design has failed two audits; sharding is undecided; and
 the DAA rule is hard-coded, so a BSV change would halt the bridge until governance acts.

@@ -53,7 +53,7 @@ produced its own evidence, and anyone may submit it.
 ## Where it stands
 
 **Built and tested:** the light client with cw-144, the `solBSV` token, the mint, and fork staging
-with chainwork — **27 on-chain tests**, **51/51** synthetic Phase 1A checks, **21/21** against a
+with chainwork — **34 on-chain tests**, **51/51** synthetic Phase 1A checks, **21/21** against a
 live SV Node. The window is **192 records of 52 bytes**, `SPACE` **10,107** of 10,240, a
 **32-hour** deposit lifetime. F7 (the retarget), P2 (the fork re-anchor), A7 (double-mint) and the
 window resize are all fixed in code.
@@ -68,7 +68,7 @@ shipped program mints straight to the depositor's token account.
 **Still open, and not dressed up:** the vault's design carries unfixed audit findings and is being
 re-audited against this model; the genesis bootstrap has no path (members bond `solBSV`, which
 does not exist until a mint happens); sharding the threshold key is undecided; the DAA is
-hard-coded; and F6, the replay-list ceiling, is a hard **200 peg-ins per 32-hour window**.
+hard-coded; and the replay list (`MAX_USED = 200`) is **gone** — replay is a nullifier PDA per deposit, so the 200-peg-in ceiling no longer exists.
 
 **Nothing here is audited. Do not put money in it.**
 
