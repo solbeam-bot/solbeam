@@ -9,11 +9,34 @@ crate-type = ["cdylib", "lib"]
 name = "solbeam"
 
 [features]
+# `custom-heap` and `custom-panic` are DECLARED BUT NOT ENABLED.
+#
+# `entrypoint!` expands `custom_heap_default!` and `custom_panic_default!` in
+# *this* crate, and both macros test `#[cfg(feature = "custom-heap"/"custom-panic")]`
+# against the calling crate's features. A feature that is referenced but never
+# declared is the two `unexpected cfg condition value` warnings `anchor build`
+# used to emit, so declaring them here is what makes those go away. Enabling
+# `custom-heap` would suppress the SDK's global allocator and require this crate
+# to provide one — and a larger allocator does not work on its own: the SBF heap
+# frame is requested per transaction (`ComputeBudgetInstruction::RequestHeapFrame`,
+# default 32 KiB), while the SDK `BumpAllocator` bumps *down* from
+# `HEAP_START_ADDRESS + HEAP_LENGTH`, so its first allocation lands at the top of
+# whatever length it was given. A >32 KiB allocator therefore faults with
+# "Access violation in heap section" on every instruction unless every caller
+# requests the matching frame.
+#
+# The F3 out-of-memory is instead fixed where it belongs: `push_fork_header` no
+# longer deserialises the 192-record `LightClient` window at all (see
+# `LightClientView` in `src/lib.rs`), so the instruction stays inside the
+# default 32 KiB with no per-transaction heap request. These two features stay
+# off for that reason.
 default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
+custom-heap = []
+custom-panic = []
 # anchor-spl needs its own idl-build too, or IDL generation fails with
 # E0599: no create_type / DISCRIMINATOR for anchor_spl::token::Mint.
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
