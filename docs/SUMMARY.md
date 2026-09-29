@@ -24,3 +24,4 @@
 * [22. The flow — every actor's journey](22-the-flow.md)
 * [23. The federation — membership, powers, and the floor](23-federation.md)
 * [24. Parameters and variables](24-parameters.md) — **the reference file**
+* [25. Audit — the federation model](25-audit-federation.md) — **blocking findings**
