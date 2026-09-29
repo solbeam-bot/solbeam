@@ -17,7 +17,7 @@
 >    `solana rent 165` = 1,488,440 = 293 × 5,080. A rate of 6,960 is an **older toolchain's**
 >    constant and overstates every figure here by about **37%**. This has now been wrong in the
 >    same direction twice, both times by substituting a recalled constant for a measured one.
->    The byte counts are unchanged and measured from the code: `LightClient` **10,103 B**,
+>    The byte counts are measured from the code, not recalled: `LightClient` **10,107 B**,
 >    `ForkStaging` **10,069 B**.
 > 2. The method is unchanged: **measured constants, and honesty about which costs recur.**
 
@@ -46,7 +46,7 @@ account is written in place, so each header is a base fee and a little compute, 
 account.
 
 **What is actually being paid for** is the `LightClient` account's existence, which is a
-**one-time, refundable rent deposit of 0.05197 SOL (~$4.00)** — see the table below. Running it is
+**one-time, refundable rent deposit of 0.05199 SOL (~$4.00)** — see the table below. Running it is
 nearly free.
 
 ---
@@ -76,7 +76,7 @@ Not transaction fees — **rent on accounts**:
 | Account | Size | Nature | Cost |
 |---|---|---|---|
 | **First-time ATA** for a recipient who has never held `solBSV` | 165 B | **Rent, recoverable only by closing the ATA** | **0.00148844 SOL — $0.115** |
-| `LightClient` | **10,103 B** | One-time, refundable | 0.05197 SOL — $4.00 |
+| `LightClient` | **10,107 B** | One-time, refundable | 0.05199 SOL — $4.00 |
 | `ForkStaging` per submitter | **10,069 B** | One-time, refundable on commit or abandon | 0.05180 SOL — $3.99 |
 | `UsedDeposits` (the replay list, `MAX_USED = 200`) | 8,813 B | One-time, refundable | 0.0622 SOL — $4.79 |
 | The deposit script record (`DepositScript`) | 38 B | One-time, refundable | 0.00116 SOL — $0.089 |

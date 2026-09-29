@@ -1,55 +1,107 @@
 # SOLBEAM
 
-**Atomic wrapper on Solana for BSV.**
+**A wrapped-BSV token on Solana.**
 
-SOLBEAM brings native BSV to Solana as `solBSV` — a 1:1 wrapper you can hold, trade and use, and redeem back to real BSV. No federation, no committee, no trusted custodian. Minting is verified by a BSV light client running on Solana; redemption is permissionless and bonded. In the finished design a mint lands in a **program-owned vault** first, a relayer is a role **anyone may run**, and the program consults **no oracle** — only BSV headers and Solana slots.
+SOLBEAM brings BSV to Solana as `solBSV` — a 1:1 wrapper you can hold, trade, and redeem back to real
+BSV. It is pegged, not traded: there is no order book, no leverage, and no exchange mechanism inside
+it.
+
+[`13-summary.md`](13-summary.md) is the canonical model. Where any other document disagrees with it,
+that one is right.
 
 ---
 
-## Step 1 — Choose your terms
+## The three parts
 
-You hold BSV. You want it to be useful at Solana speed.
+| | |
+|---|---|
+| **A light client on Solana** | Verifies BSV proof of work against the real difficulty rule (**cw-144**) and Merkle inclusion of a transaction in a block |
+| **A vault** | Every mint lands here rather than in your wallet, and leaves only when the program is satisfied — or is burned if it isn't |
+| **A bonded federation** | Members run nodes, hold the reserve under a **threshold key**, relay headers, sign payouts, and challenge theft. Open membership, 1,000 BSV bond |
 
-Take terms from the order book — how much liquidity, at what fee, and at what confirmation depth — or deposit with no underwriter at all and accept that risk explicitly.
+---
 
-## Step 2 — Send, then wait the agreed depth
-
-Send BSV to the named deposit script, attaching an `OP_RETURN` that carries your Solana address. After **the depth the bid named** — a term of the trade, not a fixed constant — `solBSV` is minted into the program's **vault** — as designed, not to you — and released to your wallet once a maturity window passes with the deposit still canonical. If a reorg is followed in the meantime, the staged tokens are burned and you end exactly where you started.
+## Putting BSV in
 
 ```
-   STEP 1                 STEP 2                    RESULT
- choose terms   ──────►   wait the bid's  ──────►    solBSV
- (liquidity,              depth, then the            (Solana)
-  fee, depth)             maturity window
+1  SEND      BSV to the federation's registered deposit script
+             OP_RETURN carries your Solana address
+2  DEPTH     12 confirmations
+3  STAGE     solBSV is minted INTO THE VAULT, not to you — and a record stores
+             the block hash your deposit was proven against
+4  MATURE    144 blocks
+5  RELEASE   anyone may call it, and it requires that the chain has ADVANCED past
+             your deposit and that the stored hash at that height STILL MATCHES
+             → the vault releases to you
+             if the hash DIFFERS, the deposit was reorged: the staged tokens BURN,
+               and you keep the BSV the reorg returned to you
 ```
 
-> **Built or designed?** The light client, the token and the mint exist and pass 20 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are designed and not built.** The shipped program mints straight to the depositor's token account, so the vault and maturity steps above are a specification today, not shipped behaviour.
+**Step 3 is what makes a fraudulent mint unsellable** — a staged token is not in anyone's wallet, so
+there is nothing to dump and no innocent buyer to inherit the loss.
+
+## Taking BSV out
+
+```
+1  ESCROW    solBSV into the vault; a BSV destination and a deadline are set
+2  ATTEST    members sign payout intents individually, on Solana
+3  PAY       the threshold key signs the BSV payment
+4  SETTLE    the payout is proved against the light client; the escrow burns
+   or
+5  CANCEL    permissionless after the deadline: the escrow returns to you
+```
+
+**Failure returns; it never mints.** Supply is unchanged and you are whole without asking anyone.
+
+> **Built or designed?** The light client, the `solBSV` token, the mint, and fork staging exist. **The
+> vault, the federation, threshold custody, governance, slashing and all of peg-out are designed and
+> not built.** The shipped program mints straight to the depositor's token account, so the vault and
+> maturity steps above are a specification today, not shipped behaviour.
 
 ---
 
 ## Why this exists
 
-BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals for long confirmation windows because reorgs are expensive to them, and moving sizeable BSV between venues is a manual, hours-to-days process. That friction is the single biggest practical obstacle to BSV being used as money and as a trading asset.
+BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals for long confirmation
+windows because reorgs are expensive to them, and moving sizeable BSV between venues is a manual,
+hours-to-days process. That friction is the biggest practical obstacle to BSV being used as money and
+as a trading asset.
 
-`solBSV` removes the friction. It is a Solana SPL token, so it moves at Solana speed, trades on Raydium and Orca like any other token, and can be used in Solana DeFi. Anyone can create it (mint) and anyone can get back to BSV (redeem) without asking permission, opening an account, or waiting on an exchange.
+`solBSV` removes it. It is a Solana SPL token, so it moves at Solana speed, trades on Solana venues
+like any other token, and can be used in Solana DeFi.
 
 ---
 
-## What SOLBEAM is — and isn't
+## What SOLBEAM is — and is not
 
 | | |
 |---|---|
-| **Minting is trustless** | A BSV light client on Solana verifies your deposit. No attestor approves it, no oracle signs off. The proof *is* the authorisation, and the design stages the mint in a program-owned vault |
-| **Redemption is permissionless and optimistic** | Anyone can become a bonded "relayer" who pays out BSV. If a payout doesn't happen in time, the holder is automatically made whole |
-| **No federation, no operator** | No named signer set, no validator committee, no governance body holding funds. A relayer is a role anyone may run, not a privileged party |
-| **No pooled reserve** | Deposits pay individual relayers. There is no pooled hot wallet and no covenant-locked cold reserve to trust — aggregation is what creates a single key worth stealing |
-| **Market layer is external** | Liquidity comes from Raydium / Orca, P2P orderbooks and market makers. SOLBEAM is the wrapper, not an exchange — and once `solBSV` is on a market, that exit is outside the protocol's control |
-| **Trading is instant** | Only the peg has latency. Traders on a pool, a P2P swap or a market maker never wait for it — see [Markets & liquidity](11-markets-and-liquidity.md) |
-| **Exit is slower than entry** | Minting is trustless; as designed it stages the mint through the vault. Redemption waits on a bonded relayer and a slot-measured deadline, and relayer capital unbonds on a notice period. The fast direction is the one that needs no trusted party |
-| **Bonds are in `solBSV`** | A relayer's collateral is the same asset as the exposure, so no BSV price move can shrink it relative to what it protects — and no oracle is needed to keep the two matched |
-| **FOSS** | The light client, programs and relayer software are open source |
+| **Minting is trustless, given the deployed program** | The program verifies BSV proof of work and Merkle inclusion itself. No member's signature, no committee vote and no oracle mints anything |
+| **Reversal is trustless** | The program compares its own stored header hashes. A reorg is a fact about headers, not a report from anyone |
+| **The reserve is trusted, and bounded** | The BSV sits under a **threshold key**, so no single member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain** |
+| **There is a federation** | Bonded members, open entry at 1,000 BSV. They are paid to carry the risk, and the bond *is* the risk |
+| **There is governance** | 85% of pledged coins, 30 days, signalled live. It holds the upgrade authority — see *the floor* below |
+| **No oracle** | No external metric gates anything. Minting is gated by the bond; peg-outs by the threshold key |
+| **Market layer is external** | Liquidity comes from Solana venues. SOLBEAM is the wrapper, not the market |
+| **FOSS** | The light client, programs and node software are open source |
 
-**Honest limits.** Minting and reversal are trustless: the program verifies BSV proof of work and Merkle inclusion itself, and decides a reorg by comparing its own stored header hashes. The **reserve** is trusted and bounded — the BSV sits under a **threshold key** held by the federation, so no single member can move it, and what protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**. The residual is stated in [`04-trust-model.md`](04-trust-model.md): a threshold of members colluding is the one assumption that is bounded rather than removed.
+### The floor is the exit, not a constitution
+
+Governance can change rules, including the upgrade authority. **That is safe because redemptions can
+never be paused.** A hostile proposal is visible for 30 days — and signalled live from the moment it
+is raised — so anyone who dislikes it redeems and leaves. By the time it takes effect, the bridge is
+empty.
+
+**The residual, stated plainly:** a holder who does not watch and does not act within the delay is
+exposed. That is a disclosure obligation, not a mechanism.
+
+### What is not protected
+
+**A colluding threshold can take the reserve, and nothing prevents it.** There is no on-chain
+predicate that proves which members signed an off-chain threshold signature, so there is nothing to
+slash on. The maximum loss is the entire non-member supply, and **the bond does not reduce it** — a
+bond denominated in the asset it protects is a round trip, funded by a deposit into the reserve it is
+meant to cover. This is a measured, accepted risk; see [`13-summary.md`](13-summary.md).
 
 ---
 
@@ -59,9 +111,21 @@ BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals 
 - [How it works](02-how-it-works.md)
 - [Architecture](03-architecture.md)
 - [Trust model](04-trust-model.md)
-- [Relayers](05-federation.md)
+- [The federation](05-federation.md)
 - [Parameters & governance](06-parameters.md)
 - [Roadmap](07-roadmap.md)
 - [FAQ](08-faq.md)
 - [Glossary](09-glossary.md)
 - [Brand](10-brand.md)
+- [Peg mechanism](12-peg-mechanism.md)
+- [**The model — canonical**](13-summary.md)
+- [Decisions](14-decisions.md)
+- [Audit history](15-audit-2.md)
+- [Costs](17-costs.md)
+- [Pre-code checklist](18-pre-code-checklist.md)
+- [The vault](21-vault-structural.md)
+- [The flow](22-the-flow.md)
+- [The federation, in detail](23-federation.md)
+- [Parameters reference](24-parameters.md)
+- [**Audit findings**](25-audit-federation.md)
+- [Documentation refresh — historical](16-docs-refresh.md)

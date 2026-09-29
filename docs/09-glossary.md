@@ -31,7 +31,7 @@ Plain-English definitions of the terms used in this documentation.
 
 **Governance delay** — the **30 days** between a proposal passing at **85% of pledged coins** and taking effect. Its signal is **live from the moment the proposal is raised**, not only when it passes; the delay is what makes the signal useful. All the numbers are parameters with defaults, not constants.
 
-**Light client** — a program that verifies a chain's headers and transaction inclusion without downloading the whole chain. SOLBEAM runs a BSV light client **on Solana**, holding a checkpoint and a rolling window of **192 records** (52 bytes each, `SPACE` **10,103** of 10,240) that carry a hash, cumulative chainwork and time per header.
+**Light client** — a program that verifies a chain's headers and transaction inclusion without downloading the whole chain. SOLBEAM runs a BSV light client **on Solana**, holding a checkpoint and a rolling window of **192 records** (52 bytes each, `SPACE` **10,107** of 10,240) that carry a hash, cumulative chainwork and time per header.
 
 **Maturity** — the **144 blocks a staged mint must stay unreorged before the vault releases it** to the depositor. Depth and maturity do different jobs: **depth sets the cost of attacking**, while **maturity sets the time available to detect** one. If the program's own stored hash for the deposit's height no longer matches, the staged tokens are burned instead of released. See *vault*.
 
@@ -55,7 +55,7 @@ Plain-English definitions of the terms used in this documentation.
 
 **SIGHASH_FORKID** — the signature-hash scheme BSV requires for transaction signing. SOLBEAM implements it directly.
 
-**Slashing** — seizing a member's bond for **self-proving misbehaviour**: signing two conflicting payout intents (equivocation), or signing an intent that matches no authorised redemption. It is **not** the settlement for a failed redemption — there the escrow is returned to the holder, supply is unchanged, and the bond is **not** additionally transferred, because the returned escrow already makes the holder whole. A threshold of members signing something invalid is attributable from the record but is a **governance matter, not a cryptographic one**.
+**Slashing** — seizing a member's bond for **self-proving misbehaviour**: signing two conflicting payout intents (equivocation). It is **not** the settlement for a failed redemption — there the escrow is returned to the holder, supply is unchanged, and the bond is **not** additionally transferred, because the returned escrow already makes the holder whole. It also does **not** cover "an intent matching no authorised redemption": that predicate is undecidable (a closed `PegOut` looks like one that never existed) and would false-positive against an honest member who attested before a cancel (audit F8). A threshold of members signing something invalid is attributable from the record but is a **governance matter, not a cryptographic one**.
 
 **solBSV** — the wrapped BSV token on Solana: a classic SPL token, 8 decimals, no freeze authority.
 

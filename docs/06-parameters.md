@@ -2,7 +2,7 @@
 
 > **Most of this is a specification, not shipped behaviour.** The built set is exactly four things:
 > the **light client** (cw-144 difficulty verification and Merkle inclusion), the **`solBSV`**
-> **token**, the **mint**, and **fork staging with chainwork** — 20 passing on-chain tests.
+> **token**, the **mint**, and **fork staging with chainwork** — 24 passing on-chain tests.
 > **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
 > designed and not built.** Nothing here is settable at runtime today: the only parameter in the
 > shipped program is `MIN_CONFIRMATIONS = 12`, **fixed in code**. [`13-summary.md`](13-summary.md)
@@ -60,8 +60,8 @@ into being different. They are measured facts about the built client:
 ```
 WINDOW              = 192 records  = 32 hours at 600 s/block
 HEADER_RECORD_SIZE  =  52 bytes    (32 hash + 16 chainwork + 4 time)
-LIGHT_CLIENT_FIXED  = 119 bytes
-SPACE               = 119 + 192 × 52 = 10,103   of 10,240  ->  137 bytes margin
+LIGHT_CLIENT_FIXED  = 123 bytes
+SPACE               = 123 + 192 × 52 = 10,107   of 10,240  ->  133 bytes margin
 LOOKBACK            = 147 records  (144 + 3 for cw-144's median-of-three)
 ```
 
@@ -69,7 +69,7 @@ LOOKBACK            = 147 records  (144 + 3 for cw-144's median-of-three)
   blocks apart, so a record must carry hash, chainwork and time. A bare-hash window cannot verify
   the difficulty rule at all.
 - **147 records of lookback**, so 192 is only 45 records of slack above the minimum.
-- **194 is the arithmetic maximum** (10,207 bytes, 33 bytes of margin); **192 is the largest window
+- **194 is the arithmetic maximum** (10,211 bytes, 29 bytes of margin); **192 is the largest window
   with real margin.** A 48-hour window would be 288 × 52 = 14,976 bytes plus overhead, 46% over the
   cap, and `initialize` would simply revert. **The old 48-hour deposit deadline was never
   achievable.**

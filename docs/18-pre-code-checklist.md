@@ -56,10 +56,10 @@ not need code; they need the layer that now exists.
 |---|---|---|
 | **P2** — `commit_fork` did not re-anchor | `fork_parent_hash` recorded at `init_staging`, linked from `push_fork_header`, re-checked at `commit_fork` (`ForkPointMoved`); commit compares accumulated chainwork | W1.7; two tests (stale commit refused, uncontested commit succeeds) |
 | **P4 / F7** — retarget halted the client | cw-144 from the node's `src/pow.cpp`, computed per block; `bits == expected_bits` is gone for every header with 147 records behind it | W1.6; `difficulty-vectors/` replays 471 mainnet headers — **324/324 exact** |
-| **The window resize** | `HeaderRecord` is `hash + chainwork(u128) + time` = 52 B; `WINDOW = 192`; `LIGHT_CLIENT_FIXED = 119`; **`SPACE = 10,103`** of 10,240 (137 B margin) | W1.4; compile-time assertions on `WINDOW > LOOKBACK` and `SPACE <= 10,240` |
+| **The window resize** | `HeaderRecord` is `hash + chainwork(u128) + time` = 52 B; `WINDOW = 192`; `LIGHT_CLIENT_FIXED = 123`; **`SPACE = 10,107`** of 10,240 (133 B margin) | W1.4; compile-time assertions on `WINDOW > LOOKBACK` and `SPACE <= 10,240` |
 | **A7** — replay key included `height` | Identity is `(txid, vout)`; height is stored only so stale entries can be pruned | In code: the comparison is on `txid` and `vout` only |
 
-The on-chain suite reports **20 passing**; Phase 1A is **51/51** synthetic and **21/21** against a
+The on-chain suite reports **24 passing**; Phase 1A is **51/51** synthetic and **21/21** against a
 live SV Node.
 
 ---

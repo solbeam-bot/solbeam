@@ -2,7 +2,7 @@
 
 > **Built or designed?** The built set is exactly four things: the **light client** (with cw-144
 > difficulty verification and Merkle inclusion), the **`solBSV` token**, the **mint**, and **fork
-> staging with chainwork**. That is **20 passing on-chain tests**, **51/51** synthetic BSV peg-in
+> staging with chainwork**. That is **24 passing on-chain tests**, **51/51** synthetic BSV peg-in
 > checks (Phase 1A) and **324/324** real mainnet headers replayed exactly.
 >
 > **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
@@ -123,15 +123,15 @@ amount is returned when the account is closed**. It is a deposit, not a fee.
 
 | | Size | One-time | at $77/SOL |
 |---|---|---|---|
-| Light client, 192 records / 32 hours | **10,103 B** | 0.051 SOL | **$3.96** |
+| Light client, 192 records / 32 hours | **10,107 B** | 0.052 SOL | **$4.00** |
 | *(Solana's per-account creation ceiling)* | *10,240 B* | *0.053 SOL* | *$4.06* |
 
 The arithmetic is worth stating because it is what fixes the window:
 
 ```
-LIGHT_CLIENT_FIXED = 119 bytes
+LIGHT_CLIENT_FIXED = 123 bytes
 HEADER_RECORD_SIZE =  52 bytes   (32 hash + 16 chainwork + 4 time)
-SPACE              = 119 + 192 × 52 = 10,103   of 10,240  ->  137 bytes margin
+SPACE              = 123 + 192 × 52 = 10,107   of 10,240  ->  133 bytes margin
 ```
 
 **The 32-hour window is what fits, not what was chosen.** cw-144 needs per-block cumulative
@@ -187,7 +187,7 @@ could only agree with itself or hide a wrong target.
 | | Per header | Window | Account |
 |---|---|---|---|
 | Earlier layout, before cw-144 | 32 B (hash only) | 288 (48 h) | 9,322 B |
-| **Now** — what the difficulty rule needs | **52 B (hash + chainwork + time)** | **192 (32 h)** | **10,103 B** |
+| **Now** — what the difficulty rule needs | **52 B (hash + chainwork + time)** | **192 (32 h)** | **10,107 B** |
 
 **The window had to shrink from 288 records to 192, and the reason is not storage economy.** The
 extra 20 bytes per record are what cw-144 consumes, and at 52 bytes 288 records would be 14,976

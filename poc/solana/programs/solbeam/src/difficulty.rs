@@ -207,23 +207,44 @@ pub fn compact_to_target(compact: u32) -> U256 {
 /// first blocks after `initialize` or `set_checkpoint`, and the caller must
 /// choose an explicit policy for it rather than this function inventing one.
 pub fn next_target(records: &[Record], oldest_height: u64, pow_limit: U256) -> Option<U256> {
-    if records.len() < LOOKBACK as usize {
+    next_target_from(records.len(), oldest_height, pow_limit, |i| records[i])
+}
+
+/// [`next_target`] over a random-access source rather than a contiguous slice.
+///
+/// **Same arithmetic, one implementation.** The on-chain client holds its
+/// window as 52-byte header records (hash + chainwork + time), and converting
+/// all of them to [`Record`]s on every header costs a heap allocation the SBF
+/// heap cannot spare — the allocation is what made the first real mainnet
+/// push fail with `memory allocation failed, out of memory`. `next_target`
+/// delegates here so the vectors harness and the program still run the same
+/// lines.
+///
+/// `record_at(i)` must return the record at position `i` of the same window
+/// `next_target` would have been given, with `i = len - 1` the parent.
+pub fn next_target_from<F>(
+    len: usize,
+    oldest_height: u64,
+    pow_limit: U256,
+    record_at: F,
+) -> Option<U256>
+where
+    F: Fn(usize) -> Record,
+{
+    if len < LOOKBACK as usize {
         return None;
     }
-    let last_index = suitable_index(records, records.len() - 1)?;
-    let parent_height = oldest_height + (records.len() as u64 - 1);
+    let last_index = suitable_index_by(len, |i| record_at(i).time, len - 1)?;
+    let parent_height = oldest_height + (len as u64 - 1);
     // `pindexPrev->GetAncestor(nHeight - nPowAveragingWindow)`, where
     // `nHeight` is the parent's height. Absolute, not "144 back from the tip".
     let ancestor_height = parent_height.checked_sub(AVERAGING_WINDOW)?;
     let ancestor_index = ancestor_height.checked_sub(oldest_height)? as usize;
-    let first_index = suitable_index(records, ancestor_index)?;
+    let first_index = suitable_index_by(len, |i| record_at(i).time, ancestor_index)?;
 
-    let target = compute_target(
-        records[first_index].chainwork,
-        records[first_index].time,
-        records[last_index].chainwork,
-        records[last_index].time,
-    );
+    let first = record_at(first_index);
+    let last = record_at(last_index);
+    let target = compute_target(first.chainwork, first.time, last.chainwork, last.time);
     Some(if target > pow_limit { pow_limit } else { target })
 }
 
@@ -235,7 +256,18 @@ pub fn next_target(records: &[Record], oldest_height: u64, pow_limit: U256) -> O
 /// the newer of the two. The node sorts the same three pointers and takes
 /// index 1, so this matches.
 pub fn suitable_index(records: &[Record], index: usize) -> Option<usize> {
-    if index >= records.len() {
+    suitable_index_by(records.len(), |i| records[i].time, index)
+}
+
+/// [`suitable_index`] over a time function rather than a slice, so an on-chain
+/// caller can select the median without materialising the window. The only
+/// values read are the three timestamps ending at `index`, so nothing wider is
+/// needed.
+fn suitable_index_by<F>(len: usize, time_at: F, index: usize) -> Option<usize>
+where
+    F: Fn(usize) -> u32,
+{
+    if index >= len {
         return None;
     }
     let lo = index.saturating_sub(2);
@@ -249,7 +281,7 @@ pub fn suitable_index(records: &[Record], index: usize) -> Option<usize> {
     // matters because this runs inside the SBF heap-free path.
     for i in 1..n {
         let mut j = i;
-        while j > 0 && records[candidates[j]].time < records[candidates[j - 1]].time {
+        while j > 0 && time_at(candidates[j]) < time_at(candidates[j - 1]) {
             candidates.swap(j, j - 1);
             j -= 1;
         }

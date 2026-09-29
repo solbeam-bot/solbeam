@@ -107,6 +107,22 @@ describe("solbeam — BSV light client", () => {
     program.programId,
   );
 
+  // The BPF upgradeable loader's `ProgramData` account for this program. Its
+  // `upgrade_authority_address` is the ONLY key allowed to call `initialize`
+  // and `initialize_bridge`; Anchor's localnet deploy sets it to the provider
+  // wallet. Derived rather than hardcoded, so a re-keyed deploy still tests.
+  const BPF_LOADER_UPGRADEABLE = new anchor.web3.PublicKey(
+    "BPFLoaderUpgradeab1e11111111111111111111111");
+  const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
+    [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
+
+  // The bridge PDAs, needed by the initialiser test below before the second
+  // describe block creates them.
+  const [usedDeposits] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("used_deposits")], program.programId);
+  const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("deposit_script")], program.programId);
+
   before(async () => {
     // Anchor's localnet wallet is normally funded. Top up defensively, and do
     // not fail the suite if the airdrop is rate-limited.
@@ -121,13 +137,63 @@ describe("solbeam — BSV light client", () => {
     }
   });
 
+  /** A funded key that is NOT this program's upgrade authority. */
+  const stranger = async (): Promise<anchor.web3.Keypair> => {
+    const key = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      key.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    return key;
+  };
+
+  // The vulnerability this closes: `initialize` was unpermissioned, so the first
+  // caller became `authority` — and with it, the key that can rewrite the
+  // checkpoint and mint. This test must run BEFORE the authority's own
+  // `initialize` below, so the PDA is genuinely unclaimed when it is attempted.
+  it("refuses to initialize for a payer that is not the upgrade authority", async () => {
+    const attacker = await stranger();
+
+    try {
+      await program.methods
+        .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(raws[0]))
+        .accounts({ lightClient, programData, payer: attacker.publicKey })
+        .signers([attacker])
+        .rpc();
+      expect.fail("a non-authority payer must not be able to initialize");
+    } catch (e: any) {
+      expect(String(e)).to.contain("Unauthorized");
+    }
+
+    // Solana rolls the failed instruction back, so the attacker took nothing:
+    // the PDA is still unclaimed and the real authority can still initialise.
+    expect(await provider.connection.getAccountInfo(lightClient)).to.equal(null);
+  });
+
+  it("refuses to initialize the bridge for a payer that is not the upgrade authority", async () => {
+    const attacker = await stranger();
+
+    try {
+      await program.methods
+        .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
+        .accounts({ usedDeposits, depositScript, programData, payer: attacker.publicKey })
+        .signers([attacker])
+        .rpc();
+      expect.fail("a non-authority payer must not be able to initialize the bridge");
+    } catch (e: any) {
+      expect(String(e)).to.contain("Unauthorized");
+    }
+
+    expect(await provider.connection.getAccountInfo(usedDeposits)).to.equal(null);
+    expect(await provider.connection.getAccountInfo(depositScript)).to.equal(null);
+  });
+
   it("agrees with the fixture's checkpoint", async () => {
     const cp = raws[0];
     await program.methods
       // The whole 80-byte header, not its fields: nothing can be dropped or
       // mis-ordered this way, which is exactly how the version field got lost.
       .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-      .accounts({ lightClient, payer: provider.wallet.publicKey })
+      .accounts({ lightClient, programData, payer: provider.wallet.publicKey })
       .rpc();
 
     const lc = await program.account.lightClient.fetch(lightClient);
@@ -231,6 +297,13 @@ describe("solbeam — verify a deposit against the window", () => {
     [Buffer.from("deposit_script")], program.programId);
   const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint")], program.programId);
+  // The loader's ProgramData PDA — see the first describe block. The provider
+  // wallet is the localnet upgrade authority, so it is the only key that can
+  // call `initialize_bridge`.
+  const BPF_LOADER_UPGRADEABLE = new anchor.web3.PublicKey(
+    "BPFLoaderUpgradeab1e11111111111111111111111");
+  const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
+    [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
 
   // The Solana address named in the deposit's OP_RETURN. Its key is what the
   // program checks against the payload, and its ATA is where tokens land.
@@ -278,20 +351,12 @@ describe("solbeam — verify a deposit against the window", () => {
       const cp = raws[0];
       await program.methods
         .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-        .accounts({ lightClient, payer: provider.wallet.publicKey })
+        .accounts({ lightClient, programData, payer: provider.wallet.publicKey })
         .rpc();
       for (const raw of raws.slice(1)) {
         await program.methods.pushHeader(Array.from(raw))
           .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
       }
-    }
-    if (!(await provider.connection.getAccountInfo(usedDeposits))) {
-      await program.methods
-        // Vec<u8> must be a Buffer, not an Array: borsh encodes it as
-        // `bytes` and calls .copy() on it.
-        .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
-        .accounts({ usedDeposits, depositScript, payer: provider.wallet.publicKey })
-        .rpc();
     }
     if (!(await provider.connection.getAccountInfo(mint))) {
       await program.methods
@@ -299,6 +364,23 @@ describe("solbeam — verify a deposit against the window", () => {
         .accounts({ mint, lightClient, payer: provider.wallet.publicKey })
         .rpc();
     }
+  });
+
+  // The legitimate half of the initialiser gate. It is a test in its own right
+  // rather than setup, and it must run before the deposit tests because they
+  // need the PDAs it creates. Its opposite number — the stranger who is refused
+  // — is the second test of the first describe block.
+  it("initialises the bridge when the payer IS the upgrade authority", async () => {
+    await program.methods
+      // Vec<u8> must be a Buffer, not an Array: borsh encodes it as
+      // `bytes` and calls .copy() on it.
+      .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
+      .accounts({ usedDeposits, depositScript, programData, payer: provider.wallet.publicKey })
+      .rpc();
+
+    const ds = await program.account.depositScript.fetch(depositScript);
+    expect(Buffer.from(ds.script).toString("hex"))
+      .to.equal(Buffer.from(fixture.deposit_script, "hex").toString("hex"));
   });
 
   it("accepts the fixture's deposit and records it as minted", async () => {
@@ -449,6 +531,13 @@ describe("solbeam — a hostile advancer", () => {
   const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("light_client")], program.programId);
 
+  // The loader's ProgramData PDA is required by `initialize`; see the first
+  // describe block.
+  const BPF_LOADER_UPGRADEABLE = new anchor.web3.PublicKey(
+    "BPFLoaderUpgradeab1e11111111111111111111111");
+  const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
+    [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
+
   const tipHash = async (): Promise<Buffer> => {
     const lc = await program.account.lightClient.fetch(lightClient);
     return Buffer.from(lc.tipHash);
@@ -471,7 +560,7 @@ describe("solbeam — a hostile advancer", () => {
       const cp = raws[0];
       await program.methods
         .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-        .accounts({ lightClient, payer: provider.wallet.publicKey })
+        .accounts({ lightClient, programData, payer: provider.wallet.publicKey })
         .rpc();
       for (const raw of raws.slice(1)) {
         await program.methods.pushHeader(Array.from(raw))
@@ -545,12 +634,19 @@ describe("solbeam — following a reorg", () => {
   const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("light_client")], program.programId);
 
+  // The loader's ProgramData PDA is required by `initialize`; see the first
+  // describe block.
+  const BPF_LOADER_UPGRADEABLE = new anchor.web3.PublicKey(
+    "BPFLoaderUpgradeab1e11111111111111111111111");
+  const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
+    [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
+
   before(async () => {
     if (!(await provider.connection.getAccountInfo(lightClient))) {
       const cp = raws[0];
       await program.methods
         .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-        .accounts({ lightClient, payer: provider.wallet.publicKey }).rpc();
+        .accounts({ lightClient, programData, payer: provider.wallet.publicKey }).rpc();
       for (const raw of raws.slice(1)) {
         await program.methods.pushHeader(Array.from(raw))
           .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
@@ -1137,6 +1233,12 @@ describe("solbeam — real mainnet headers (F1, F2, F3)", () => {
   const LIVE_FROM = CP_INDEX + 1; // index 147, height 968,377
   const PUSH_COUNT = 160;
   const MAX_FORK_BATCH = 12;
+  // A branch batch is smaller than the program's limit because this submitter is
+  // a keypair of its own: the provider wallet pays the fee, so the transaction
+  // carries TWO signatures (128 bytes) rather than one, and 12 x 80 does not
+  // fit. The program's ceiling is still 12; this is only what one transaction
+  // can carry here.
+  const BRANCH_BATCH = 11;
 
   const bitsOf = (raw: Buffer): number => raw.readUInt32LE(72);
   const internalHash = (raw: Buffer): string => doubleSha256(raw).toString("hex");
@@ -1381,8 +1483,8 @@ describe("solbeam — real mainnet headers (F1, F2, F3)", () => {
     const key = await fundedSubmitter();
     const staging = stagingFor(key);
     await initStaging(key, staging, forkHeight);
-    for (let i = 0; i < branch.length; i += MAX_FORK_BATCH) {
-      await pushFork(key, staging, branch.slice(i, i + MAX_FORK_BATCH));
+    for (let i = 0; i < branch.length; i += BRANCH_BATCH) {
+      await pushFork(key, staging, branch.slice(i, i + BRANCH_BATCH));
     }
     await commitFork(key, staging);
 

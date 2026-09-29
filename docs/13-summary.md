@@ -29,12 +29,18 @@ key, relay headers, sign payouts, and challenge theft. **Open membership, 1,000 
 
 | | |
 |---|---|
-| **Minting** | **Trustless.** A Solana program verifies BSV proof of work and Merkle inclusion directly. No signature, no committee and no oracle can mint anything |
+| **Minting** | **Trustless, given the deployed program.** A Solana program verifies BSV proof of work and Merkle inclusion directly: no member's signature, no committee vote and no oracle mints anything. **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked (F4, and *Governance* below), and the exit window (30 days by default, floored at 7) is the real guarantee, not the absence of a key |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone |
 | **The reserve** | **Trusted, and bounded.** The BSV is held under a threshold key by the federation. No single member can move it. What protects you is a **bond that anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
 
 **The one trust assumption: a threshold of federation members do not collude.** Everything else is
-verified. That assumption is not eliminated — it is **bounded**, by bonds that **at `k = 1` equal** what a colluding threshold could take, so theft is not profitable and holders are made whole from the bond. **The bond is what answers theft; the exit window is what answers governance.**
+verified. That assumption is not eliminated — it is **bounded**, by a bond that must cover the
+**non-bonded** supply, so the system cannot outrun its own collateral and no member can leave while
+its share is owed. It does **not** make a colluding threshold unprofitable and it does **not** make
+holders whole from the bond: the bond is denominated in `solBSV`, so a threshold that takes the
+reserve recovers its own bond and keeps the honest members' bonds *and* the non-member supply — see
+*Collusion is a stated risk* below. **The bond sizes the system and prices provable misbehaviour;
+the exit window is what answers governance.**
 
 ---
 
@@ -88,8 +94,9 @@ two conflicting intents has produced **their own proof of guilt** — see *Slash
 
 **Open membership.** Anyone with a **1,000 BSV bond** may join. The bond is posted as `solBSV`
 because it must be seizable on Solana. The federation's **aggregate bond must always be at least
-`k ×` the outstanding `solBSV` supply**, with `k ≥ 1`, so bonded capital exceeds what a colluding
-threshold could take. A member cannot leave while its share of that cover is needed.
+`k ×` the outstanding *non-bonded* `solBSV` supply**, with `k ≥ 1`. **Not total supply** — bonded
+`solBSV` is itself supply, so `B ≥ k × total` forces non-member holdings to zero (see *The bond is
+the float*). A member cannot leave while its share of that cover is needed.
 
 **Members run software, not judgement.** There is no manual approval of any transaction. Each node
 watches both chains, verifies independently with its own light client, signs, and challenges —
@@ -107,21 +114,27 @@ capacity. That is a proof of concept.
 | Who may propose | Any member |
 | To pass | **85% of pledged coins** — the total bonded `solBSV`, weighted by bond size |
 | Delay | **30 days** |
+| Delay floor | **7 days** — `gov.delay` is reducible by governance, but never below `gov.delay_min` |
 | Signal | **Live from the moment it is raised** |
 | Includes | **The upgrade authority** |
-| Cannot pause | **Redemptions. Ever.** Governance *could* rewrite this, since it holds the upgrade authority — which is exactly why the 30-day exit is the real guarantee, not the rule |
+| Cannot pause | **Redemptions. Ever.** Governance *could* rewrite this, since it holds the upgrade authority — which is exactly why the exit window is the real guarantee, not the rule |
 
 All of those are **parameters**, not constants.
 
-**There is no immutable floor, deliberately.** A hostile change needs 85% *and* 30 days, and
+**There is no immutable floor, deliberately.** A hostile change needs 85% *and* the delay, and
 redemptions run throughout — so a proposal that would harm holders **empties the bridge before it
 lands.**
+
+**The delay itself is floored at 7 days.** A first proposal cannot set it to zero — it can only
+shorten it to a week — so the two-step attack (shorten, then land anything) still has to be exited
+during that week. This is the F7 decision: reducible with a floor, not a ratchet.
 
 > **The floor is the exit window, not a constitution.** The protection was never that the rules are
 > frozen. It is that you can always leave before they change.
 
-**The residual, stated plainly:** a holder who does not watch and does not act within 30 days is
-exposed. That is a disclosure obligation, not a mechanism.
+**The residual, stated plainly:** a holder who does not watch and does not act within the delay —
+30 days by default, **7 days at worst** — is exposed. That is a disclosure obligation, not a
+mechanism.
 
 ### The bond is the float
 
@@ -136,9 +149,9 @@ aggregate_bond  ≥  k × (non_bonded_supply + amount)      with k ≥ 1
 can satisfy.** The quantity the bond must cover is the **non-bonded** supply: what honest holders
 could lose.
 
-where `supply` is the outstanding `solBSV` and `aggregate_bond` is a running total maintained on
-chain, since members cannot be enumerated. **The same check runs on `withdraw_bond`**, so a member
-cannot leave while its share is needed.
+where `non_bonded_supply` is the outstanding `solBSV` held outside the bond set (`H` below) and
+`aggregate_bond` is a running total maintained on chain, since members cannot be enumerated. **The
+same check runs on `withdraw_bond`**, so a member cannot leave while its share is needed.
 
 **This is what makes "total value locked is capped by bonds pledged" true rather than aspirational.**
 The bond is not collateral in the abstract — it is **the float for minting and redeeming**, and the
@@ -178,7 +191,12 @@ to.** Members sign individually, so misbehaviour produces **its own evidence**:
 | Misbehaviour | Provable? |
 |---|---|
 | A member signs **two conflicting payout intents** | **Yes — self-proving.** Two signatures, one member, conflicting statements. Anyone submits it; anyone can be paid the bounty |
-| A member signs an intent matching **no authorised redemption** | **Yes** — intents are recorded on Solana, so it is checked against the redemption set |
+
+**One row was deleted, not corrected: "an intent matching no authorised redemption."** The predicate
+is undecidable — a *closed* `PegOut` is indistinguishable from one that never existed — so the
+program cannot check it, and attempting to would false-positive against an honest member who
+attested before a cancel. An earlier draft claimed this row was provable; it is not, and the audit's
+F8 records why. There is no enforceable predicate for an off-chain threshold signature over BSV.
 
 
 ## Collusion is a stated risk, not a mitigated one
@@ -190,14 +208,19 @@ An earlier draft claimed otherwise; that row is deleted.
 **The maximum loss, measured:**
 
 ```
-colluders deposit B  →  mint B solBSV  →  bond it
+colluders bond B_c;  honest members bond B_h;   B = B_c + B_h
 honest holders hold H, and the reserve R = B + H
-colluders take R     →  they recover their own B and take H
+the threshold takes R  →  it recovers its own B_c and keeps B_h + H
 ```
 
-**Net gain to the colluders = H, the entire non-member supply — and the size of the bond does not
-change it.** A bond denominated in the asset it protects is a round trip: funded by a deposit into the
-very reserve it is meant to cover.
+**Net gain to the colluders = `B_h + H` — the honest members' bonds *plus* the entire non-member
+supply.** The earlier version of this paragraph said `H` alone, which assumed every bonded coin
+belonged to the colluders; that is false for any threshold below 100%, and it understated the loss.
+At the mint gate's `k = 1` **minimum** (`B = H`) and an **85%** threshold, `B_h = 0.15·H`, so the loss
+is **at least 1.15×** the old figure; at a **51%** threshold it is **at least 1.49×** (it grows with
+`B`). A bond denominated in the asset it protects is a round trip — funded by a deposit into the very
+reserve it is meant to cover — and the honest members' bonds sit in that same reserve, so they enlarge
+the prize rather than protecting it.
 
 **Why the bond is not moved to a separate asset.** A `SOL` bond would be genuinely separate and
 seizable — but sizing it against a `solBSV` liability needs a **SOL/BSV price**, and that is an oracle.
@@ -224,7 +247,7 @@ for darknodes to deregister other misbehaving darknodes. Right now, it is a plac
 It is **not** a general-purpose bridge, and it does not try to wrap anything but BSV.
 It is **not** a custodian in the single-party sense — no one entity holds the reserve.
 It is **not** an exchange: there is no book, no matching, and no market-making.
-It is **not** oracle-driven: no external metric gates anything. **Minting is gated by nothing at all** — a verified proof is sufficient. Peg-**outs** are gated by the threshold key, which is an internal quorum, not an oracle. Reorg depth and block time come from BSV
+It is **not** oracle-driven: no external metric gates anything. **Minting is gated by the bond, not by an oracle** — a verified proof and a bond that covers the resulting non-bonded supply are sufficient. Peg-**outs** are gated by the threshold key, which is an internal quorum, not an oracle. Reorg depth and block time come from BSV
 headers; deadlines come from Solana slots.
 
 ---
@@ -234,7 +257,7 @@ headers; deadlines come from Solana slots.
 | | |
 |---|---|
 | **Light client** | **Built.** cw-144 implemented and verified against 324/324 real mainnet headers |
-| **Token and mint** | **Built.** 20 on-chain tests, with negative controls |
+| **Token and mint** | **Built.** 24 on-chain tests, with negative controls |
 | **BSV-side peg-in** | **Built.** 51/51 synthetic, 21/21 against a live SV Node |
 | **Vault** | **Designed, not built.** Rewritten against this model after two audits of the **pre-federation** vault (V1–V10, W1–W11, T1–T12): **28 of 33 findings dissolved on the model change**, 6 remain, two blocking |
 | **Federation** | **Designed, not built.** Threshold custody, governance, slashing |

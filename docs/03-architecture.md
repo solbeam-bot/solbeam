@@ -2,7 +2,7 @@
 
 > **Built or designed?** The built set is exactly four things: the **light client** (cw-144
 > difficulty verification and Merkle inclusion), the **`solBSV` token**, the **mint**, and **fork
-> staging with chainwork** — 20 passing on-chain tests. **The vault, the federation, threshold
+> staging with chainwork** — 24 passing on-chain tests. **The vault, the federation, threshold
 > custody, governance, slashing and all of peg-out are designed and not built.** The shipped
 > program mints straight to the depositor's token account. The
 > [trust model](04-trust-model.md) records who bears the difference, and
@@ -64,7 +64,7 @@ per-account cap. The chain therefore lives on-chain as:
 
 - a **checkpoint** (a recent, well-buried header), plus
 - a **rolling window** of **192 subsequent headers** — 32 hours at BSV's ten-minute target — held in
-  a single account of **10,103 bytes**, inside Solana's 10,240-byte account cap. A competing branch
+  a single account of **10,107 bytes**, inside Solana's 10,240-byte account cap. A competing branch
   is staged in batches and committed only if **strictly heavier** in accumulated chainwork; ties
   keep the incumbent, so an equal-length branch cannot churn the tip.
 

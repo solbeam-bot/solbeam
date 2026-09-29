@@ -21,13 +21,15 @@ order book, no leverage. Branding **SOLBEAM**, ticker `solBSV`, 8 decimals, MIT.
 
 | | |
 |---|---|
-| **Minting** | **Trustless.** The program verifies BSV proof of work and Merkle inclusion directly. No signature, no committee and no oracle can mint anything |
+| **Minting** | **Trustless, given the deployed program.** The program verifies BSV proof of work and Merkle inclusion directly: no member's signature, no committee vote and no oracle mints anything. **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked, and the 30-day exit is the real guarantee |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone |
 | **The reserve** | **Trusted, and bounded.** The BSV is under a threshold key, so no single member can move it. What protects you is a **bond anyone can seize by proving misbehaviour on-chain** |
 
 **The one trust assumption: a threshold of federation members do not collude.** It is not
-eliminated; it is bounded — by bonds that exceed what the members could take, by an exit window
-that never closes, and by proofs anyone can submit.
+eliminated; it is bounded — by a bond that must cover the non-bonded supply, by an exit window
+that never closes, and by proofs anyone can submit. It does **not** make collusion unprofitable:
+the bond is `solBSV`, so a colluding threshold recovers its own bond and keeps the honest members'
+bonds and the non-member supply with it.
 
 ## Governance, and the floor that is an exit
 
@@ -51,8 +53,8 @@ produced its own evidence, and anyone may submit it.
 ## Where it stands
 
 **Built and tested:** the light client with cw-144, the `solBSV` token, the mint, and fork staging
-with chainwork — **20 on-chain tests**, **51/51** synthetic Phase 1A checks, **21/21** against a
-live SV Node. The window is **192 records of 52 bytes**, `SPACE` **10,103** of 10,240, a
+with chainwork — **24 on-chain tests**, **51/51** synthetic Phase 1A checks, **21/21** against a
+live SV Node. The window is **192 records of 52 bytes**, `SPACE` **10,107** of 10,240, a
 **32-hour** deposit lifetime. F7 (the retarget), P2 (the fork re-anchor), A7 (double-mint) and the
 window resize are all fixed in code.
 

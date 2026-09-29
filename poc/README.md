@@ -92,7 +92,7 @@ So the flow is: the advancer reads headers from a **BSV node's JSON-RPC** and su
 Two consequences that matter for the design review:
 
 1. **The advancer is untrusted.** It cannot fake a header — the program rejects bad PoW/linkage. The worst it can do is stall, which is a *liveness* problem, not a safety one. Anyone can advance the chain, so the fix for a stalled advancer is "someone else's bot".
-2. **On devnet there is no real cost.** On mainnet, header state costs rent, which is why production uses a **checkpoint + rolling window** rather than the whole chain. The PoC stores a 32-hour window — **192 header records**, 52 bytes each (10,103 bytes total) — to prove the mechanism; it does not attempt genesis-up sync.
+2. **On devnet there is no real cost.** On mainnet, header state costs rent, which is why production uses a **checkpoint + rolling window** rather than the whole chain. The PoC stores a 32-hour window — **192 header records**, 52 bytes each (10,107 bytes total) — to prove the mechanism; it does not attempt genesis-up sync.
 
 The BSV node is the *only* stateful thing you host yourself, and it's a commodity: run SV Node locally in regtest for the PoC.
 

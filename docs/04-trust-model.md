@@ -6,7 +6,7 @@ mode this document exists to prevent.
 
 > **Built or designed?** The built set is exactly four things: the **light client** (cw-144
 > difficulty verification, verified against 324/324 real mainnet headers, and Merkle inclusion), the
-> **`solBSV` token**, the **mint**, and **fork staging with chainwork** — 20 passing on-chain tests.
+> **`solBSV` token**, the **mint**, and **fork staging with chainwork** — 24 passing on-chain tests.
 > **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
 > designed and not built**; the shipped program mints straight to the depositor's token account.
 > Every property below is therefore one of three things, and they are labelled:
@@ -22,7 +22,7 @@ mode this document exists to prevent.
 
 | | |
 |---|---|
-| **Minting** | **Trustless.** A Solana program verifies BSV proof of work (cw-144) and Merkle inclusion directly. **No signature, no committee and no oracle can mint anything** |
+| **Minting** | **Trustless, given the deployed program.** A Solana program verifies BSV proof of work (cw-144) and Merkle inclusion directly. **No member's signature, no committee vote and no oracle mints anything.** The program's **upgrade authority** is the one exception — it can re-anchor the checkpoint — so production must hold it under a threshold and a timelock |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. **A reorg is a fact about headers, not a report from anyone** |
 | **The reserve** | **Trusted, and bounded.** BSV under a **threshold key** held by the federation. No single member can move it. What protects you is a **bond that anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
 
@@ -173,8 +173,12 @@ to.** Members sign payout intents **individually**, so misbehaviour produces **i
 | Misbehaviour | Provable? |
 |---|---|
 | A member signs **two conflicting payout intents** | **Yes — self-proving.** Two signatures, one member, conflicting statements. Anyone submits it; anyone can be paid the bounty |
-| A member signs an intent matching **no authorised redemption** | **Yes** — intents are recorded on Solana, so it is checked against the redemption set |
 | A **threshold** of members signs something invalid | Attributable, since every signature is on record — but this is a governance matter, not a cryptographic one |
+
+**One row was deleted, not corrected: "an intent matching no authorised redemption."** A *closed*
+`PegOut` is indistinguishable from one that never existed, so the program cannot decide the
+predicate, and checking it would false-positive against an honest member who attested before a
+cancel (audit F8).
 
 **This is copied from what RenVM actually shipped**, where `slashDuplicatePropose` and its siblings
 take a node's own two conflicting signatures as the entire proof. **Only that cryptographic half was
@@ -316,7 +320,7 @@ Everything else — deposits, backing, minting, maturity, reversal and the payou
 by code. **Except where it is not yet written:** the vault, the federation, threshold custody,
 governance, slashing and all of peg-out are designed and not built, and this list will not be
 shorter than reality until they are. The built set is the light client, `solBSV`, the mint and fork
-staging — 20 passing on-chain tests.
+staging — 24 passing on-chain tests.
 
 ---
 

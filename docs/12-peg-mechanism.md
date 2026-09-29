@@ -15,7 +15,7 @@
 > buffer argument, and the audit findings A1–A18 as history.
 >
 > **Built or designed?** Built and passing: **the light client with cw-144** (324/324 real mainnet
-> headers), **the `solBSV` token**, **the mint**, and **fork staging** — 20 on-chain tests, 51/51
+> headers), **the `solBSV` token**, **the mint**, and **fork staging** — 24 on-chain tests, 51/51
 > Phase 1A synthetic checks, 21/21 against a live SV Node. Everything else in this document —
 > the vault, maturity, release, burn, the federation, threshold custody, governance, slashing and
 > all of peg-out — is **designed, not built**. The shipped mint goes straight to the depositor's
@@ -52,7 +52,7 @@ in this document, because it could mean any of the four.
 
 | | |
 |---|---|
-| **Minting** | **Trustless.** The program verifies BSV proof of work and Merkle inclusion directly. No signature, no committee and no oracle can mint anything |
+| **Minting** | **Trustless, given the deployed program.** The program verifies BSV proof of work and Merkle inclusion directly: no member's signature, no committee vote and no oracle mints anything. **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked, and the exit window is the real guarantee |
 | **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone |
 | **The reserve** | **Trusted, and bounded.** The BSV is held under a threshold key by the federation. No single member can move it. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
 
@@ -157,7 +157,7 @@ cancel path are the only time limits, and they run in the holder's favour.
 |---|---|---|---|---|
 | **P1** | `FLOOR` — minimum deposit confirmations | **12 blocks (~2 h)** | **safety** | Governed (D4-revised). In the shipped program this is the `MIN_CONFIRMATIONS` constant; `FLOOR` as a distinct parameter is not built |
 | **P2** | `MATURITY` | **144 blocks (~24 h)** | **safety** | How long a staged mint must stay unreorged before release |
-| **P3** | `WINDOW` | **192 records (32 h)** | liveness | **Fixed by arithmetic, not chosen** — cw-144 needs hash + chainwork + time per record (52 B), so 192 is the largest that fits the 10,240-byte account cap with margin. `LIGHT_CLIENT_FIXED` 119 + 192 × 52 = **10,103** (W1.4) |
+| **P3** | `WINDOW` | **192 records (32 h)** | liveness | **Fixed by arithmetic, not chosen** — cw-144 needs hash + chainwork + time per record (52 B), so 192 is the largest that fits the 10,240-byte account cap with margin. `LIGHT_CLIENT_FIXED` 123 + 192 × 52 = **10,107** (W1.4) |
 | **P4** | `D` — redemption deadline | 6 h | liveness | Measured in **slots**, not wall-clock |
 | **P5** | `MIN_PEG_IN` | **1 BSV** | economic | Decided (P5, doc 18): makes dust griefing a capital-lockup attack rather than a fee attack |
 | **P6** | `MAX_PEG_IN` | 10,000 BSV | economic | Per *transaction* only; see §The aggregate mint cap |
@@ -430,9 +430,13 @@ the bonds present when they are needed.
 ### What the bond answers — and what it does not
 
 The bond is a **performance bond sized against `owed`**, the liability the program measured. It
-answers a member's **provable misbehaviour** — self-proving equivocation on a payout intent, or an
-intent matching no authorised redemption — making it punishable on-chain. It is a chain fact rather
-than an attestation, because the bond is `solBSV` the program holds.
+answers a member's **provable misbehaviour** — self-proving equivocation on a payout intent —
+making it punishable on-chain. It is a chain fact rather than an attestation, because the bond is
+`solBSV` the program holds.
+
+**It does not answer "an intent matching no authorised redemption."** That predicate is
+undecidable — a *closed* `PegOut` is indistinguishable from one that never existed — and checking it
+would false-positive against an honest member who attested before a cancel (audit F8).
 
 It is **not** the answer to a failed redemption, and it is **not reorg insurance**:
 
@@ -958,9 +962,11 @@ not made immutable** — the exit window is the protection (D11).
 **Settled.** `bond ≥ k × owed`. `k = 1` covers the principal; anything above covers the case where
 the bond is worth less exactly when it is needed, and with `solBSV` denomination no price move can
 shrink it relative to the exposure. **The consequence is recorded rather than softened:** at `k = 1`
-the bonded stake equals the value the system can hold, so a colluding threshold that takes the
-reserve loses an equal bond — roughly break-even. What makes collusion unattractive is the 30-day
-live signal and the exit, not the bond's excess size.
+the bond covers the **non-bonded** supply, so the system cannot outrun its own collateral — but a
+colluding threshold is **not break-even.** It recovers its own bond and keeps the *honest members'*
+bonds plus the non-member supply: net gain `B_h + H`, i.e. **1.15×** the non-member supply alone at an
+85% threshold and **1.49×** at 51% (doc 13, *Collusion is a stated risk*). What makes collusion
+unattractive is the 30-day live signal and the exit, not the bond's excess size.
 
 ### D6 — The unbacked path: **SUPERSEDED — there is no per-deposit underwriter**
 

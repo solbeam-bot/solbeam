@@ -27,6 +27,7 @@
 //!   clear of the Anchor 1.x `CpiContext` change.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::bpf_loader_upgradeable;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 // Solana 3.x moved hashing out of `solana_program` entirely — there is no
@@ -241,6 +242,13 @@ pub mod solbeam {
     /// thing trusted here, which is why it is governance-set, buried deep and
     /// published — and why it is taken as the **raw 80-byte header** rather
     /// than as individual fields.
+    ///
+    /// **Only the program's upgrade authority may call this.** The account set
+    /// requires the BPF loader's `ProgramData` for this program and checks its
+    /// `upgrade_authority_address` against the payer on-chain; see
+    /// [`Initialize`]. Without that check this instruction was unpermissioned
+    /// and the first caller became `authority`, and therefore the key that could
+    /// rewrite the trusted root, pause the client and mint.
     ///
     /// That is not fussiness; it is a bug this test found. The first version
     /// took prev, merkle root, time, bits and nonce separately and rebuilt the
@@ -619,31 +627,19 @@ pub mod solbeam {
         // own records above it. Together they are contiguous and cumulative
         // chainwork stays on one baseline, so `next_target` sees exactly the
         // window the node would have seen.
+        //
+        // The concatenation is presented to cw-144 as a closure rather than as a
+        // materialised `Vec<Record>`: only 147 records are ever read, but
+        // collecting them allocates — and the SBF heap is small enough that a
+        // window-sized copy of the window is a real cost. `next_target_from`
+        // runs the same arithmetic as the slice form.
         let fork_idx = lc
             .index_of(staging.fork_height)
             .ok_or(SolbeamError::ForkPointNotInWindow)?;
-        let mut ancestry: Vec<Record> = Vec::with_capacity(SEED_RECORDS + batch);
-        ancestry.extend(lc.headers[..=fork_idx].iter().map(|r| Record {
-            time: r.time,
-            chainwork: r.chainwork,
-        }));
-        ancestry.extend(staging.records.iter().map(|r| Record {
-            time: r.time,
-            chainwork: r.chainwork,
-        }));
-        // Only the newest `LOOKBACK` records can affect the answer. Trimming
-        // bounds the work per header and keeps the height arithmetic below
-        // exact no matter how far the main window reaches back.
-        if ancestry.len() > SEED_RECORDS {
-            let excess = ancestry.len() - SEED_RECORDS;
-            ancestry.drain(0..excess);
-        }
-        // The newest record is the parent of the next branch header, at
-        // `fork_height + staging.records.len()`; the oldest is `len - 1` below
-        // it. This is the same height the branch header itself will occupy minus
-        // one, which is the whole point.
-        let mut oldest_height =
-            staging.fork_height + staging.records.len() as u64 + 1 - ancestry.len() as u64;
+        let main_len = fork_idx + 1;
+        let prefix = &lc.headers[..main_len];
+        let staged = &staging.records;
+
         let pow_limit = compact_to_target(lc.pow_limit_bits);
 
         // Validate the whole batch before writing any of it, so a bad header
@@ -660,9 +656,29 @@ pub mod solbeam {
             let required = if lc.no_retargeting {
                 lc.expected_bits
             } else {
-                difficulty::next_target(&ancestry, oldest_height, pow_limit)
-                    .map(target_to_compact)
-                    .ok_or(SolbeamError::DifficultyNotComputable)?
+                // Ancestry = prefix ++ staged ++ checked-so-far, trimmed to the
+                // newest LOOKBACK records because only those can be read.
+                let parent_height =
+                    staging.fork_height + staged.len() as u64 + checked.len() as u64;
+                let total = main_len + staged.len() + checked.len();
+                let kept = total.min(SEED_RECORDS);
+                let start = total - kept;
+                let oldest_height = parent_height + 1 - kept as u64;
+                difficulty::next_target_from(kept, oldest_height, pow_limit, |i| {
+                    let idx = start + i;
+                    if idx < main_len {
+                        let r = &prefix[idx];
+                        Record { time: r.time, chainwork: r.chainwork }
+                    } else if idx - main_len < staged.len() {
+                        let r = &staged[idx - main_len];
+                        Record { time: r.time, chainwork: r.chainwork }
+                    } else {
+                        let r = &checked[idx - main_len - staged.len()];
+                        Record { time: r.time, chainwork: r.chainwork }
+                    }
+                })
+                .map(target_to_compact)
+                .ok_or(SolbeamError::DifficultyNotComputable)?
             };
             // Target before work, for the reason given in `push_header`.
             require!(bits == required, SolbeamError::UnexpectedRetarget);
@@ -676,13 +692,6 @@ pub mod solbeam {
                 chainwork,
                 time,
             });
-            // The header just validated becomes ancestry for the next one, so
-            // the batch is checked left to right exactly as the node would.
-            ancestry.push(Record { time, chainwork });
-            if ancestry.len() > SEED_RECORDS {
-                ancestry.remove(0);
-                oldest_height += 1;
-            }
             prev = hash;
         }
         staging.records.extend(checked);
@@ -768,11 +777,25 @@ pub mod solbeam {
         // unchanged. Every record above the fork point comes from the branch and
         // was built as it arrived — hash, work and time together — so the window
         // that results is a single contiguous chain with no gap in it.
-        let mut rebuilt: Vec<HeaderRecord> = lc.headers[..=fork_idx].to_vec();
-        rebuilt.extend(staging.records.iter().cloned());
-        if rebuilt.len() > WINDOW {
-            let excess = rebuilt.len() - WINDOW;
-            rebuilt.drain(0..excess);
+        //
+        // Allocated once, at the exact final length, and filled by copying the
+        // surviving slices — NOT `to_vec()` followed by `extend()`. The doubling
+        // in `extend` momentarily holds two full windows (up to 12 KB each) on a
+        // heap that also holds both deserialised accounts, which is how this
+        // path runs out of memory on a real 192-record window. The arithmetic
+        // below is the same prune, expressed as indices first.
+        let total = (fork_idx + 1) + staging.records.len();
+        let excess = total.saturating_sub(WINDOW);
+        let keep = total - excess;
+        let mut rebuilt: Vec<HeaderRecord> = Vec::with_capacity(keep);
+        if excess < fork_idx + 1 {
+            rebuilt.extend_from_slice(&lc.headers[excess..=fork_idx]);
+            rebuilt.extend_from_slice(&staging.records);
+        } else {
+            let skip = excess - (fork_idx + 1);
+            rebuilt.extend_from_slice(&staging.records[skip..]);
+        }
+        if excess > 0 {
             lc.window_start += excess as u64;
         }
         if rebuilt.is_empty() {
@@ -808,6 +831,12 @@ pub mod solbeam {
 
     /// Create the bridge's own state: the script a deposit must pay, and the
     /// list of deposits already minted.
+    ///
+    /// `deposit_script` is the one address every peg-in must pay, so setting it
+    /// is a privileged act: a first caller free to choose it would redirect
+    /// every deposit into their own output. Like `initialize`, this is gated on
+    /// the program's **upgrade authority**, read from the loader's `ProgramData`
+    /// account — see [`Initialize`].
     pub fn initialize_bridge(ctx: Context<InitializeBridge>, deposit_script: Vec<u8>) -> Result<()> {
         require!(
             is_p2pkh(&deposit_script),
@@ -1036,9 +1065,15 @@ pub struct LightClient {
     pub headers: Vec<HeaderRecord>,
     /// Who may set the checkpoint or pause the client. **Without this, `authority`
     /// in `SetCheckpoint` was a bare `Signer` compared to nothing, so any key could
-    /// rewrite the trusted root — the whole client's security — at will.** Set to
-    /// the initialising payer; production wants a governance multisig, and the
-    /// deploy-time race noted in TEST_PLAN remains.
+    /// rewrite the trusted root — the whole client's security — at will.**
+    ///
+    /// Set by `initialize` to the program's **upgrade authority**, verified
+    /// on-chain against the loader's `ProgramData` account. It used to be set to
+    /// whichever key called `initialize` first, which made the initialiser
+    /// unpermissioned: one public transaction by anyone at all took over a fresh
+    /// deployment. Production still wants a governance multisig to hold the
+    /// upgrade authority, but that is now a choice about *who the authority is*,
+    /// not an open race about who gets there first.
     pub authority: Pubkey,
     /// The target every header must carry. **Read from the chain, never from the
     /// header being checked.** The target previously came from the submitted
@@ -1170,19 +1205,6 @@ impl LightClient {
         self.seed_remaining > 0
     }
 
-    /// The window as the difficulty module wants it. Built fresh rather than
-    /// kept in a parallel field: a second copy of the window is a second thing
-    /// to get out of step with the first.
-    fn difficulty_records(&self) -> Vec<Record> {
-        self.headers
-            .iter()
-            .map(|h| Record {
-                time: h.time,
-                chainwork: h.chainwork,
-            })
-            .collect()
-    }
-
     /// The `bits` the header at `tip_height + 1` must carry, or `None` while
     /// the window is still too short for cw-144.
     ///
@@ -1196,9 +1218,22 @@ impl LightClient {
             // is simply the previous block's. `expected_bits` is that value.
             return Some(self.expected_bits);
         }
-        let records = self.difficulty_records();
         let pow_limit = compact_to_target(self.pow_limit_bits);
-        difficulty::next_target(&records, self.window_start, pow_limit).map(target_to_compact)
+        // Read the window in place rather than collecting it into a `Vec<Record>`.
+        // Every live mainnet header needs 147 of these; the copy is 147 records
+        // of heap on a chain where the heap is small, and it was the allocation
+        // that made the first real mainnet `push_header` fail with "out of
+        // memory". The algorithm is unchanged and still `difficulty.rs`'s.
+        difficulty::next_target_from(
+            self.headers.len(),
+            self.window_start,
+            pow_limit,
+            |i| Record {
+                time: self.headers[i].time,
+                chainwork: self.headers[i].chainwork,
+            },
+        )
+        .map(target_to_compact)
     }
 
     /// The whole difficulty check for the main chain.
@@ -1274,8 +1309,52 @@ pub struct HeaderRecord {
     pub time: u32,
 }
 
+/// The BPF upgradeable loader's `ProgramData` account for **this program**.
+///
+/// Derived rather than supplied: the address is `find_program_address([crate::ID],
+/// bpf_loader_upgradeable)` and never comes from the caller. That is what stops a
+/// caller pointing the authority check at a `ProgramData` account they control.
+///
+/// Returns the address without checking it exists — the `Account<'info, ProgramData>`
+/// wrapper in the instruction does that, and `try_deserialize` rejects anything that
+/// is not a `ProgramData` variant.
+fn program_data_address() -> Pubkey {
+    Pubkey::find_program_address(&[crate::ID.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+/// The gate every `initialize`-class instruction shares: **only the key that can
+/// upgrade this program may install its trust root.**
+///
+/// This closes the deploy-time takeover. `initialize` and `initialize_bridge`
+/// used to accept any signer as `payer` and record that key as the client's
+/// `authority` (and reachable through it, `set_checkpoint`, `set_paused` and a
+/// fabricated deposit). The first caller after deployment therefore became the
+/// authority in one public transaction — a permanent takeover of a fresh
+/// deployment, and a race that cannot be won by being quick.
+///
+/// The identity is read **from the chain**, not supplied. `program_data` is
+/// pinned to the loader's `ProgramData` PDA for this program by `address`, and
+/// its `upgrade_authority_address` must equal the payer. The field order matters:
+/// `payer` and `program_data` are declared before any `init` account, so the
+/// check runs before anything is created.
 #[derive(Accounts)]
 pub struct Initialize<'info> {
+    /// The initialiser, and the only key that may run this instruction.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// The `ProgramData` account of this program, whose upgrade authority must be
+    /// the payer.
+    ///
+    /// A deployer that leaves the program non-upgradeable
+    /// (`upgrade_authority_address == None`) can never initialise, which is the
+    /// correct failure: there is no key that could later repair the trust root,
+    /// so there is no key entitled to set one.
+    #[account(
+        address = program_data_address() @ SolbeamError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(payer.key())
+            @ SolbeamError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
     #[account(
         init,
         payer = payer,
@@ -1284,8 +1363,6 @@ pub struct Initialize<'info> {
         bump
     )]
     pub light_client: Account<'info, LightClient>,
-    #[account(mut)]
-    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1557,14 +1634,24 @@ impl DepositScript {
 
 #[derive(Accounts)]
 pub struct InitializeBridge<'info> {
+    /// See [`Initialize`]: the bridge's deposit script is the address every
+    /// peg-in pays, so whoever sets it first controls where deposits go. It is
+    /// gated on the program's upgrade authority for the same reason and by the
+    /// same two constraints.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(
+        address = program_data_address() @ SolbeamError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(payer.key())
+            @ SolbeamError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
     #[account(init, payer = payer, space = UsedDeposits::SPACE,
               seeds = [b"used_deposits"], bump)]
     pub used_deposits: Account<'info, UsedDeposits>,
     #[account(init, payer = payer, space = DepositScript::SPACE,
               seeds = [b"deposit_script"], bump)]
     pub deposit_script: Account<'info, DepositScript>,
-    #[account(mut)]
-    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 

@@ -25,9 +25,16 @@ The only configuration where it advances is a checkpoint at `0x207fffff` (regtes
 `no_retargeting` is true and the difficulty rule does not apply.
 
 > **What this invalidates.** The **324/324 result validated a pure function in `difficulty.rs`, not
-> the instruction path.** The 20 on-chain tests are all regtest. So "F7 fixed" and "the client
-> follows a real chain's difficulty" are **both false as system claims** — exactly the error class
-> this project keeps repeating: *verifying a function and claiming a system.*
+> the instruction path.** At the time of this audit the on-chain tests were all regtest. So "F7
+> fixed" and "the client follows a real chain's difficulty" are **both false as system claims** —
+> exactly the error class this project keeps repeating: *verifying a function and claiming a
+> system.*
+>
+> **Partly superseded since.** The F1/F2/F3 fix added on-chain tests that drive **160 real mainnet
+> headers through `push_header`** and a **real mainnet branch through `push_fork_header`**, so the
+> instruction path — not only the pure function — is now exercised against difficulty that changes
+> every block. The F1 deadlock is closed. The residual is that this is still a local validator, not
+> a real BSV node.
 
 **Fix:** the first 147 headers need a trusted target, not an equality test that cannot be satisfied —
 either a governance-supplied 147-header seed at `initialize`, or an explicit fallback that trusts the
@@ -47,12 +54,19 @@ The 72-header reorg test passes only because regtest's `no_retargeting` makes th
 
 ### F4 — The mint gate is a single instant key
 
-`authority` is the initialising payer; `set_checkpoint` and `set_paused` are `has_one = authority`,
+`authority` **was** the initialising payer; `set_checkpoint` and `set_paused` are `has_one = authority`,
 with **no timelock, no threshold, and no path to governance** (there is no `set_authority`). Rewrite
 the checkpoint, prove a fake deposit, mint anything.
 
 **This falsifies "no signature, no committee and no oracle can mint anything"** — stated in docs 13,
 04, 03 and the README. Doc 06 correctly called it a live critical; doc 12 marked it "fixed".
+
+**Partly fixed since.** `initialize` and `initialize_bridge` now require the program's **upgrade
+authority** (verified on-chain against the loader's `ProgramData` account), so the first caller of a
+fresh deployment no longer becomes `authority`. The residual is F4 itself: the upgrade key can still
+rewrite the checkpoint with **no timelock and no threshold**. That fix is specified in doc 24
+(`gov.authority_threshold`, `gov.authority_timelock`) and is **not built**. The four overclaims have
+been corrected to name the upgrade authority as the exception.
 
 ### F5 — TVL is not capped by bonds, and nothing checks the bond on mint
 
@@ -75,6 +89,12 @@ the theft — `set_paused` halts `push_header` **and** `verify_deposit`, stallin
 **Fix:** `gov.delay` must be **immutable or non-decreasing** — a ratchet. Otherwise "the floor is the
 exit" is a slogan.
 
+**Decided otherwise (F7 closed).** The ratchet was rejected in favour of a **floor**: `gov.delay`
+stays reducible by governance, but never below **`gov.delay_min = 7 days`** (doc 24). That defeats
+the two-step attack — proposal 1 can shorten the delay to seven days, not zero, so proposal 2 still
+has to be exited during a week. The residual is that the guaranteed exit window is **7 days, not
+30**; a holder who watches less often than that is exposed.
+
 ### F8 — Slashing cannot prove the case that matters
 
 The BSV payout is a **threshold signature produced off-chain**, and a threshold signature does not
@@ -83,11 +103,16 @@ records nothing. And a *closed* `PegOut` is indistinguishable from one that neve
 "matches no authorised redemption" is undecidable — and would false-positive against an honest member
 who attested before a cancel.
 
-**Doc 13's third slashing row is false.** Docs 23, 05, 14 and 12 all say this is "a governance matter,
-not a cryptographic one" — four writers against one, and the one was the commit that added the row.
+**Doc 13's "intent matching no authorised redemption" row is false.** Docs 23, 05, 14 and 12 all say
+this is "a governance matter, not a cryptographic one" — four writers against one, and the one was
+the commit that added the row.
 
 **Fix:** delete the row and restate collusion as unbounded, or produce an enforceable predicate. There
 is none for an off-chain threshold signature over BSV.
+
+**Status: done.** The row has been deleted from docs 13, 14, 23, 12, 09, 08, 04, 05 and 22; only
+self-proving equivocation and the governance-matter caveat remain. (An earlier pass deleted the
+separate *collusion* row instead and left this one standing — the two rows were different findings.)
 
 ---
 
@@ -140,8 +165,8 @@ in the vault.
 3. **F2** — `set_checkpoint` must re-derive `expected_bits`/`no_retargeting`/`pow_limit_bits`, or be removed
 4. **F4** — checkpoint and pause authority must be threshold and timelocked, and appear in doc 24
 5. **F5/F9** — define `owed` once, and enforce `aggregate_bond ≥ k × owed` on the mint and withdraw paths
-6. **F7** — `gov.delay` immutable or a ratchet; redemptions need an attestation timeout-and-rotate rule
-7. **F8** — delete doc 13's third slashing row and restate collusion as unbounded
+6. **F7** — `gov.delay` gets a **floor** (`gov.delay_min = 7 days`), not a ratchet *(decided; see above)*; redemptions need an attestation timeout-and-rotate rule
+7. **F8** — delete doc 13's **"intent matching no authorised redemption"** row and restate collusion as unbounded *(done: the row is gone from docs 13, 14, 23, 12, 09, 08, 04, 05, 22; the separate collusion row was already deleted)*
 8. **F10** — replace the P2PKH check with a real threshold script, or state that the reserve is one key
 9. **Genesis** — no path exists for the first bond; blocking for deployment, not for code
 

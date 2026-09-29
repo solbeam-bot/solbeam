@@ -1,7 +1,7 @@
 # Phase 2 — the BSV light client on Solana
 > **STALE — predates the current program.** It claims "this code has never been
 > compiled", that `check_daa()` runs on every header, and that there is "no mint and no
-> token". None of that is true today: the program builds, has 20 passing tests, mints
+> token". None of that is true today: the program builds, has 24 passing tests, mints
 > `solBSV`, and the difficulty retarget is **cw-144**, verified against 324/324 real
 > mainnet headers (`check_daa` no longer exists). See [`TEST_PLAN.md`](../TEST_PLAN.md) §0.
 
@@ -35,10 +35,27 @@ with an empty `target/` does need `anchor keys sync`, which regenerates the
 keypair and rewrites the id — and, note, **strips the comments out of
 `Anchor.toml`** while doing it.
 
-`--validator legacy` matters.** Anchor 1.x uses **Surfpool** as the default
+**`--validator legacy` matters.** Anchor 1.x uses **Surfpool** as the default
 backend for `anchor test` and `anchor localnet`. If Surfpool is not installed,
 pass `--validator legacy` to keep using `solana-test-validator`, which the
 droplet already has.
+
+**The deployment must be upgradeable, and the upgrade authority is the key that may initialise.**
+`initialize` and `initialize_bridge` accept **only the program's upgrade authority**, read on-chain
+from the BPF upgradeable loader's `ProgramData` account. Anchor's legacy validator embeds workspace
+programs in the genesis block rather than deploying them; with the default `[test] upgradeable =
+false` it embeds the program with **`Pubkey::default()`** as its authority, so **no key can satisfy
+the check**, `initialize` is permanently refused, and the bridge can never start. `Anchor.toml`
+therefore sets:
+
+```toml
+[test]
+upgradeable = true
+```
+
+which makes Anchor pass this wallet as the upgrade authority. Do not remove it. For a real cluster,
+a plain `solana program deploy` (fee payer = provider wallet) gives the same result; **do not use
+`--final`**, which makes the program immutable and permanently uninitialisable.
 
 ## What the tests assert
 

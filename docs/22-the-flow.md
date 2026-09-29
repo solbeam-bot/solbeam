@@ -13,8 +13,8 @@ everywhere below.
 
 | | |
 |---|---|
-| **Light client** | **Built.** Checkpoint plus a rolling window of **192** BSV headers — **32 hours** — in one account of **10,103 bytes**, with a **52-byte** record per header (block hash, cumulative chainwork, timestamp). cw-144 verified against **324/324** real mainnet headers |
-| **Token and mint** | **Built.** 20 on-chain tests, with negative controls. `verify_deposit` mints gross, straight to the depositor |
+| **Light client** | **Built.** Checkpoint plus a rolling window of **192** BSV headers — **32 hours** — in one account of **10,107 bytes**, with a **52-byte** record per header (block hash, cumulative chainwork, timestamp). cw-144 verified against **324/324** real mainnet headers |
+| **Token and mint** | **Built.** 24 on-chain tests, with negative controls. `verify_deposit` mints gross, straight to the depositor |
 | **BSV-side peg-in** | **Built.** 51/51 synthetic, 21/21 against a live SV Node |
 | **Vault, federation, threshold custody, slashing, governance, peg-out** | **Designed, not built.** Everything in this document after the mint step |
 | **Order book** | **Removed.** A governed 30 bp fee replaces it |
@@ -134,7 +134,7 @@ cannot be resolved: `finalize` and `cancel` are mutually exclusive by time.
 | A member never attests | Nothing stalls the others. The other members attest, the threshold is reached, the payment goes out | Nobody |
 | **A threshold of members never attests** | After the deadline, `cancel_redeem` returns the escrow. The User is **denied peg-out for the duration of the deadline**, though not robbed | **The User** — latency, not loss. Open defect **N2**: refusal leaves no signed artifact, so nothing is slashable |
 | A member signs two conflicting intents | It produced its own proof of guilt. Anyone submits both; the bond is seized and the challenger takes the bounty | **The member's bond** |
-| A member signs an intent matching no redemption | Intents are recorded on Solana, so it is checked against the redemption set | **The member's bond** |
+| ~~A member signs an intent matching no redemption~~ | **Deleted (audit F8).** A closed `PegOut` is indistinguishable from one that never existed, so the predicate is undecidable and would false-positive against an honest member who attested before a cancel | — |
 | The payout proof is replayed across two redemptions to one exchange address | It cannot be: the payment carries the redemption's id | Whoever tried it — rejected |
 | The payout is reorged before it is `C_payout` deep | It does not finalize. The reserve can pay again; if not, the deadline returns the escrow | **Nobody.** The reserve does not depend on one transaction surviving |
 | The escrow is burned on a proof that later vanishes | `C_payout` blocks must sit behind the payout **before** the burn, so this is not reachable through `finalize_redeem` | — |

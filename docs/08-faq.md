@@ -1,7 +1,7 @@
 # 8. FAQ
 
 > **What exists, and what does not.** The light client with cw-144, the token, the mint and fork
-> staging are **built and tested** (20 on-chain tests). **The vault, the bonded federation,
+> staging are **built and tested** (24 on-chain tests). **The vault, the bonded federation,
 > threshold custody, governance, slashing and all of peg-out are designed and not built.** Where
 > an answer below describes a staged mint or a redemption, it is describing the specification; the
 > shipped program still mints straight to the depositor's wallet. See
@@ -23,7 +23,7 @@ Because releasing real BSV requires a BSV signature, and BSV Script cannot verif
 The escrow comes back. A redemption escrows `solBSV` into the vault with a deadline; if the payout does not settle, **anyone may cancel after the deadline** and the escrow returns to the holder. Supply is unchanged and **the bond is not slashed for a failed redemption** — the returned escrow already makes the holder whole, and paying the bond as well would compensate twice. The bond answers proven misbehaviour, not a missed payout.
 
 **What is the bond actually for, then?**
-**Self-proving equivocation.** Members sign payout intents individually and those intents are recorded on Solana, so a member who signs **two conflicting intents** has produced its own proof of guilt: two signatures, one member, conflicting statements. Anyone may submit it and be paid the bounty. The same record catches a member signing an intent that matches **no authorised redemption**. A threshold of members signing something invalid is attributable because every signature is on record, but that is a governance matter, not a cryptographic one — we say so rather than implying the bond catches everything.
+**Self-proving equivocation.** Members sign payout intents individually and those intents are recorded on Solana, so a member who signs **two conflicting intents** has produced its own proof of guilt: two signatures, one member, conflicting statements. Anyone may submit it and be paid the bounty. It does **not** catch "an intent matching no authorised redemption" — that predicate is undecidable, because a closed `PegOut` is indistinguishable from one that never existed, and it would false-positive against an honest member who attested before a cancel (audit F8). A threshold of members signing something invalid is attributable because every signature is on record, but that is a governance matter, not a cryptographic one — we say so rather than implying the bond catches everything.
 
 **What if a threshold of federation members collude?**
 That is the trust assumption, and it is not eliminated. It is **bounded**: the bond must exceed what the members could take (`bond ≥ k × owed`, so a member cannot leave while owing), the reserve sits under a threshold key so no single member can move it, and misbehaviour leaves on-chain evidence anyone can act on. There is no design in which a colluding threshold is harmless; the design makes it expensive and provable.

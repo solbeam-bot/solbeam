@@ -9,7 +9,7 @@ each with its own key and its own float, underwriting an order book of staked bi
 **superseded**. What changed is recorded in §What this replaces.
 
 > **Status: designed, not built.** The built set is the light client (cw-144), the `solBSV` token,
-> the mint and fork staging with chainwork — 20 passing on-chain tests. **No block, bond, member,
+> the mint and fork staging with chainwork — 24 passing on-chain tests. **No block, bond, member,
 > threshold signature or governance vote described below exists in code yet**, and the shipped
 > program mints straight to the depositor's token account, not into a vault. Read this as a
 > specification. [`13-summary.md`](13-summary.md) is authoritative where this chapter disagrees.
@@ -166,8 +166,12 @@ Our equivalent, given that members sign payout intents individually:
 | Misbehaviour | Provable? | How |
 |---|---|---|
 | A member signs **two conflicting payout intents** | **Yes — self-proving** | Two signatures, one member, conflicting statements. Anyone slashes, anyone is paid |
-| A member signs an intent matching **no authorised redemption** | **Yes** | Intents are recorded on Solana, so the program checks it against the redemption set |
 | A **threshold** of members signs something invalid | Attributable, since each signature is on record | But this is ultimately a governance matter, not a cryptographic one |
+
+**One row was deleted, not corrected: "an intent matching no authorised redemption."** A *closed*
+`PegOut` is indistinguishable from one that never existed, so the program cannot decide the
+predicate, and checking it would false-positive against an honest member who attested before a
+cancel (audit F8).
 
 **The design rule this implies:** *make misbehaviour produce a self-incriminating signed artifact,
 rather than trying to infer guilt from an aggregate.* Attribution stops being a hard cryptographic

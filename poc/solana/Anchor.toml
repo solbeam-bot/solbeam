@@ -15,6 +15,19 @@ anchor_version = "1.2.0"
 resolution = true
 skip-lint = false
 
+# The upgrade authority of a localnet deployment IS the authority the program
+# trusts: `initialize` and `initialize_bridge` read the BPF upgradeable loader's
+# `ProgramData` account and accept only `upgrade_authority_address ==
+# Some(payer)`. Anchor's *legacy* validator embeds workspace programs in the
+# genesis block instead of deploying them, and `upgradeable = true` is what makes
+# that embed use `--upgradeable-program` with the wallet above as the upgrade
+# authority. With the default (`false`) the program is embedded with
+# `Pubkey::default()` as its authority, so NO key can ever satisfy the check,
+# `initialize` is permanently refused, and the bridge can never start. See
+# `../TEST_PLAN.md` §0.1 and `README.md` §Running it.
+[test]
+upgradeable = true
+
 [programs.localnet]
 # Derived from the keypair in target/deploy/solbeam-keypair.json, which is
 # gitignored. A fresh clone with an empty target/ must run `anchor keys sync`

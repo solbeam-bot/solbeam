@@ -120,8 +120,12 @@ Our equivalent, given that members sign payout intents individually:
 | Misbehaviour | Provable? | How |
 |---|---|---|
 | A member signs **two conflicting payout intents** | **Yes — self-proving** | Two signatures, one member, conflicting statements. Anyone slashes, anyone is paid |
-| A member signs an intent matching **no authorised redemption** | **Yes** | Intents are recorded on Solana, so the program checks it against the redemption set |
 | A **threshold** of members signs something invalid | Attributable, since each signature is on record | But this is ultimately a governance matter, not a cryptographic one |
+
+**One row was deleted, not corrected: "an intent matching no authorised redemption."** A *closed*
+`PegOut` is indistinguishable from one that never existed, so the program cannot decide the
+predicate, and checking it would false-positive against an honest member who attested before a
+cancel (audit F8).
 
 **The design rule this implies:** *make misbehaviour produce a self-incriminating signed artifact,
 rather than trying to infer guilt from an aggregate.* Attribution stops being a hard cryptographic

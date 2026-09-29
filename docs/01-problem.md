@@ -1,7 +1,7 @@
 # 1. The problem
 
 > **Built or specified?** The light client with cw-144, the `solBSV` token, the mint and fork
-> staging exist today and pass **20 on-chain tests**. **The vault, the bonded federation, threshold
+> staging exist today and pass **24 on-chain tests**. **The vault, the bonded federation, threshold
 > custody, governance, slashing and all of peg-out are designed, not built.**
 > [`13-summary.md`](13-summary.md) is the authoritative account.
 
@@ -39,8 +39,9 @@ of operators, and their track record is mixed.
 SOLBEAM's answer is a **bonded federation** — and that is a deliberate change from earlier drafts
 of this document, which described an operator-less design. The honest division is:
 
-- **Minting is trustless.** A Solana program verifies BSV proof of work (under BSV's real rule,
-  **cw-144**) and Merkle inclusion itself. No signature, no committee and no oracle can mint anything.
+- **Minting is trustless, given the deployed program.** A Solana program verifies BSV proof of work (under BSV's real rule,
+  **cw-144**) and Merkle inclusion itself. No member's signature, no committee vote and no oracle mints anything.
+  **The program's upgrade authority is the one exception** — it can re-anchor the checkpoint, which is why production must hold it under a threshold and a timelock.
 - **Reversal is trustless.** The program compares its own stored header hash against the one a
   deposit was proven with. A reorg is a fact about headers, not a report from anyone.
 - **The reserve is trusted, and bounded.** The BSV sits under a **threshold key** held by the

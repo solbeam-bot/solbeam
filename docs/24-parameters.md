@@ -55,9 +55,9 @@ while the numbers are still provisional.
 | `fed.bond_size` | Member bond | **1,000 BSV** `dec` | The price of admission. Sets the scale limit |
 | `fed.total_bond` | Aggregate bond (tracked) | **derived from bonds** `dec` | A running total on-chain, since members cannot be enumerated. **This is the number the mint gate checks** |
 | `fed.mint_gate` | Bond gates minting | **true** `dec` | **F5.** A mint is refused unless `total_bond ≥ k × (non_bonded_supply + amount)` after it. **The bond IS the float.** Note **non-bonded**: using total supply makes the gate unsatisfiable, since bonded `solBSV` is itself supply |
-| `fed.bond_asset` | Bond denomination | **`solBSV`** `dec` | Deliberately the wrapped asset. A separate asset would need a price oracle to size the cover. **Consequence: the bond does not protect against collusion** — max loss is the full non-bonded supply |
+| `fed.bond_asset` | Bond denomination | **`solBSV`** `dec` | Deliberately the wrapped asset. A separate asset would need a price oracle to size the cover. **Consequence: the bond does not protect against collusion** — a colluding threshold recovers its own bond and keeps the honest members' bonds plus the non-member supply, so the loss is `B_h + H`, not `H` alone (doc 13, *Collusion*) |
 | `fed.collusion_mitigation` | Against a colluding threshold | **none** `dec` | **Stated risk, not a mechanism.** No on-chain predicate can prove who signed an off-chain threshold signature. Accepted; revisit if one is ever needed |
-| `fed.k` | Bond multiple | **1** `dec` | Aggregate bond ≥ `k ×` outstanding supply. At `k = 1` theft is unprofitable, not prevented. **Capital inefficiency accepted** — over-collateralising is a member's choice, not a requirement |
+| `fed.k` | Bond multiple | **1** `dec` | Aggregate bond ≥ `k ×` outstanding **non-bonded** supply (see `fed.mint_gate` — using total supply makes the gate unsatisfiable). At `k = 1` the bond covers what honest holders could lose, so the system cannot outrun its own collateral; it does **not** make a colluding threshold unprofitable, because the colluders recover their own bond and keep the honest members' bonds and the non-member supply (doc 13, *Collusion*). **Capital inefficiency accepted** — over-collateralising is a member's choice, not a requirement |
 | `fed.threshold` | Signing threshold | **open** | `t` of `n`. **Stated nowhere yet** — this is a real gap |
 | `fed.shards` | Shard count | **open** | One key or several groups. Affects blast radius and latency |
 | `fed.unbond_slots` | Unbonding period | **open** | Must exceed the redemption deadline plus the challenge window |
@@ -69,12 +69,12 @@ while the numbers are still provisional.
 | ID | Name | Value | Description |
 |---|---|---|---|
 | `gov.threshold` | Pass threshold | **85%** `ph` | Share of pledged coins required |
-| `gov.delay` | Delay before effect | **30 days** `ph` | **This is the floor.** Redemptions run throughout, so a hostile change empties the bridge |
+| `gov.delay` | Delay before effect | **30 days** `ph` | Default delay. **Reducible** by governance, but never below `gov.delay_min`. Redemptions run throughout, so a hostile change that shortens the delay still has to be exited during it |
+| `gov.delay_min` | Minimum delay (**floor**) | **7 days** `dec` | **F7, decided.** `gov.delay` may be raised or lowered by governance, but the reduction is floored here: a cohort of holders always has at least a week to exit. Without a floor, proposal 1 could set the delay to zero — harming nobody, so nobody exits — and proposal 2 would then land instantly |
 | `gov.signal` | Signal from proposal | **true** `dec` | Live from the moment it is raised, not when it passes |
-| `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. There is no immutable floor |
+| `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. Nothing is immutable — governance could rewrite even `gov.delay_min` — so the exit window, not the rule, is the protection |
 | `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `dec` | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint |
 | `gov.authority_timelock` | Authority timelock | **open** | **F4.** Delay before a checkpoint or pause takes effect. Must be long enough to exit |
-| `gov.delay_ratchet` | Delay is non-decreasing | **true** `dec` | **F7.** `gov.delay` may only be raised. A first proposal setting it to zero harms nobody, so nobody exits, and the second then lands instantly |
 | `gov.pause_threshold` | Pause threshold | **>50%** `ph` | Lower than a governance change, because the power is bounded |
 | `gov.pause_duration` | Pause auto-lift | **open** | Days before a pause lapses unless renewed |
 
@@ -115,13 +115,16 @@ while the numbers are still provisional.
 
 ## What is genuinely undecided
 
-**Seven values are `open`, and two of them are load-bearing:**
+**Thirteen values are `open`. Four are load-bearing:**
 
 1. **`fed.threshold`** — `t` of `n`. The whole security model rests on it and **it is stated nowhere.**
-2. **`po.deadline` / `po.challenge_window`** — these set the window in which a theft can be proven, which is the security parameter the earlier audits identified as the real one.
+2. **`po.deadline` / `po.challenge_window` / `po.payout_confirmations`** — three values that are one security parameter: the window in which a theft can be proven, which the earlier audits identified as the real one.
 
-The rest — `lc.cluster_id`, `fed.unbond_slots`, `fed.script`, `gov.pause_duration`, `fee.bounty_share`
-— are placeholders that can be filled once the structure is audited.
+The other nine — `lc.cluster_id`, `lc.pow_limit_bits`, `lc.max_staleness_slots`, `fed.shards`,
+`fed.unbond_slots`, `fed.script`, `gov.authority_timelock`, `gov.pause_duration`, `fee.bounty_share`
+— are placeholders that can be filled once the structure is audited. (`gov.authority_timelock` is
+load-bearing for F4 in the same way `po.deadline` is for redemptions; it is listed here only because
+no value has been chosen yet.)
 
 **A note on why this file exists:** several values here (`lc.window_hours`, `fed.bond_size`,
 `gov.threshold`, `fee.mint_bp`) were argued about repeatedly during design. **Once they are one-line
@@ -158,8 +161,8 @@ entire purpose is to be lost if it misbehaves. The market for members is the mar
 ## Capital efficiency, deliberately
 
 **Capital inefficiency is accepted, and tying up assets is the point.** At `k = 1` the aggregate bond
-must be at least the outstanding supply, and a member may over-collateralise if it wishes — but
-nothing forces the bond to *track* the reserve as it grows.
+must be at least the outstanding **non-bonded** supply, and a member may over-collateralise if it
+wishes — but nothing forces the bond to *track* the reserve as it grows.
 
 That is a choice, not an oversight. Making the bond scale with the reserve would mean either forcing
 members to post more capital continuously, or throttling deposits to keep the ratio — both of which

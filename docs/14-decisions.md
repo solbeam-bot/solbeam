@@ -71,7 +71,7 @@ produced their own proof of guilt (D13). **Redemptions are never pausable** (D11
 | **Fees mature with the principal** | A fee withdrawable earlier than its mint would be an exit from maturity |
 | **Fees are governed and paid pro rata to pledged stake** | One fee, 30 bp each way, governed (85% / 30 days). *(Replaces "Same-asset yield": with per-relayer custody removed there are no two staking sides to pay separately)* |
 | **One reserve under a threshold key** | No single member can move it; the bond is `solBSV` the program holds and can seize. *(Reverses "Do not pool the reserve")* |
-| **Confirmed by test** | 20 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers |
+| **Confirmed by test** | 24 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers |
 
 ---
 
@@ -106,7 +106,7 @@ leaving a question open.
 | **D2** | Fees discovered on the order book, bids auto-approving | ✅ **Reversed by R2** → governed 30 bp |
 | **D3** | Genesis — **G2, the vault-gated genesis mint** | ✅ **Shape stands; bootstrap reopened.** G2 answers how the first supply is backed, not how the first members bond |
 | **D4** | `FLOOR` — 12 blocks | ✅ **Partially reversed by R5.** The value stands; it is a governed parameter now |
-| **D5** | Bond multiple — `k = 1`, self-dealing accepted | ✅ **Stands.** The framing changes: there is no per-relayer underwriting to self-deal against, and the `k = 1` break-even consequence is recorded |
+| **D5** | Bond multiple — `k = 1`, self-dealing accepted | ✅ **Stands.** The framing changes: there is no per-relayer underwriting to self-deal against, and the `k = 1` collusion-loss consequence is recorded (net gain `B_h + H`, not break-even) |
 | **D6** | A peg-in with no underwriter — allowed, explicitly | ✅ **Superseded by R6**; residual re-opened as an open item |
 | **D7** | Governance — none in the PoC | ✅ **Reversed by R1** → **D10** |
 | **D8** | The reserve invariant — monitored, not enforced | ✅ **Stands.** A threshold key changes who holds the reserve, not what a Solana program can see |
@@ -135,11 +135,13 @@ detection failure to slip through.
 ### D5 — Bond multiple — `k = 1`
 
 `bond ≥ k × owed` (with `k = 1`). `solBSV` and BSV are the same asset, so any deviation is an
-arbitrage and closes. **The consequence is recorded plainly:** at `k = 1` the bonded stake *equals*
-the value the system can hold, so a colluding threshold that takes the reserve loses an equal bond
-— roughly break-even. What makes collusion unattractive is the 30-day live signal and the exit, not
-the bond's excess size. The bond's other job is covering a member's provable misbehaviour and
-abandonment.
+arbitrage and closes. **The consequence is recorded plainly:** at `k = 1` the bond covers the
+**non-bonded** supply, so the system cannot outrun its own collateral — but a colluding threshold is
+**not break-even.** It recovers its own bond and keeps the *honest members'* bonds plus the
+non-member supply: net gain `B_h + H`, i.e. **1.15×** the non-member supply alone at an 85% threshold
+and **1.49×** at 51% (see doc 13, *Collusion is a stated risk*). What makes collusion unattractive is
+the 30-day live signal and the exit, not the bond's excess size. The bond's other job is covering a
+member's provable misbehaviour and abandonment.
 
 ### D8 — The reserve invariant — monitored, not enforced
 
@@ -191,8 +193,12 @@ try to.** Members sign individually, so misbehaviour produces its own evidence:
 | Misbehaviour | Provable? |
 |---|---|
 | A member signs **two conflicting payout intents** | **Yes — self-proving.** Two signatures, one member, conflicting statements. Anyone submits it; anyone can be paid the bounty |
-| A member signs an intent matching **no authorised redemption** | **Yes** — intents are recorded on Solana, checked against the redemption set |
 | A **threshold** of members signs something invalid | Attributable, since every signature is on record — but a governance matter, not a cryptographic one |
+
+**One row was deleted, not corrected: "an intent matching no authorised redemption."** A *closed*
+`PegOut` is indistinguishable from one that never existed, so the program cannot decide the
+predicate, and checking it would false-positive against an honest member who attested before a
+cancel. There is no enforceable predicate for an off-chain threshold signature over BSV (audit F8).
 
 **Copied from what RenVM actually shipped.** Only the cryptographic half was ever built; RenVM's own
 documentation says the slashing contract *"will become a voting system … Right now, it is a

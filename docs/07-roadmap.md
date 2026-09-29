@@ -4,7 +4,7 @@ The order is deliberate: **the built system now follows a real chain**, then the
 rest of the design rests on, then the federation and the parts that need bonds and adjudication.
 
 > **Built or designed?** The light client with cw-144, `solBSV`, the mint and fork staging are
-> built and pass **20 on-chain tests**. **The vault, the bonded federation, threshold custody,
+> built and pass **24 on-chain tests**. **The vault, the bonded federation, threshold custody,
 > governance, slashing and all of peg-out are designed and not built.**
 > [`13-summary.md`](13-summary.md) is canonical; [`23-federation.md`](23-federation.md) is the
 > federation in detail.
@@ -16,7 +16,7 @@ rest of the design rests on, then the federation and the parts that need bonds a
 | **F7 — the difficulty retarget** | **cw-144**, from the SV Node's `src/pow.cpp`, replayed against real mainnet headers: **324/324 predicted exactly** (`difficulty.rs`, `difficulty-vectors/`). Workstream W1.6 |
 | **P2 — the fork re-anchor** | `init_staging` records `fork_parent_hash`; `commit_fork` requires the chain still to hold it at that height and fails `ForkPointMoved` otherwise. Workstream W1.7 |
 | **A7 — double-minting one deposit** | Deposit identity `(txid, vout)` in the used-deposit list, and the account is pinned by its constraint, which addresses the counterfeit-list reading (X2; the audit still recommends a test) |
-| **The window resize** | The window is **192 records of 52 bytes** (hash + chainwork + time), `SPACE` **10,103** of 10,240, giving a deposit lifetime of **32 hours** at 600 s/block. The old 288 × 32-byte, 48-hour layout was arithmetically impossible once cw-144 was implemented. Workstream W1.4 |
+| **The window resize** | The window is **192 records of 52 bytes** (hash + chainwork + time), `SPACE` **10,107** of 10,240, giving a deposit lifetime of **32 hours** at 600 s/block. The old 288 × 32-byte, 48-hour layout was arithmetically impossible once cw-144 was implemented. Workstream W1.4 |
 
 **Testnet is no longer blocked on the retarget.** It was blocked because the client rejected every
 header after the checkpoint; that is fixed and verified against real headers. What remains open
