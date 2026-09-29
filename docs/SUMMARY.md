@@ -27,3 +27,4 @@
 * [25. Audit — the federation model](25-audit-federation.md) — **blocking findings**
 * [26. The reference architecture — what we take from RenVM](26-reference-architecture.md)
 * [27. Gap analysis — SOLBEAM against RenVM](27-gap-analysis.md)
+* [28. State of the project — a summary for review](28-state-of-the-project.md) — **start here**
