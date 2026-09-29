@@ -149,6 +149,66 @@ the scale path, and it is the answer to "what happens when the bridge grows".
 
 ---
 
+## What we add that the reference does not have
+
+**We follow RenVM for the federation layer, and add protections against reorg risk that the
+reference does not have at all.** This is the project's actual contribution, and it is worth being
+precise about, because the two halves are easy to conflate.
+
+### RenVM's mint is the federation's word; ours is a proof
+
+Under the reference, a mint happens because **the shard observed a lock on the origin chain**:
+
+> *"RenVM will never produce a minting signature unless it has witnessed a respective lock on the
+> origin chain."*
+
+**"Witnessed" means the Darknodes saw it and agreed.** Ethereum takes their signature as the proof.
+So the source chain is trusted **through the federation** — which is what makes the challenge-and-prove
+mechanism necessary, and why its slashing rule is phrased as *"produce an SPV proof… or every bond in
+the shard is slashed."* The federation is the oracle; the bond is what keeps it honest.
+
+**SOLBEAM inverts this.** A Solana program **verifies the BSV chain itself** — proof of work against
+the real difficulty rule (cw-144) and Merkle inclusion of the deposit. **No signature, no committee
+and no oracle can mint.** The federation cannot lie about a deposit, because it is not asked.
+
+**So the challenge-and-prove mechanism is a backstop for us rather than the primary defence.** In the
+reference it is what stops a shard minting against a lock that never happened. For us a fraudulent
+mint is not *provable-after-the-fact* — it is **rejected at the instruction**, because the header
+either meets cw-144 or it does not.
+
+### The reorg protections, specifically
+
+| Protection | What it does | Does the reference have it? |
+|---|---|---|
+| **Light client on Solana** | Verifies BSV proof of work and inclusion directly | **No.** The shard observes and reports |
+| **The vault** | Every mint lands in a program-owned account, not the depositor's | **No.** Mints go straight to the recipient |
+| **Staged release, burned on a followed reorg** | A deposit reorged out after minting is **burned**, not left in circulation | **No.** There is nothing to reverse; the mint stands |
+| **cw-144 on-chain** | BSV changes difficulty every block; the client follows the real rule | **No.** Difficulty is the source chain's business |
+| **The 147-record seed + header window** | A reorg is *visible* — the client can see a stored hash change | **No.** No header history is kept on the host chain |
+
+**The reorg case is the one the reference simply does not address.** If a lock is observed and then
+the block is reorged away, the reference has no mechanism to notice, and no mechanism to reverse the
+mint — the bond and the challenge are the only recourse, **after** the fact and only if someone
+notices.
+
+**Ours notices on-chain and reverses it.** A reorg is a fact about the headers the program already
+stores; `burn_staged` compares its own record and burns. **That is the addition, and it is why the
+light client and the vault exist.**
+
+### What that buys, and what it costs
+
+**Buys:** minting that does not depend on the federation being honest. The federation's trust
+assumption narrows to **custody of the reserve**, not to the truth of every deposit.
+
+**Costs:** complexity the reference does not carry — a header window, cw-144, a seed at
+`initialize`, a vault, a maturity period, and the 147-record bootstrap that took three audits to get
+right. **The reference avoids all of it by trusting its own shards to report.** We chose not to.
+
+**So the honest summary:** the federation, the epochs, the second quorum, the challenge mechanism
+and the `3×` capacity rule are **taken from the reference**. The **light client and the vault are
+ours**, and they exist for exactly one reason — **to remove the reorg risk that the reference accepts
+and cannot reverse.**
+
 ## What we adapt
 
 | RenVM | SOLBEAM |
