@@ -71,7 +71,7 @@ produced their own proof of guilt (D13). **Redemptions are never pausable** (D11
 | **Fees mature with the principal** | A fee withdrawable earlier than its mint would be an exit from maturity |
 | **Fees are governed and paid pro rata to pledged stake** | One fee, 30 bp each way, governed (85% / 30 days). *(Replaces "Same-asset yield": with per-relayer custody removed there are no two staking sides to pay separately)* |
 | **One reserve under a threshold key** | No single member can move it; the bond is `solBSV` the program holds and can seize. *(Reverses "Do not pool the reserve")* |
-| **Confirmed by test** | 24 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers |
+| **Confirmed by test** | 27 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers |
 
 ---
 

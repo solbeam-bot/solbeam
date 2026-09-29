@@ -2,7 +2,7 @@
 
 > **Built or designed?** The built set is exactly four things: the **light client** (cw-144
 > difficulty verification and Merkle inclusion), the **`solBSV` token**, the **mint**, and **fork
-> staging with chainwork** — 24 passing on-chain tests. **The vault, the federation, threshold
+> staging with chainwork** — 27 passing on-chain tests. **The vault, the federation, threshold
 > custody, governance, slashing and all of peg-out are designed and not built.** The shipped
 > program mints straight to the depositor's token account. The
 > [trust model](04-trust-model.md) records who bears the difference, and

@@ -59,7 +59,7 @@ not need code; they need the layer that now exists.
 | **The window resize** | `HeaderRecord` is `hash + chainwork(u128) + time` = 52 B; `WINDOW = 192`; `LIGHT_CLIENT_FIXED = 123`; **`SPACE = 10,107`** of 10,240 (133 B margin) | W1.4; compile-time assertions on `WINDOW > LOOKBACK` and `SPACE <= 10,240` |
 | **A7** — replay key included `height` | Identity is `(txid, vout)`; height is stored only so stale entries can be pruned | In code: the comparison is on `txid` and `vout` only |
 
-The on-chain suite reports **24 passing**; Phase 1A is **51/51** synthetic and **21/21** against a
+The on-chain suite reports **27 passing**; Phase 1A is **51/51** synthetic and **21/21** against a
 live SV Node.
 
 ---

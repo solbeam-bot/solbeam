@@ -15,7 +15,7 @@
 > buffer argument, and the audit findings A1–A18 as history.
 >
 > **Built or designed?** Built and passing: **the light client with cw-144** (324/324 real mainnet
-> headers), **the `solBSV` token**, **the mint**, and **fork staging** — 24 on-chain tests, 51/51
+> headers), **the `solBSV` token**, **the mint**, and **fork staging** — 27 on-chain tests, 51/51
 > Phase 1A synthetic checks, 21/21 against a live SV Node. Everything else in this document —
 > the vault, maturity, release, burn, the federation, threshold custody, governance, slashing and
 > all of peg-out — is **designed, not built**. The shipped mint goes straight to the depositor's

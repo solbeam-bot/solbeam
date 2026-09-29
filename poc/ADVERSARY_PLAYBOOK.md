@@ -83,7 +83,7 @@ The protocol is behaving correctly. It has no way to know the user was told the 
 
 ## 5. Plays against the header chain — Phase 2 is built
 
-The light client and fork staging exist and pass 24 on-chain tests, so the hostile-advancer cases run now. `commit_fork` compares **chainwork**, not branch length (W1.7), so the lower-work case is rejected by the same rule that rejects a shorter one — but note the comparison is only *exercised* on a constant-difficulty chain, so a varying-difficulty branch choice is still unproven end to end.
+The light client and fork staging exist and pass 27 on-chain tests, so the hostile-advancer cases run now. `commit_fork` compares **chainwork**, not branch length (W1.7), so the lower-work case is rejected by the same rule that rejects a shorter one — but note the comparison is only *exercised* on a constant-difficulty chain, so a varying-difficulty branch choice is still unproven end to end.
 
 | Play | What you try | Expected |
 |---|---|---|

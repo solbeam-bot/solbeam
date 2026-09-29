@@ -15,7 +15,7 @@
 
 **Status: designed, not built.** The vault, the federation, threshold custody, bonds and
 peg-out are **designs**. What exists in the program is the light client, the token, the mint
-and fork staging: **11 instructions, 24 on-chain tests**, cw-144 verified against **324/324**
+and fork staging: **11 instructions, 27 on-chain tests**, cw-144 verified against **324/324**
 real mainnet headers. The shipped `verify_deposit` **mints straight to the depositor's token
 account** — there is no vault in the code, no staged item, no maturity and no bond.
 

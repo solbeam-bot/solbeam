@@ -1,7 +1,7 @@
 # 8. FAQ
 
 > **What exists, and what does not.** The light client with cw-144, the token, the mint and fork
-> staging are **built and tested** (24 on-chain tests). **The vault, the bonded federation,
+> staging are **built and tested** (27 on-chain tests). **The vault, the bonded federation,
 > threshold custody, governance, slashing and all of peg-out are designed and not built.** Where
 > an answer below describes a staged mint or a redemption, it is describing the specification; the
 > shipped program still mints straight to the depositor's wallet. See

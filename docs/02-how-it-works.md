@@ -2,7 +2,7 @@
 
 > **Built or designed?** The built set is exactly four things: the **light client** (with cw-144
 > difficulty verification and Merkle inclusion), the **`solBSV` token**, the **mint**, and **fork
-> staging with chainwork**. That is **24 passing on-chain tests**, **51/51** synthetic BSV peg-in
+> staging with chainwork**. That is **27 passing on-chain tests**, **51/51** synthetic BSV peg-in
 > checks (Phase 1A) and **324/324** real mainnet headers replayed exactly.
 >
 > **The vault, the federation, threshold custody, governance, slashing and all of peg-out are

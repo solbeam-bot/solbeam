@@ -4,7 +4,7 @@ The order is deliberate: **the built system now follows a real chain**, then the
 rest of the design rests on, then the federation and the parts that need bonds and adjudication.
 
 > **Built or designed?** The light client with cw-144, `solBSV`, the mint and fork staging are
-> built and pass **24 on-chain tests**. **The vault, the bonded federation, threshold custody,
+> built and pass **27 on-chain tests**. **The vault, the bonded federation, threshold custody,
 > governance, slashing and all of peg-out are designed and not built.**
 > [`13-summary.md`](13-summary.md) is canonical; [`23-federation.md`](23-federation.md) is the
 > federation in detail.

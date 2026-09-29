@@ -166,7 +166,7 @@ The full list of toolchain facts, with reasoning, is in [`VERSIONS.md`](VERSIONS
 | `poc/scripts/doctor.sh` | exits 0 — **19 ok, 1 warning, 0 failures** |
 | `bash poc/checks/run_all.sh` | **ALL CHECKERS PASSED** — 159 offline, 160 with a node, plus 13 plays |
 | `poc/scripts/regtest-up.sh status` | chain `regtest`, a block height, a hash rate |
-| `anchor test --validator legacy` | **24 passing, 0 failing** |
+| `anchor test --validator legacy` | **27 passing, 0 failing** |
 | `poc/fixtures/` | `deposit_1.json` and `node_merkleproof_raw.json` |
 
 ---

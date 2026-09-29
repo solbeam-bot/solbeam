@@ -16,7 +16,7 @@ described as working that are specified but not built. §1 is kept as history, n
 
 - **The light client** — trusted checkpoint, a 192-block rolling window storing a block hash, chainwork and time
   per header, linkage, and proof of work with the target taken **from the chain** rather than from
-  the submitted header. 24 on-chain tests.
+  the submitted header. 27 on-chain tests.
 - **`solBSV`** — classic SPL, 8 decimals, no freeze authority, mint authority a program PDA.
 - **The mint** — verifies a deposit against the window: Merkle fold, on-chain transaction parsing,
   exact output script, confirmation depth, replay refusal. Then mints.
@@ -319,7 +319,7 @@ An earlier draft called DAA "a flag, not an omission". That was wrong, and the c
 
 ### 4.3 Test scope
 
-> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (24 on-chain tests). Cases 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row. Case 2.5 (DAA) is built and is covered by the mainnet replay.
+> **Built vs planned.** §0 is authoritative: the built set is the light client, the token, the mint and fork staging (27 on-chain tests). Cases 2.11 (second-advancer recovery), 2.12 (caps) and 2.14 (browser wallet) describe work that is **not built**, and are marked as such in the row. Case 2.5 (DAA) is built and is covered by the mainnet replay.
 
 | # | Case | Expected |
 |---|---|---|
@@ -436,7 +436,7 @@ A day is still the right scale for the *reasoning*: if BSV reorganises by more t
 
 `123 + 192 × 52 = 10,107 bytes`. A **const assertion fails the build** if `LightClient::SPACE` ever exceeds the cap, so this cannot be rediscovered on testnet.
 
-Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it. The suite is now **24 passing** (§0).
+Dropping the root only holds if the claim proves its header, so `verify_deposit` checks `hash(claim.header) == record.hash` before folding the branch. **Without that check a claimant could substitute a header of its own choosing and prove anything**, which is the whole risk of the change; `refuses a claim whose header is not the canonical block` covers it. The suite is now **27 passing** (§0).
 
 Two latent bugs on the reorg path were fixed while the fields were being reshaped: `push_fork` never advanced `window_start` when it pruned the rebuilt window, and it indexed `headers[fork_idx]` directly — which would **panic** in the one state that is genuinely empty, immediately after `initialize`.
 
@@ -588,7 +588,7 @@ Indicative, one focused developer. Note that Phase 1 is new work that the earlie
 | **Phase 0** — environment, bootstrap, doctor | 2–3 days | ✅ **Done.** `doctor.sh`: 19 ok, 1 warning, 0 failures on the x86_64 droplet |
 | **Phase 1A** — synthetic chain + deposit proof | 3–4 days | ✅ **Done.** |
 | **Phase 1B** — real SV Node format pin | 1–2 days | ✅ **Done.** Took four live iterations, all on `getmerkleproof2`'s wire format |
-| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 24 on-chain tests. Chainwork comparison is built (W1.7), exercised by the mainnet fixture replay |
+| **Phase 2** — token, light client, mint, hostile advancer, fork staging | 1.5–2 weeks | ✅ **Done** — 27 on-chain tests. Chainwork comparison is built (W1.7), exercised by the mainnet fixture replay |
 | **Phase 3** — burn, relayer, bond, deadline, challenge | 1–1.5 weeks | Includes the misbehaving-relayer mode |
 | **Testnet repeat** (BSV testnet + Solana devnet) | 2–3 days | **Not blocked** — the retarget is implemented (W1.6, cw-144, verified 324/324). What to watch is **X3**: the rule is hard-coded, so a BSV consensus change would need a redeploy |
 | **Total to a demoable PoC** | **~5–6 weeks** | |

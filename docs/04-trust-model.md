@@ -6,7 +6,7 @@ mode this document exists to prevent.
 
 > **Built or designed?** The built set is exactly four things: the **light client** (cw-144
 > difficulty verification, verified against 324/324 real mainnet headers, and Merkle inclusion), the
-> **`solBSV` token**, the **mint**, and **fork staging with chainwork** — 24 passing on-chain tests.
+> **`solBSV` token**, the **mint**, and **fork staging with chainwork** — 27 passing on-chain tests.
 > **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
 > designed and not built**; the shipped program mints straight to the depositor's token account.
 > Every property below is therefore one of three things, and they are labelled:
@@ -320,7 +320,7 @@ Everything else — deposits, backing, minting, maturity, reversal and the payou
 by code. **Except where it is not yet written:** the vault, the federation, threshold custody,
 governance, slashing and all of peg-out are designed and not built, and this list will not be
 shorter than reality until they are. The built set is the light client, `solBSV`, the mint and fork
-staging — 24 passing on-chain tests.
+staging — 27 passing on-chain tests.
 
 ---
 

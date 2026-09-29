@@ -2,7 +2,7 @@
 
 > **Most of this is a specification, not shipped behaviour.** The built set is exactly four things:
 > the **light client** (cw-144 difficulty verification and Merkle inclusion), the **`solBSV`**
-> **token**, the **mint**, and **fork staging with chainwork** — 24 passing on-chain tests.
+> **token**, the **mint**, and **fork staging with chainwork** — 27 passing on-chain tests.
 > **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
 > designed and not built.** Nothing here is settable at runtime today: the only parameter in the
 > shipped program is `MIN_CONFIRMATIONS = 12`, **fixed in code**. [`13-summary.md`](13-summary.md)

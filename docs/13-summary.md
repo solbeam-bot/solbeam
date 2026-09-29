@@ -257,7 +257,7 @@ headers; deadlines come from Solana slots.
 | | |
 |---|---|
 | **Light client** | **Built.** cw-144 implemented and verified against 324/324 real mainnet headers |
-| **Token and mint** | **Built.** 24 on-chain tests, with negative controls |
+| **Token and mint** | **Built.** 27 on-chain tests, with negative controls |
 | **BSV-side peg-in** | **Built.** 51/51 synthetic, 21/21 against a live SV Node |
 | **Vault** | **Designed, not built.** Rewritten against this model after two audits of the **pre-federation** vault (V1–V10, W1–W11, T1–T12): **28 of 33 findings dissolved on the model change**, 6 remain, two blocking |
 | **Federation** | **Designed, not built.** Threshold custody, governance, slashing |

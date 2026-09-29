@@ -9,7 +9,7 @@ each with its own key and its own float, underwriting an order book of staked bi
 **superseded**. What changed is recorded in §What this replaces.
 
 > **Status: designed, not built.** The built set is the light client (cw-144), the `solBSV` token,
-> the mint and fork staging with chainwork — 24 passing on-chain tests. **No block, bond, member,
+> the mint and fork staging with chainwork — 27 passing on-chain tests. **No block, bond, member,
 > threshold signature or governance vote described below exists in code yet**, and the shipped
 > program mints straight to the depositor's token account, not into a vault. Read this as a
 > specification. [`13-summary.md`](13-summary.md) is authoritative where this chapter disagrees.
