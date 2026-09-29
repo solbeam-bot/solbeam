@@ -55,16 +55,18 @@ pub const HEADER_LEN: usize = 80;
 /// overhead, against a hard 10,240-byte account-creation cap — 46% over, and
 /// `initialize` would simply revert.
 ///
-/// At 52 bytes a record and 119 bytes of fixed fields, 194 records is the
-/// arithmetic maximum. **192 is chosen instead, 137 bytes under the cap**,
+/// At 52 bytes a record and 123 bytes of fixed fields, 194 records is the
+/// arithmetic maximum. **192 is chosen instead, 133 bytes under the cap**,
 /// which leaves room for a field or two without resizing every existing
 /// account. 192 records is 115,200 seconds = **32 hours at 600 s/block**.
 ///
 /// What actually constrains the *bottom* is cw-144's own lookback:
-/// [`difficulty::LOOKBACK`] = 147 records. A window at or below that could not
-/// compute the retarget for its own oldest blocks, so 192 is 45 records of
-/// slack over the minimum. The product consequence is real and is recorded in
-/// the workstream: the 48-hour deposit deadline the design assumed is gone.
+/// [`difficulty::LOOKBACK`] = 147 records. The window is opened by a **trusted
+/// seed** of exactly that many records (`SEED_RECORDS`) and then holds 45 live
+/// headers before it starts evicting; 192 is 45 records of slack over the
+/// minimum, and the seed ages out naturally as the client advances. The product
+/// consequence is real and is recorded in the workstream: the 48-hour deposit
+/// deadline the design assumed is gone.
 ///
 /// The whole account is deserialised on every instruction, so a bigger window
 /// is also more compute on the mint path. 9,984 bytes of records is comfortable
@@ -75,8 +77,8 @@ pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; //
 
 /// The window must be wide enough for the difficulty algorithm to be
 /// computable at all. `LOOKBACK` is 147 (144 + 3 for the median); a window at
-/// or below it would silently fall back to the genesis rule in the middle of a
-/// live chain, which is exactly the defect this workstream exists to fix.
+/// or below it could never compute a retarget, which is exactly the defect this
+/// workstream exists to fix (F1).
 const _: () = assert!(
     WINDOW > difficulty::LOOKBACK as usize,
     "WINDOW must exceed the cw-144 lookback (147 records) or the retarget is not computable"
@@ -505,11 +507,25 @@ pub mod solbeam {
     pub fn init_staging(ctx: Context<InitStaging>, fork_height: u64) -> Result<()> {
         let lc = &ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
+        require!(!lc.is_seeding(), SolbeamError::Seeding);
         // The common ancestor must be a header we still hold. Deeper than the
         // window needs a checkpoint reset, which is a governance action.
         let fork_parent_hash = lc
             .hash_at(fork_height)
             .ok_or(SolbeamError::ForkPointNotInWindow)?;
+        // On a retargeting chain the branch's first header needs 147 records of
+        // ancestry below the fork point, and only the main window can supply
+        // them. A fork point nearer the bottom of the window than that can never
+        // be validated, so refuse it here rather than let it stage headers that
+        // must then fail. (On a no-retargeting chain the target is constant and
+        // no ancestry is needed.)
+        if !lc.no_retargeting {
+            let available = fork_height - lc.window_start + 1;
+            require!(
+                available >= SEED_RECORDS as u64,
+                SolbeamError::ForkPointTooOld
+            );
+        }
 
         let staging = &mut ctx.accounts.staging;
         staging.submitter = ctx.accounts.submitter.key();
@@ -541,6 +557,7 @@ pub mod solbeam {
     ) -> Result<()> {
         let lc = &ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
+        require!(!lc.is_seeding(), SolbeamError::Seeding);
         let staging = &mut ctx.accounts.staging;
         require!(
             staging.submitter == ctx.accounts.submitter.key(),
@@ -584,14 +601,50 @@ pub mod solbeam {
             }
         };
 
-        // The target rule depends only on the main chain, which does not move
-        // while this instruction runs, so it is computed once per batch rather
-        // than once per header. `difficulty_for` is not used directly because a
-        // branch's records are not written into the window until commit, so the
-        // check has to be run against the incumbent state, exactly as
-        // `push_header` would have run it had this header arrived on the main
-        // chain.
-        let required = lc.required_bits();
+        // F3 — the branch's OWN ancestry, which is what the target must be
+        // computed from.
+        //
+        // This used to pin every staged header to `lc.required_bits()`, the
+        // target for `tip_height + 1` on the *incumbent* chain. For any fork
+        // point below the tip that is the wrong block: BSV changes `bits` every
+        // header, so the branch's first block declares the target for its own
+        // height and was rejected `UnexpectedRetarget`. The only fork point that
+        // could ever work was the tip, `commit_fork` could only extend, no
+        // stored hash could change, and `burn_staged` was unreachable. The
+        // 72-header reorg test passed only because regtest has no retargeting.
+        //
+        // A branch header at height `h` needs records `h-147 .. h-1`. The main
+        // window supplies everything at or below the fork point (it is a single
+        // chain, so those records are shared ancestry); the branch supplies its
+        // own records above it. Together they are contiguous and cumulative
+        // chainwork stays on one baseline, so `next_target` sees exactly the
+        // window the node would have seen.
+        let fork_idx = lc
+            .index_of(staging.fork_height)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?;
+        let mut ancestry: Vec<Record> = Vec::with_capacity(SEED_RECORDS + batch);
+        ancestry.extend(lc.headers[..=fork_idx].iter().map(|r| Record {
+            time: r.time,
+            chainwork: r.chainwork,
+        }));
+        ancestry.extend(staging.records.iter().map(|r| Record {
+            time: r.time,
+            chainwork: r.chainwork,
+        }));
+        // Only the newest `LOOKBACK` records can affect the answer. Trimming
+        // bounds the work per header and keeps the height arithmetic below
+        // exact no matter how far the main window reaches back.
+        if ancestry.len() > SEED_RECORDS {
+            let excess = ancestry.len() - SEED_RECORDS;
+            ancestry.drain(0..excess);
+        }
+        // The newest record is the parent of the next branch header, at
+        // `fork_height + staging.records.len()`; the oldest is `len - 1` below
+        // it. This is the same height the branch header itself will occupy minus
+        // one, which is the whole point.
+        let mut oldest_height =
+            staging.fork_height + staging.records.len() as u64 + 1 - ancestry.len() as u64;
+        let pow_limit = compact_to_target(lc.pow_limit_bits);
 
         // Validate the whole batch before writing any of it, so a bad header
         // half-way through does not leave a partial branch staged.
@@ -599,20 +652,37 @@ pub mod solbeam {
         for raw in branch_bytes.chunks(HEADER_LEN) {
             require!(read32(raw, 4) == prev, SolbeamError::BrokenLinkage);
             let bits = read_u32_le(raw, 72);
+            // The target for THIS header's height, from the branch's own
+            // records. On a no-retargeting chain the target is constant and no
+            // lookback is needed; on any real chain it is cw-144, and `None`
+            // means the branch reaches below the client's window, which no
+            // amount of branch data can repair.
+            let required = if lc.no_retargeting {
+                lc.expected_bits
+            } else {
+                difficulty::next_target(&ancestry, oldest_height, pow_limit)
+                    .map(target_to_compact)
+                    .ok_or(SolbeamError::DifficultyNotComputable)?
+            };
             // Target before work, for the reason given in `push_header`.
-            require!(
-                bits == required.unwrap_or(lc.expected_bits),
-                SolbeamError::UnexpectedRetarget
-            );
+            require!(bits == required, SolbeamError::UnexpectedRetarget);
             require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
 
+            let time = read_u32_le(raw, 68);
             let hash = header_hash_of_bytes(raw);
             chainwork = chainwork.saturating_add(work_from_bits(bits));
             checked.push(HeaderRecord {
                 hash,
                 chainwork,
-                time: read_u32_le(raw, 68),
+                time,
             });
+            // The header just validated becomes ancestry for the next one, so
+            // the batch is checked left to right exactly as the node would.
+            ancestry.push(Record { time, chainwork });
+            if ancestry.len() > SEED_RECORDS {
+                ancestry.remove(0);
+                oldest_height += 1;
+            }
             prev = hash;
         }
         staging.records.extend(checked);
@@ -641,6 +711,7 @@ pub mod solbeam {
     pub fn commit_fork(ctx: Context<CommitFork>) -> Result<()> {
         let lc = &mut ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
+        require!(!lc.is_seeding(), SolbeamError::Seeding);
         let staging = &ctx.accounts.staging;
         require!(
             staging.submitter == ctx.accounts.submitter.key(),
@@ -908,17 +979,31 @@ pub mod solbeam {
     /// Replace the trusted checkpoint. Timelocked governance in production;
     /// here it exists so a test can prove the checkpoint is enforced rather
     /// than decorative.
+    ///
+    /// **F2.** This used to take a bare `tip_hash` and reset only the hash,
+    /// height and window. `expected_bits`, `no_retargeting` and
+    /// `pow_limit_bits` survived from the *previous* chain, so a client that had
+    /// ever been anchored on regtest kept `no_retargeting = true` after being
+    /// re-anchored on mainnet, and `required_bits()` returned regtest's target
+    /// forever — every subsequent header accepted at the easiest encodable
+    /// target. It now takes the **raw 80-byte header**, exactly as
+    /// `initialize` does, and re-derives all three through the same
+    /// [`LightClient::anchor_checkpoint`] the initialiser uses. A hash alone
+    /// cannot carry `bits`, which is why the signature had to change rather
+    /// than the body.
     pub fn set_checkpoint(
         ctx: Context<SetCheckpoint>,
         height: u64,
-        tip_hash: [u8; 32],
+        header: [u8; HEADER_LEN],
     ) -> Result<()> {
         let lc = &mut ctx.accounts.light_client;
-        lc.checkpoint_height = height;
-        lc.tip_height = height;
-        lc.tip_hash = tip_hash;
-        lc.headers = Vec::new();
-        lc.window_start = height;
+        lc.anchor_checkpoint(height, &header)?;
+        msg!(
+            "SOLBEAM checkpoint re-anchored at {} (no_retargeting {}, seed remaining {})",
+            height,
+            lc.no_retargeting,
+            lc.seed_remaining
+        );
         Ok(())
     }
 
@@ -1209,6 +1294,23 @@ pub struct PushHeader<'info> {
     #[account(mut, seeds = [b"light_client"], bump = light_client.bump)]
     pub light_client: Account<'info, LightClient>,
     pub advancer: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SeedHeaders<'info> {
+    #[account(
+        mut,
+        seeds = [b"light_client"],
+        bump = light_client.bump,
+        has_one = authority @ SolbeamError::Unauthorized,
+    )]
+    pub light_client: Account<'info, LightClient>,
+    /// The key that set the checkpoint. The seed is trusted data on the
+    /// checkpoint's own footing, and — unlike `push_header` — it cannot be
+    /// permissionless: whoever writes the first record fixes the chain the rest
+    /// must link to, so an open seed could be bricked by one junk header. See
+    /// `seed_headers`.
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -1727,4 +1829,22 @@ pub enum SolbeamError {
     BatchTooLarge,
     #[msg("the signer is not the light client's authority")]
     Unauthorized,
+    #[msg("the header chain is still waiting for its trusted seed")]
+    Seeding,
+    #[msg("the client is not seeding — seed_headers is only valid on a fresh checkpoint")]
+    NotSeeding,
+    #[msg("the seed batch is longer than the records still required")]
+    SeedTooLong,
+    #[msg("the seed does not end at the checkpoint it was opened for")]
+    SeedWrongTip,
+    #[msg("the completed seed did not produce a full lookback window")]
+    SeedWrongLength,
+    #[msg("the seed batch is empty")]
+    EmptySeed,
+    #[msg("the checkpoint is lower than the seed's lookback")]
+    CheckpointTooLow,
+    #[msg("the window does not reach cw-144's lookback, so no target is computable")]
+    DifficultyNotComputable,
+    #[msg("the fork point is too close to the bottom of the window for cw-144")]
+    ForkPointTooOld,
 }

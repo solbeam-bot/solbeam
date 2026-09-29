@@ -12,6 +12,15 @@ import * as path from "path";
 // is the thing that is wrong and the fix belongs in Phase 1A — not here.
 const FIXTURE = path.resolve(__dirname, "../../fixtures/deposit_1.json");
 
+// 471 contiguous real BSV mainnet headers, heights 968,230–968,700, each with
+// its serialised 80 bytes. The `raw` column was added for the on-chain
+// instruction-path test: `push_header` hashes bytes and checks linkage by hash,
+// so a summary of `hash`/`bits`/`time` cannot be pushed. See
+// `workstreams/data/fetch_raw_headers.py`, which rebuilds each header and
+// verifies it against the fixture's recorded hash before writing.
+const MAINNET_FIXTURE = path.resolve(
+  __dirname, "../../../workstreams/data/headers_mainnet.json");
+
 function doubleSha256(buf: Buffer): Buffer {
   return createHash("sha256")
     .update(createHash("sha256").update(buf).digest())
@@ -723,8 +732,11 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
     // Reach a state where 117 is the tip, by moving the checkpoint to 116 and
     // extending. `setCheckpoint` resets the window, so this is the honest way to
     // get a small freshly-anchored chain rather than by rewinding anything.
+    // It takes the raw 80-byte header (F2): the difficulty state — bits,
+    // no_retargeting, pow_limit — is re-derived from it, and a bare hash cannot
+    // carry `bits`.
     await program.methods
-      .setCheckpoint(new anchor.BN(116), Array.from(doubleSha256(raw116)))
+      .setCheckpoint(new anchor.BN(116), Array.from(raw116))
       .accounts({ lightClient, authority: provider.wallet.publicKey })
       .rpc();
     await program.methods.pushHeader(Array.from(raw117))
@@ -856,7 +868,10 @@ describe("solbeam — a stale staged fork (P2)", () => {
    */
   const reanchor = async (height: number) => {
     await program.methods
-      .setCheckpoint(new anchor.BN(height), Array.from(doubleSha256(rawAt(height))))
+      // The raw header, not its hash: set_checkpoint re-derives the difficulty
+      // state from the header itself (F2), and on a mainnet header that opens
+      // the trusted seed instead of going live immediately.
+      .setCheckpoint(new anchor.BN(height), Array.from(rawAt(height)))
       .accounts({ lightClient, authority: provider.wallet.publicKey })
       .rpc();
   };
@@ -986,5 +1001,397 @@ describe("solbeam — a stale staged fork (P2)", () => {
     expect(Buffer.from(after.tipHash).toString("hex"))
       .to.equal(doubleSha256(b126).toString("hex"));
     expect(await provider.connection.getAccountInfo(c.addr)).to.be.null;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Independent cw-144, for the mainnet instruction-path test
+// ---------------------------------------------------------------------------
+//
+// The on-chain test must assert "the resulting bits matches", not only "the
+// transaction did not throw". Rather than scrape the program's log, this
+// recomputes the target from the CLIENT'S OWN window — fetched before the push
+// — and asserts the fixture header declares exactly that value. It is a second
+// implementation on purpose, and it mirrors `programs/solbeam/src/difficulty.rs`
+// operand for operand: the vector suite proves the Rust function is right, and
+// this proves the *instruction path* fed it the state the function expects.
+
+const MAINNET_POW_LIMIT_BITS = 0x1d00ffff;
+const U256_MASK = (1n << 256n) - 1n;
+
+/** `GetSuitableBlock` — median of the three records ending at `index`, by time. */
+function suitableIndex(records: { time: number }[], index: number): number {
+  const lo = Math.max(0, index - 2);
+  const candidates: number[] = [];
+  for (let i = lo; i <= index; i++) candidates.push(i);
+  for (let i = 1; i < candidates.length; i++) {
+    let j = i;
+    while (j > 0 && records[candidates[j]].time < records[candidates[j - 1]].time) {
+      const tmp = candidates[j];
+      candidates[j] = candidates[j - 1];
+      candidates[j - 1] = tmp;
+      j--;
+    }
+  }
+  return candidates[Math.floor(candidates.length / 2)];
+}
+
+/** `SetCompact` — compact `bits` to a 256-bit target. */
+function compactToTarget(bits: number): bigint {
+  const exponent = bits >>> 24;
+  const mantissa = bits & 0x007fffff;
+  if (exponent <= 3) return BigInt(mantissa >>> (8 * (3 - exponent)));
+  if (exponent <= 32) return BigInt(mantissa) << BigInt(8 * (exponent - 3));
+  return 0n;
+}
+
+/** `GetCompact` — the node's compact encoding, sign-bit special case included. */
+function targetToCompact(target: bigint): number {
+  const bytes = new Uint8Array(32);
+  let t = target;
+  for (let i = 31; i >= 0; i--) {
+    bytes[i] = Number(t & 0xffn);
+    t >>= 8n;
+  }
+  let size = 0;
+  while (size < 32 && bytes[size] === 0) size++;
+  if (size === 32) return 0;
+  let compact = 0;
+  for (let i = 0; i < 3; i++) {
+    if (size + i < 32) compact |= bytes[size + i] << (8 * (2 - i));
+  }
+  size = 32 - size;
+  if (compact & 0x00800000) {
+    compact >>>= 8;
+    size += 1;
+  }
+  return (compact | (size << 24)) >>> 0;
+}
+
+function computeTarget(
+  firstWork: bigint, firstTime: number, lastWork: bigint, lastTime: number,
+): bigint {
+  let workDelta = lastWork - firstWork;
+  if (workDelta < 0n) workDelta = 0n;
+  const work = workDelta * 600n;
+  let actual = lastTime - firstTime;
+  if (actual > 172800) actual = 172800;
+  else if (actual < 43200) actual = 43200;
+  const scaled = work / BigInt(actual);
+  if (scaled === 0n) return U256_MASK;
+  return ((~scaled) & U256_MASK) / scaled;
+}
+
+/** `next_target`, on the window the client actually holds. `null` below lookback. */
+function requiredBits(
+  records: { time: number; chainwork: bigint }[],
+  oldestHeight: number,
+): number | null {
+  if (records.length < 147) return null;
+  const last = suitableIndex(records, records.length - 1);
+  const parentHeight = oldestHeight + records.length - 1;
+  const ancestorIndex = parentHeight - 144 - oldestHeight;
+  if (ancestorIndex < 0) return null;
+  const first = suitableIndex(records, ancestorIndex);
+  let target = computeTarget(
+    records[first].chainwork, records[first].time,
+    records[last].chainwork, records[last].time,
+  );
+  const powLimit = compactToTarget(MAINNET_POW_LIMIT_BITS);
+  if (target > powLimit) target = powLimit;
+  return targetToCompact(target);
+}
+
+/**
+ * The tests that would have caught F1, F2 and F3.
+ *
+ * The 20 tests above run on a regtest chain, where `no_retargeting` makes the
+ * target constant. They validate linkage, the window, the reorg machinery and
+ * the mint — everything except the one rule a real chain exercises. The
+ * 324/324 fixture result validated `difficulty.rs` as a *function*, not the
+ * instruction path that feeds it. These tests push **real BSV mainnet headers**
+ * through `push_header` and `push_fork_header`, which is the gap.
+ */
+describe("solbeam — real mainnet headers (F1, F2, F3)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const regtest = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const regRaw = (height: number): Buffer =>
+    Buffer.from(regtest.headers.find((h: any) => h.height === height)!.raw, "hex");
+
+  const MAINNET = JSON.parse(fs.readFileSync(MAINNET_FIXTURE, "utf8"));
+  const mraw: Buffer[] = MAINNET.map((h: any) => Buffer.from(h.raw, "hex"));
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+
+  // The checkpoint is the fixture's 147th header (index 146), so the first 147
+  // headers ARE the seed — 146 ancestors plus the checkpoint itself — and the
+  // first live push is index 147. The 160 headers pushed below are the first
+  // 160 of the 324 the vector suite predicts exactly.
+  const CP_INDEX = 146;
+  const CP_HEIGHT = MAINNET[CP_INDEX].height; // 968,376
+  const SEED: Buffer[] = mraw.slice(0, CP_INDEX + 1); // 147 records
+  const LIVE_FROM = CP_INDEX + 1; // index 147, height 968,377
+  const PUSH_COUNT = 160;
+  const MAX_FORK_BATCH = 12;
+
+  const bitsOf = (raw: Buffer): number => raw.readUInt32LE(72);
+  const internalHash = (raw: Buffer): string => doubleSha256(raw).toString("hex");
+
+  const setCheckpoint = async (height: number, header: Buffer) => {
+    await program.methods.setCheckpoint(new anchor.BN(height), Array.from(header))
+      .accounts({ lightClient, authority: provider.wallet.publicKey }).rpc();
+  };
+
+  const attemptPush = async (raw: Buffer): Promise<string> => {
+    try {
+      await program.methods.pushHeader(Array.from(raw))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      return "ACCEPTED";
+    } catch (e: any) {
+      const m = String(e).match(/Error Code: (\w+)/);
+      return m ? m[1] : String(e).slice(0, 80);
+    }
+  };
+
+  const seedAll = async () => {
+    for (let i = 0; i < SEED.length; i += MAX_FORK_BATCH) {
+      await program.methods.seedHeaders(
+        Buffer.concat(SEED.slice(i, i + MAX_FORK_BATCH)))
+        .accounts({ lightClient, authority: provider.wallet.publicKey }).rpc();
+    }
+  };
+
+  const fundedSubmitter = async (): Promise<anchor.web3.Keypair> => {
+    const key = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      key.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    return key;
+  };
+
+  const stagingFor = (key: anchor.web3.Keypair): anchor.web3.PublicKey =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("staging"), key.publicKey.toBuffer()], program.programId)[0];
+
+  const initStaging = async (key: anchor.web3.Keypair, staging: anchor.web3.PublicKey, forkHeight: number) => {
+    await program.methods.initStaging(new anchor.BN(forkHeight))
+      .accounts({ lightClient, staging, submitter: key.publicKey,
+                  systemProgram: anchor.web3.SystemProgram.programId })
+      .signers([key]).rpc();
+  };
+
+  const pushFork = async (key: anchor.web3.Keypair, staging: anchor.web3.PublicKey, batch: Buffer[]) => {
+    await program.methods.pushForkHeader(Buffer.concat(batch))
+      .accounts({ lightClient, staging, submitter: key.publicKey })
+      .signers([key]).rpc();
+  };
+
+  const commitFork = async (key: anchor.web3.Keypair, staging: anchor.web3.PublicKey) => {
+    await program.methods.commitFork()
+      .accounts({ lightClient, staging, submitter: key.publicKey })
+      .signers([key]).rpc();
+  };
+
+  const abandon = async (key: anchor.web3.Keypair, staging: anchor.web3.PublicKey) => {
+    await program.methods.abandonStaging()
+      .accounts({ staging, submitter: key.publicKey }).signers([key]).rpc();
+  };
+
+  before(async () => {
+    try {
+      const sig = await provider.connection.requestAirdrop(
+        provider.wallet.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+      await provider.connection.confirmTransaction(sig);
+    } catch {
+      /* already funded — fine */
+    }
+  });
+
+  it("F2: set_checkpoint re-derives the difficulty state instead of keeping regtest's", async () => {
+    // The client is where the P2 suite left it: anchored on a regtest header,
+    // so `no_retargeting` is true and cw-144 is not consulted at all.
+    const start = await program.account.lightClient.fetch(lightClient);
+    expect(start.noRetargeting).to.equal(true);
+
+    await setCheckpoint(CP_HEIGHT, mraw[CP_INDEX]);
+
+    const lc = await program.account.lightClient.fetch(lightClient);
+    // The stale flag is gone: this is the whole of F2. On the old code it stayed
+    // true and every header after the reset was accepted at regtest's target.
+    expect(lc.noRetargeting).to.equal(false);
+    expect(lc.expectedBits).to.equal(bitsOf(mraw[CP_INDEX]));
+    expect(lc.powLimitBits).to.equal(MAINNET_POW_LIMIT_BITS);
+    expect(lc.seedRemaining).to.equal(147);
+    expect(lc.headers.length).to.equal(0);
+    expect(lc.windowStart.toNumber()).to.equal(CP_HEIGHT - 146);
+
+    // And the client will not advance until it is seeded: with the stale regtest
+    // state the old code accepted this header outright.
+    expect(await attemptPush(mraw[LIVE_FROM])).to.equal("Seeding");
+
+    // Re-anchoring back to regtest must go the other way, so the derivation is
+    // genuinely per-checkpoint rather than a one-way flag clear.
+    await setCheckpoint(124, regRaw(124));
+    const back = await program.account.lightClient.fetch(lightClient);
+    expect(back.noRetargeting).to.equal(true);
+    expect(back.seedRemaining).to.equal(0);
+    await program.methods.pushHeader(Array.from(regRaw(125)))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    const live = await program.account.lightClient.fetch(lightClient);
+    expect(live.tipHeight.toNumber()).to.equal(125);
+  });
+
+  it("the seed rejects a broken linkage and cannot be completed past a fabricated ancestor", async () => {
+    await setCheckpoint(CP_HEIGHT, mraw[CP_INDEX]);
+
+    // (a) A batch whose second header does not link to the first. The whole
+    // instruction reverts, so the seed is untouched.
+    const corrupt = Buffer.from(mraw[1]);
+    corrupt[4] ^= 0xff; // break `prev`
+    try {
+      await program.methods.seedHeaders(Buffer.concat([mraw[0], corrupt]))
+        .accounts({ lightClient, authority: provider.wallet.publicKey }).rpc();
+      expect.fail("the seed should have rejected a broken linkage");
+    } catch (e: any) {
+      expect(String(e)).to.contain("BrokenLinkage");
+    }
+    let lc = await program.account.lightClient.fetch(lightClient);
+    expect(lc.seedRemaining).to.equal(147, "a refused batch must not consume the seed");
+
+    // (b) A fabricated ancestor. The first seed record has nothing to link to,
+    // so it is accepted — and that is exactly why the *terminal* hash is pinned
+    // to the checkpoint. The real chain cannot link to a fabricated root, so the
+    // seed can never complete: the fabricated record is detectable even though
+    // its difficulty is taken on trust.
+    const fabricated = Buffer.alloc(80, 0x5a);
+    fabricated.writeUInt32LE(0x20000000, 0);
+    fabricated.writeUInt32LE(bitsOf(mraw[0]), 72);
+    await program.methods.seedHeaders(fabricated)
+      .accounts({ lightClient, authority: provider.wallet.publicKey }).rpc();
+    lc = await program.account.lightClient.fetch(lightClient);
+    expect(lc.seedRemaining).to.equal(146);
+    expect(lc.headers.length).to.equal(1);
+
+    try {
+      await program.methods.seedHeaders(mraw[1])
+        .accounts({ lightClient, authority: provider.wallet.publicKey }).rpc();
+      expect.fail("the real header must not link to a fabricated root");
+    } catch (e: any) {
+      expect(String(e)).to.contain("BrokenLinkage");
+    }
+    lc = await program.account.lightClient.fetch(lightClient);
+    expect(lc.seedRemaining).to.equal(146);
+    expect(lc.headers.length).to.equal(1);
+  });
+
+  it("F1: seeds 147 trusted ancestors, then accepts real mainnet headers through push_header", async () => {
+    await setCheckpoint(CP_HEIGHT, mraw[CP_INDEX]);
+    await seedAll();
+
+    const seeded = await program.account.lightClient.fetch(lightClient);
+    expect(seeded.headers.length).to.equal(147);
+    expect(seeded.seedRemaining).to.equal(0);
+    expect(seeded.tipHeight.toNumber()).to.equal(CP_HEIGHT);
+    expect(Buffer.from(seeded.tipHash).toString("hex"))
+      .to.equal(internalHash(mraw[CP_INDEX]));
+
+    let accepted = 0;
+    for (let i = LIVE_FROM; i < LIVE_FROM + PUSH_COUNT; i++) {
+      const raw = mraw[i];
+
+      // The window the program will read, and the target cw-144 derives from it.
+      // Asserting this before the push is the literal "the resulting bits
+      // matches": the real mainnet header must carry exactly the value the
+      // client is about to require.
+      const lc = await program.account.lightClient.fetch(lightClient);
+      const records = lc.headers.map((h: any) => ({
+        time: h.time,
+        chainwork: BigInt(h.chainwork.toString()),
+      }));
+      const required = requiredBits(records, lc.windowStart.toNumber());
+      expect(required, `height ${MAINNET[i].height}: cw-144 on the client's own window`)
+        .to.equal(bitsOf(raw));
+
+      // And the instruction accepts it. On the old code this threw
+      // UnexpectedRetarget at the first header after the checkpoint — the F1
+      // deadlock — because `bits` changes every block on mainnet.
+      await program.methods.pushHeader(Array.from(raw))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      accepted++;
+    }
+
+    expect(accepted).to.be.at.least(150);
+    console.log(`  pushed ${accepted} real mainnet headers through push_header`);
+
+    const lc = await program.account.lightClient.fetch(lightClient);
+    const tip = LIVE_FROM + PUSH_COUNT - 1;
+    expect(lc.tipHeight.toNumber()).to.equal(MAINNET[tip].height);
+    expect(Buffer.from(lc.tipHash).toString("hex")).to.equal(internalHash(mraw[tip]));
+    // The seed has aged out of the bounded window: 147 seed + 45 live = 192,
+    // and every push after the 45th evicts one of the seed records.
+    expect(lc.headers.length).to.equal(192);
+    expect(lc.windowStart.toNumber()).to.be.greaterThan(CP_HEIGHT - 146);
+  });
+
+  it("F3: a branch header is checked at its own height, where bits changes every block", async () => {
+    // The F1 test left the tip at index 306 of the fixture with a full window.
+    const tipIdx = LIVE_FROM + PUSH_COUNT - 1; // 306, height 968,536
+    const before = await program.account.lightClient.fetch(lightClient);
+    expect(before.tipHeight.toNumber()).to.equal(MAINNET[tipIdx].height);
+
+    // Fork below the tip and branch past it, so the branch is strictly heavier
+    // and can actually commit — the fork point itself is what F3 was about.
+    const forkIdx = tipIdx - 36; // 270, height 968,500
+    const forkHeight = MAINNET[forkIdx].height;
+    const branch = mraw.slice(forkIdx + 1, tipIdx + 10); // indices 271..315
+
+    // The property under test is only meaningful if bits moves inside the
+    // branch: at least two changes. On mainnet it changes every header.
+    let changes = 0;
+    for (let i = 1; i < branch.length; i++) {
+      if (bitsOf(branch[i]) !== bitsOf(branch[i - 1])) changes++;
+    }
+    expect(changes, "bits must change at least twice inside the branch")
+      .to.be.at.least(2);
+
+    // Negative control: the same header with the incumbent tip's *next* target,
+    // which is what the old code demanded of every branch header. The new code
+    // must reject it, because that is not the target for height 968,501.
+    const wrong = Buffer.from(branch[0]);
+    const tipNextBits = bitsOf(mraw[tipIdx + 1]);
+    expect(tipNextBits).to.not.equal(bitsOf(branch[0]));
+    wrong.writeUInt32LE(tipNextBits, 72);
+    const keyA = await fundedSubmitter();
+    const stagingA = stagingFor(keyA);
+    await initStaging(keyA, stagingA, forkHeight);
+    try {
+      await pushFork(keyA, stagingA, [wrong]);
+      expect.fail("a branch header carrying the tip's next target must be rejected");
+    } catch (e: any) {
+      expect(String(e)).to.contain("UnexpectedRetarget");
+    }
+    await abandon(keyA, stagingA);
+
+    // Positive: the fixture's real headers, judged at their own heights from the
+    // branch's own ancestry. The old code rejected this at the first header.
+    const key = await fundedSubmitter();
+    const staging = stagingFor(key);
+    await initStaging(key, staging, forkHeight);
+    for (let i = 0; i < branch.length; i += MAX_FORK_BATCH) {
+      await pushFork(key, staging, branch.slice(i, i + MAX_FORK_BATCH));
+    }
+    await commitFork(key, staging);
+
+    const after = await program.account.lightClient.fetch(lightClient);
+    expect(after.tipHeight.toNumber()).to.equal(MAINNET[tipIdx + 9].height);
+    expect(Buffer.from(after.tipHash).toString("hex"))
+      .to.equal(internalHash(branch[branch.length - 1]));
+    // A commit closes the staging account and returns the rent.
+    const gone = await provider.connection.getAccountInfo(staging);
+    expect(gone).to.be.null;
   });
 });

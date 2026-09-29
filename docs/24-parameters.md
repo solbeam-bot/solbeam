@@ -54,7 +54,9 @@ while the numbers are still provisional.
 |---|---|---|---|
 | `fed.bond_size` | Member bond | **1,000 BSV** `dec` | The price of admission. Sets the scale limit |
 | `fed.total_bond` | Aggregate bond (tracked) | **derived from bonds** `dec` | A running total on-chain, since members cannot be enumerated. **This is the number the mint gate checks** |
-| `fed.mint_gate` | Bond gates minting | **true** `dec` | **F5.** A mint is refused unless `total_bond ≥ k × (supply + amount)` after it. **The bond IS the float**: nothing can be minted that the bond cannot cover |
+| `fed.mint_gate` | Bond gates minting | **true** `dec` | **F5.** A mint is refused unless `total_bond ≥ k × (non_bonded_supply + amount)` after it. **The bond IS the float.** Note **non-bonded**: using total supply makes the gate unsatisfiable, since bonded `solBSV` is itself supply |
+| `fed.bond_asset` | Bond denomination | **`solBSV`** `dec` | Deliberately the wrapped asset. A separate asset would need a price oracle to size the cover. **Consequence: the bond does not protect against collusion** — max loss is the full non-bonded supply |
+| `fed.collusion_mitigation` | Against a colluding threshold | **none** `dec` | **Stated risk, not a mechanism.** No on-chain predicate can prove who signed an off-chain threshold signature. Accepted; revisit if one is ever needed |
 | `fed.k` | Bond multiple | **1** `dec` | Aggregate bond ≥ `k ×` outstanding supply. At `k = 1` theft is unprofitable, not prevented. **Capital inefficiency accepted** — over-collateralising is a member's choice, not a requirement |
 | `fed.threshold` | Signing threshold | **open** | `t` of `n`. **Stated nowhere yet** — this is a real gap |
 | `fed.shards` | Shard count | **open** | One key or several groups. Affects blast radius and latency |

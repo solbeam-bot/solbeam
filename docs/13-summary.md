@@ -128,8 +128,13 @@ exposed. That is a disclosure obligation, not a mechanism.
 **Nothing can be minted that the bond cannot cover.** Before a mint is accepted, the program requires
 
 ```
-aggregate_bond  ≥  k × (supply + amount)          with k ≥ 1
+aggregate_bond  ≥  k × (non_bonded_supply + amount)      with k ≥ 1
 ```
+
+**Not `k × total supply`** — bonded `solBSV` *is* part of the supply, so requiring
+`B ≥ k × S` gives `B ≥ B + H`, which forces non-member holdings to zero. **A gate no real bridge
+can satisfy.** The quantity the bond must cover is the **non-bonded** supply: what honest holders
+could lose.
 
 where `supply` is the outstanding `solBSV` and `aggregate_bond` is a running total maintained on
 chain, since members cannot be enumerated. **The same check runs on `withdraw_bond`**, so a member
@@ -174,7 +179,36 @@ to.** Members sign individually, so misbehaviour produces **its own evidence**:
 |---|---|
 | A member signs **two conflicting payout intents** | **Yes — self-proving.** Two signatures, one member, conflicting statements. Anyone submits it; anyone can be paid the bounty |
 | A member signs an intent matching **no authorised redemption** | **Yes** — intents are recorded on Solana, so it is checked against the redemption set |
-| A **threshold** of members signs an intent matching **no authorised redemption** | **Yes — and this is the case that matters.** They do not equivocate, so equivocation slashing never fires. But every signature is on record and the intent is checkable against the redemption set, so **all signers are provably guilty and all are slashable.** No honest member is punished, because an honest member would not have signed |
+
+
+## Collusion is a stated risk, not a mitigated one
+
+**A threshold of members can collude, and nothing here prevents it.** There is no on-chain predicate
+that proves which members signed an off-chain threshold signature, so there is nothing to slash on.
+An earlier draft claimed otherwise; that row is deleted.
+
+**The maximum loss, measured:**
+
+```
+colluders deposit B  →  mint B solBSV  →  bond it
+honest holders hold H, and the reserve R = B + H
+colluders take R     →  they recover their own B and take H
+```
+
+**Net gain to the colluders = H, the entire non-member supply — and the size of the bond does not
+change it.** A bond denominated in the asset it protects is a round trip: funded by a deposit into the
+very reserve it is meant to cover.
+
+**Why the bond is not moved to a separate asset.** A `SOL` bond would be genuinely separate and
+seizable — but sizing it against a `solBSV` liability needs a **SOL/BSV price**, and that is an oracle.
+This design decides nothing on external data. So the denomination stays, and the weakness is recorded
+rather than papered over.
+
+**What the bond does do:** it deters, it prices entry, and it makes **provable** misbehaviour —
+equivocation, a member signing two conflicting intents — expensive. It does **not** protect against a
+colluding threshold.
+
+**Accepted.** Measured, stated, and revisited if a mechanism is ever needed.
 
 **This is copied from what RenVM actually shipped**, where `slashDuplicatePropose` and its siblings
 take a node's own two conflicting signatures as the entire proof. **Only that cryptographic half was
