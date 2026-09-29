@@ -102,22 +102,28 @@ not a technical one, and it does not fix itself.
 **The honest framing of the trade-off:**
 
 > **How fast a mint can be released is exactly how much reorg risk is being accepted.** The vault
-> exists so that the two can be **decoupled** — mint quickly, and let maturity be the safety dial
-> rather than a gate on the user's first sight of their tokens.
+> exists so that the two can be **decoupled** — mint quickly, let maturity be the safety dial, rather
+> than gating the user's first sight of their tokens on twelve confirmations.
 
-**That is the design decision to make, and it has three shapes:**
+**Decision: `MIN_CONFIRMATIONS` stays at 12 for the PoC.** We are not shortening it, and we are not
+adopting an attested fast path. What is recorded instead is **the gap between what we do and what the
+market expects**, so that it is a known limitation rather than an unnoticed one.
+
+**And the decoupling is still worth building**, because it is available now and does not depend on
+anyone else changing anything: mint into the vault so the user **sees** `solBSV` immediately, and
+**unlock** it at maturity. Fast to appear, safe to spend — with the confirmations still at 12 behind
+it.
+
+**The upgrade path, if the community ever ships attestation:**
 
 | | |
 |---|---|
-| **(a) Conservative** | Confirmations gate the mint. Slow, simple, no reversal needed in the common case |
-| **(b) Decoupled** | Mint after **1** confirmation into the vault; the user *sees* `solBSV` immediately, and it **unlocks** at maturity. Fast to appear, safe to spend |
-| **(c) Attested** | If miner attestation ever exists, mint on attestation. Fastest — and depends on a consensus change we do not control |
+| **Now** | 12 confirmations, then maturity. Safe, slow |
+| **Available now** | Decouple: visible immediately, unlocked at maturity. Same safety, better UX |
+| **If attestation ships** | Mint on attestation, verified on-chain against derived hashrate weight (§3). **Fastest — and a parameter change rather than a redesign, because the vault already exists as the safety dial** |
 
-**(b) is the one worth building**, because it is available now and it meets the expectation: the user
-sees their tokens immediately, and the safety delay is on *spending* rather than on *receiving*.
-**(c) is the upgrade path if the community ships attestation**, and the vault means adopting it would
-be a parameter change rather than a redesign.
-
+**We cannot change node software, and we are not proposing to.** This is recorded so that **if the
+change happens, we can use it** — and so that nobody assumes it has.
 ---
 
 ## 5. What this changes, and what it does not

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>About — SOLBEAM</title>
-  <meta name="description" content="SOLBEAM is an atomic wrapper on Solana for BSV. Trustless minting, permissionless redemption, no federation." />
+  <meta name="description" content="SOLBEAM is a 1:1 wrapper on Solana for BSV. A BSV light client verifies deposits and reorgs are reversible; a bonded federation with a second quorum holds the reserve." />
   <meta name="theme-color" content="#05060A" />
   <meta property="og:title" content="About — SOLBEAM" />
   <meta property="og:description" content="Atomic wrapper on Solana for BSV." />
@@ -61,10 +61,11 @@
 
     <h2>What</h2>
     <ul class="points">
-      <li><strong>Minting is trustless.</strong> A BSV light client on Solana verifies deposits. No attestor, no oracle, no committee.</li>
+      <li><strong>Minting is trustless.</strong> A BSV light client on Solana verifies deposits — proof of work and Merkle inclusion. <strong>No signature, no committee and no oracle can mint.</strong> One honest qualification: Solana cannot read the BSV UTXO set, so the federation's software <em>reports</em> spent deposit outpoints. The program verifies deposits; the federation reports backing.</li>
       <li><strong>Redemption is permissionless and optimistic.</strong> Bonded relayers pay BSV and prove the payout on-chain. Fail, and the holder is refunded automatically.</li>
-      <li><strong>No federation.</strong> No named signer set, no validator committee, no governance body holding funds.</li>
-      <li><strong>Trading is instant.</strong> Pools, P2P atomic swaps and market makers mean only the peg has latency.</li>
+      <li><strong>A bonded federation holds the reserve</strong>, following the architecture of RenVM — the bridge that issued wrapped ZEC. But <strong>a second quorum of trusted third parties must co-sign every reserve movement</strong>, so neither the members alone nor the second quorum alone can move funds. The members police the reserve; the second quorum polices the members.</li>
+      <li><strong>Reorgs are reversible.</strong> Every mint lands in a program vault and is released only once its deposit is still canonical after a maturity window — and <strong>burned if a reorg is followed first</strong>. This is what we add to the reference: RenVM trusts its shards to <em>report</em> a lock; we <em>verify</em> it, and we can undo one.</li>
+        <li><strong>The bond is the float, not the vault.</strong> Members bond working capital for transfers — not capital sized against the reserve. What constrains the reserve is the second quorum's co-signature.</li>
     </ul>
 
     <h2>Links</h2>
