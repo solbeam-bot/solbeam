@@ -32,6 +32,125 @@ function displayToInternal(hex: string): Buffer {
   return Buffer.from(hex, "hex").reverse();
 }
 
+// -- the timelocked authority and the replay nullifier -----------------------
+//
+// Both helpers below mirror something in
+// `programs/solbeam/src/lib.rs`. They are written out rather than imported, so a
+// drift between the program and the test shows up as a failing address or a
+// failing timelock rather than as a test that quietly checks nothing.
+
+/** Mirrors `TIMELOCK_SLOTS` in the program. The program rejects anything sooner. */
+const TIMELOCK_SLOTS = 32;
+
+/** The program's `NULLIFIER_SEED`. */
+const NULLIFIER_SEED = Buffer.from("nullifier");
+
+/** The singleton PDA holding the one timelocked authority change (F4). */
+function pendingChangePda(programId: anchor.web3.PublicKey): anchor.web3.PublicKey {
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("pending_authority_change")], programId)[0];
+}
+
+/**
+ * The replay nullifier for a deposit: `[b"nullifier", txid, vout_le]`, derived
+ * exactly as the program's `create_nullifier` and `prune_nullifier` do. `txid`
+ * is in INTERNAL order — the bytes the program hashes the raw transaction down
+ * to — because that is what the claim carries.
+ */
+function nullifierPda(
+  programId: anchor.web3.PublicKey, txidInternal: Buffer, vout: number,
+): anchor.web3.PublicKey {
+  const voutBuf = Buffer.alloc(4);
+  voutBuf.writeUInt32LE(vout, 0);
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [NULLIFIER_SEED, txidInternal, voutBuf], programId)[0];
+}
+
+/**
+ * Block until the validator reports `slot` or later.
+ *
+ * `processed`, not `confirmed`: what `execute_authority_change` compares against
+ * is `Clock::slot`, the slot of the bank the instruction runs in, and the
+ * confirmed commitment trails that by ~32 slots on a local validator. Waiting on
+ * the confirmed slot would be correct but would sleep for the trailing window
+ * every time.
+ */
+async function waitForSlot(
+  connection: anchor.web3.Connection, slot: number,
+): Promise<void> {
+  for (;;) {
+    const now = await connection.getSlot("processed");
+    if (now >= slot) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
+
+/** The PDAs and provider every timelocked call needs. */
+type GovCtx = {
+  program: any;
+  provider: anchor.AnchorProvider;
+  lightClient: anchor.web3.PublicKey;
+  pending: anchor.web3.PublicKey;
+};
+
+/**
+ * Propose one authority change, at a slot the caller names.
+ *
+ * `program` is deliberately `any`: the change is a Rust enum and its generated
+ * TS shape is Anchor's, not ours, so typing it here would duplicate the IDL.
+ * The runtime encoding is what matters and the program validates it.
+ */
+async function proposeChange(
+  ctx: GovCtx, change: any, effectiveSlot: number,
+): Promise<string> {
+  return ctx.program.methods
+    .proposeAuthorityChange(change, new anchor.BN(effectiveSlot))
+    .accounts({
+      lightClient: ctx.lightClient,
+      pending: ctx.pending,
+      authority: ctx.provider.wallet.publicKey,
+      systemProgram: anchor.web3.SystemProgram.programId,
+    })
+    .rpc();
+}
+
+/** Execute the outstanding change; fails unless the timelock has elapsed. */
+async function executeChange(ctx: GovCtx): Promise<string> {
+  return ctx.program.methods
+    .executeAuthorityChange()
+    .accounts({
+      lightClient: ctx.lightClient,
+      pending: ctx.pending,
+      authority: ctx.provider.wallet.publicKey,
+    })
+    .rpc();
+}
+
+/**
+ * Re-anchor the checkpoint the way governance must now do it: propose, wait out
+ * the timelock, execute. This replaces the old instant `set_checkpoint`, which
+ * is the whole point of F4 — nothing in the suite can reach the privileged path
+ * without passing through the delay.
+ */
+async function timelockedCheckpoint(
+  ctx: GovCtx, height: number, header: Buffer,
+): Promise<void> {
+  // Headroom over the program's minimum: slots advance between the `getSlot`
+  // read and the propose transaction landing, and `TimelockTooSoon` would
+  // otherwise be a flaky failure rather than a finding.
+  const effective = (await ctx.provider.connection.getSlot("processed"))
+    + TIMELOCK_SLOTS + 12;
+  await proposeChange(
+    ctx,
+    // Variant keys are camelCase: the client converts the IDL to camelCase
+    // before the Borsh coder matches variant names.
+    { checkpoint: { height: new anchor.BN(height), header: Array.from(header) } },
+    effective,
+  );
+  await waitForSlot(ctx.provider.connection, effective);
+  await executeChange(ctx);
+}
+
 // -- regtest proof-of-work helpers -------------------------------------------
 //
 // The fixture is a synthetic regtest chain: every header declares bits
@@ -116,10 +235,9 @@ describe("solbeam — BSV light client", () => {
   const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
     [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
 
-  // The bridge PDAs, needed by the initialiser test below before the second
-  // describe block creates them.
-  const [usedDeposits] = anchor.web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("used_deposits")], program.programId);
+  // The bridge PDA, needed by the initialiser test below before the second
+  // describe block creates it. There is no longer a replay-list account: replay
+  // is a per-deposit nullifier PDA, created by `verify_deposit` itself.
   const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("deposit_script")], program.programId);
 
@@ -175,7 +293,7 @@ describe("solbeam — BSV light client", () => {
     try {
       await program.methods
         .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
-        .accounts({ usedDeposits, depositScript, programData, payer: attacker.publicKey })
+        .accounts({ depositScript, programData, payer: attacker.publicKey })
         .signers([attacker])
         .rpc();
       expect.fail("a non-authority payer must not be able to initialize the bridge");
@@ -183,7 +301,6 @@ describe("solbeam — BSV light client", () => {
       expect(String(e)).to.contain("Unauthorized");
     }
 
-    expect(await provider.connection.getAccountInfo(usedDeposits)).to.equal(null);
     expect(await provider.connection.getAccountInfo(depositScript)).to.equal(null);
   });
 
@@ -291,12 +408,19 @@ describe("solbeam — verify a deposit against the window", () => {
 
   const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("light_client")], program.programId);
-  const [usedDeposits] = anchor.web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("used_deposits")], program.programId);
   const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("deposit_script")], program.programId);
   const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint")], program.programId);
+
+  // The replay nullifier for the one fixture deposit. Derived from the claim's
+  // (txid, vout) exactly as the program derives it — there is no list account
+  // any more, so this address IS the replay record.
+  const nullifier = nullifierPda(
+    program.programId,
+    displayToInternal(fixture.proof.txid),
+    fixture.proof.vout,
+  );
   // The loader's ProgramData PDA — see the first describe block. The provider
   // wallet is the localnet upgrade authority, so it is the only key that can
   // call `initialize_bridge`.
@@ -375,7 +499,7 @@ describe("solbeam — verify a deposit against the window", () => {
       // Vec<u8> must be a Buffer, not an Array: borsh encodes it as
       // `bytes` and calls .copy() on it.
       .initializeBridge(Buffer.from(fixture.deposit_script, "hex"))
-      .accounts({ usedDeposits, depositScript, programData, payer: provider.wallet.publicKey })
+      .accounts({ depositScript, programData, payer: provider.wallet.publicKey })
       .rpc();
 
     const ds = await program.account.depositScript.fetch(depositScript);
@@ -383,11 +507,11 @@ describe("solbeam — verify a deposit against the window", () => {
       .to.equal(Buffer.from(fixture.deposit_script, "hex").toString("hex"));
   });
 
-  it("accepts the fixture's deposit and records it as minted", async () => {
+  it("accepts the fixture's deposit and records a nullifier for it", async () => {
     await program.methods
       .verifyDeposit(proof())
       .accounts({
-        lightClient, usedDeposits, depositScript, mint,
+        lightClient, nullifier, depositScript, mint,
         recipientTokenAccount: recipientAta, recipientOwner,
         submitter: provider.wallet.publicKey,
       })
@@ -398,15 +522,15 @@ describe("solbeam — verify a deposit against the window", () => {
     // empty log list then looks like a failed event rather than a slow RPC.
     // The account is the stronger claim anyway: it proves the deposit was
     // accepted AND that it can never be accepted again.
-    const used = await program.account.usedDeposits.fetch(usedDeposits);
-    expect(used.keys.length).to.equal(1);
-    expect(Buffer.from(used.keys[0].txid).toString("hex"))
-      .to.equal(displayToInternal(fixture.proof.txid).toString("hex"));
-    expect(used.keys[0].vout).to.equal(fixture.proof.vout);
-    // The height is stored so entries whose block leaves the window can be
-    // pruned. Without it the list could never be trimmed, and would cap lifetime
-    // usage rather than window usage -- the bug this field exists to fix.
-    expect(used.keys[0].height.toNumber()).to.equal(fixture.proof.height);
+    //
+    // The nullifier's *existence* is the replay record. Its address is derived
+    // from (txid, vout) alone, so the stored height is not part of its identity —
+    // a reorg that re-includes the same transaction at a different height hits
+    // the same address and is refused.
+    const created = await program.account.depositNullifier.fetch(nullifier);
+    expect(created.depositHeight.toNumber()).to.equal(fixture.proof.height);
+    expect((await provider.connection.getAccountInfo(nullifier))!.owner.toBase58())
+      .to.equal(program.programId.toBase58());
 
     // And the tokens exist. Eight decimals, one base unit per satoshi, so the
     // minted amount must equal the deposit exactly — no scaling anywhere.
@@ -425,7 +549,7 @@ describe("solbeam — verify a deposit against the window", () => {
       await program.methods
         .verifyDeposit(proof())
         .accounts({
-        lightClient, usedDeposits, depositScript, mint,
+        lightClient, nullifier, depositScript, mint,
         recipientTokenAccount: recipientAta, recipientOwner,
         submitter: provider.wallet.publicKey,
       })
@@ -443,7 +567,7 @@ describe("solbeam — verify a deposit against the window", () => {
       await program.methods
         .verifyDeposit(bad)
         .accounts({
-        lightClient, usedDeposits, depositScript, mint,
+        lightClient, nullifier, depositScript, mint,
         recipientTokenAccount: recipientAta, recipientOwner,
         submitter: provider.wallet.publicKey,
       })
@@ -467,7 +591,7 @@ describe("solbeam — verify a deposit against the window", () => {
       await program.methods
         .verifyDeposit(bad)
         .accounts({
-        lightClient, usedDeposits, depositScript, mint,
+        lightClient, nullifier, depositScript, mint,
         recipientTokenAccount: recipientAta, recipientOwner,
         submitter: provider.wallet.publicKey,
       })
@@ -485,7 +609,7 @@ describe("solbeam — verify a deposit against the window", () => {
       await program.methods
         .verifyDeposit(bad)
         .accounts({
-        lightClient, usedDeposits, depositScript, mint,
+        lightClient, nullifier, depositScript, mint,
         recipientTokenAccount: recipientAta, recipientOwner,
         submitter: provider.wallet.publicKey,
       })
@@ -503,7 +627,7 @@ describe("solbeam — verify a deposit against the window", () => {
       await program.methods
         .verifyDeposit(bad)
         .accounts({
-        lightClient, usedDeposits, depositScript, mint,
+        lightClient, nullifier, depositScript, mint,
         recipientTokenAccount: recipientAta, recipientOwner,
         submitter: provider.wallet.publicKey,
       })
@@ -770,12 +894,21 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
 
   const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("light_client")], program.programId);
-  const [usedDeposits] = anchor.web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("used_deposits")], program.programId);
   const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("deposit_script")], program.programId);
   const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint")], program.programId);
+  // The re-anchor below goes through the timelock now, so it needs both the
+  // singleton pending-change PDA and the timelock helpers.
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
+  // One nullifier per (txid, vout), and the re-inclusion reuses both, so this is
+  // the same address the original mint created — which is the point of A7.
+  const nullifier = nullifierPda(
+    program.programId,
+    displayToInternal(fixture.proof.txid),
+    fixture.proof.vout,
+  );
   const recipientOwner = new anchor.web3.PublicKey(
     Buffer.from(fixture.proof.recipient, "hex"));
   const TOKEN_PROGRAM = new anchor.web3.PublicKey(
@@ -815,7 +948,7 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
   });
 
   const accounts = () => ({
-    lightClient, usedDeposits, depositScript, mint,
+    lightClient, nullifier, depositScript, mint,
     recipientTokenAccount: recipientAta, recipientOwner,
     submitter: provider.wallet.publicKey,
   });
@@ -826,15 +959,12 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
     const raw118 = rawAt(118);
 
     // Reach a state where 117 is the tip, by moving the checkpoint to 116 and
-    // extending. `setCheckpoint` resets the window, so this is the honest way to
+    // extending. The re-anchor resets the window, so this is the honest way to
     // get a small freshly-anchored chain rather than by rewinding anything.
     // It takes the raw 80-byte header (F2): the difficulty state — bits,
     // no_retargeting, pow_limit — is re-derived from it, and a bare hash cannot
-    // carry `bits`.
-    await program.methods
-      .setCheckpoint(new anchor.BN(116), Array.from(raw116))
-      .accounts({ lightClient, authority: provider.wallet.publicKey })
-      .rpc();
+    // carry `bits`. It goes through the F4 timelock, as every re-anchor now must.
+    await timelockedCheckpoint(gov, 116, raw116);
     await program.methods.pushHeader(Array.from(raw117))
       .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
 
@@ -899,11 +1029,153 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
       expect(String(e)).to.contain("AlreadyMinted");
     }
 
-    // Still exactly one entry, still at its original height. A height-keyed
-    // implementation reaches this point with two.
-    const used = await program.account.usedDeposits.fetch(usedDeposits);
-    expect(used.keys.length).to.equal(1);
-    expect(used.keys[0].height.toNumber()).to.equal(fixture.proof.height);
+    // Still exactly one nullifier, still carrying the height the deposit was
+    // first minted at. The re-inclusion did not create a second record — the
+    // address is derived from (txid, vout) alone, so it could not.
+    const created = await program.account.depositNullifier.fetch(nullifier);
+    expect(created.depositHeight.toNumber()).to.equal(fixture.proof.height);
+    expect((await provider.connection.getAccountInfo(nullifier))!.owner.toBase58())
+      .to.equal(program.programId.toBase58());
+  });
+});
+
+/**
+ * The nullifier prune, and the height rule that makes it checkable rather than
+ * trusted.
+ *
+ * A closed nullifier means the deposit can be minted again, so the prune is the
+ * one instruction that can *create* a replay. It may only close a nullifier
+ * whose **stored** `deposit_height` is below the window's `window_start`. At
+ * that point the original block is no longer held, so `verify_deposit` refuses
+ * any claim at that height before it ever reaches the nullifier, and
+ * `window_start` only moves forward — which is why a re-inclusion at a later
+ * in-window height would require orphaning the original block, a reorg deeper
+ * than the window itself. A prune that took the height as an *argument* could
+ * be pointed at a live deposit and would be a replay oracle at about $0.001 a
+ * cycle (W1, doc 20); the stored field is what prevents that.
+ *
+ * The state here is deliberate: the A7 suite has just left the window with
+ * `window_start == 117`, and the minted nullifier's height is 117, so the rule
+ * must refuse the prune. Re-anchoring forward to 119 and pushing makes 117
+ * strictly below the window, and the same call then succeeds.
+ */
+describe("solbeam — pruning a nullifier (P5/W1)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const rawAt = (height: number): Buffer =>
+    Buffer.from(fixture.headers.find((h: any) => h.height === height)!.raw, "hex");
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("deposit_script")], program.programId);
+  const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("mint")], program.programId);
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
+
+  const txidInternal = displayToInternal(fixture.proof.txid);
+  const nullifier = nullifierPda(
+    program.programId, txidInternal, fixture.proof.vout);
+
+  const recipientOwner = new anchor.web3.PublicKey(
+    Buffer.from(fixture.proof.recipient, "hex"));
+  const TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+  const ASSOCIATED_TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+  const [recipientAta] = anchor.web3.PublicKey.findProgramAddressSync(
+    [recipientOwner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM);
+
+  /** Prune by the identity of the deposit; the address is derived from it. */
+  const prune = (txid: Buffer, vout: number) =>
+    program.methods.pruneNullifier(Array.from(txid), vout)
+      .accounts({
+        lightClient,
+        nullifier: nullifierPda(program.programId, txid, vout),
+        submitter: provider.wallet.publicKey,
+      })
+      .rpc();
+
+  it("refuses to prune while the deposit's block is still in the window", async () => {
+    // window_start is 117 and the nullifier's stored height is 117: exactly the
+    // boundary, and on the refusing side of it.
+    const lc = await program.account.lightClient.fetch(lightClient);
+    const created = await program.account.depositNullifier.fetch(nullifier);
+    expect(created.depositHeight.toNumber()).to.equal(fixture.proof.height);
+    expect(lc.windowStart.toNumber()).to.equal(fixture.proof.height);
+
+    try {
+      await prune(txidInternal, fixture.proof.vout);
+      expect.fail("must not prune a nullifier whose block is still in the window");
+    } catch (e: any) {
+      expect(String(e)).to.contain("NullifierNotPrunable");
+    }
+    // A refused prune reverts, so the record — and its rent — are untouched.
+    expect(await provider.connection.getAccountInfo(nullifier)).to.not.equal(null);
+  });
+
+  it("refuses a prune aimed at a different (txid, vout)", async () => {
+    // The nullifier account is checked against the seeds re-derived from the
+    // instruction arguments, so pointing the real account at another outpoint
+    // fails the constraint rather than closing the wrong record.
+    try {
+      await program.methods
+        .pruneNullifier(Array.from(txidInternal), fixture.proof.vout + 1)
+        .accounts({
+          lightClient, nullifier, submitter: provider.wallet.publicKey,
+        })
+        .rpc();
+      expect.fail("must not accept a nullifier for a different outpoint");
+    } catch (e: any) {
+      expect(String(e)).to.contain("ConstraintSeeds");
+    }
+    expect(await provider.connection.getAccountInfo(nullifier)).to.not.equal(null);
+  });
+
+  it("closes it once the window has moved past the deposit's height", async () => {
+    // Anchor at 119 and push 120 and 121. The first push sets window_start to
+    // 120, strictly above the deposit's 117.
+    await timelockedCheckpoint(gov, 119, rawAt(119));
+    for (const h of [120, 121]) {
+      await program.methods.pushHeader(Array.from(rawAt(h)))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    }
+    const before = await program.account.lightClient.fetch(lightClient);
+    expect(before.windowStart.toNumber()).to.equal(120);
+
+    await prune(txidInternal, fixture.proof.vout);
+    expect(await provider.connection.getAccountInfo(nullifier)).to.equal(null);
+
+    // And the deposit is still unmintable afterwards: the prune did not create
+    // a replay, because the height it was minted at is below the window. The
+    // refusal is HeaderNotInWindow and not AlreadyMinted — the nullifier is
+    // gone, and the window itself is what still says no.
+    try {
+      await program.methods.verifyDeposit({
+        height: new anchor.BN(fixture.proof.height),
+        txid: Array.from(txidInternal),
+        vout: fixture.proof.vout,
+        amount: new anchor.BN(fixture.proof.amount),
+        recipient: Array.from(Buffer.from(fixture.proof.recipient, "hex")),
+        index: fixture.proof.index,
+        branch: fixture.proof.branch.map(
+          (h: string) => Array.from(Buffer.from(h, "hex"))),
+        header: Array.from(rawAt(fixture.proof.height)),
+        tx: Buffer.from(fixture.deposit_tx_raw, "hex"),
+      }).accounts({
+        lightClient, nullifier, depositScript, mint,
+        recipientTokenAccount: recipientAta, recipientOwner,
+        submitter: provider.wallet.publicKey,
+      }).rpc();
+      expect.fail("a pruned deposit must not be mintable again");
+    } catch (e: any) {
+      expect(String(e)).to.contain("HeaderNotInWindow");
+    }
   });
 });
 
@@ -935,6 +1207,10 @@ describe("solbeam — a stale staged fork (P2)", () => {
 
   const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("light_client")], program.programId);
+  // Re-anchoring is a timelocked authority change now (F4), so this describe
+  // needs the singleton pending-change PDA and the helpers that drive it.
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
 
   /**
    * A funded submitter. The staging account is ~10 KB, so `init` needs rent —
@@ -956,20 +1232,17 @@ describe("solbeam — a stale staged fork (P2)", () => {
   /**
    * Re-anchor the trusted checkpoint, which resets the window.
    *
-   * Note what the reset leaves behind: `set_checkpoint` empties `headers`, so
+   * Note what the reset leaves behind: the re-anchor empties `headers`, so
    * the checkpoint block itself is NOT a record. The first `push_header`
    * afterwards sets `window_start` to *that* block's height. So the shallowest
    * height a branch can name as a fork point is one above the checkpoint, and
    * any test that wants a fork point at all has to push a header first.
+   *
+   * The raw header, not its hash: the re-anchor re-derives the difficulty
+   * state from the header itself (F2). It goes through the F4 timelock.
    */
   const reanchor = async (height: number) => {
-    await program.methods
-      // The raw header, not its hash: set_checkpoint re-derives the difficulty
-      // state from the header itself (F2), and on a mainnet header that opens
-      // the trusted seed instead of going live immediately.
-      .setCheckpoint(new anchor.BN(height), Array.from(rawAt(height)))
-      .accounts({ lightClient, authority: provider.wallet.publicKey })
-      .rpc();
+    await timelockedCheckpoint(gov, height, rawAt(height));
   };
 
   /** Extend the canonical chain with the fixture's own header at that height. */
@@ -1222,6 +1495,9 @@ describe("solbeam — real mainnet headers (F1, F2, F3)", () => {
 
   const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("light_client")], program.programId);
+  // Every re-anchor in this block is a timelocked authority change (F4).
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
 
   // The checkpoint is the fixture's 147th header (index 146), so the first 147
   // headers ARE the seed — 146 ancestors plus the checkpoint itself — and the
@@ -1244,8 +1520,7 @@ describe("solbeam — real mainnet headers (F1, F2, F3)", () => {
   const internalHash = (raw: Buffer): string => doubleSha256(raw).toString("hex");
 
   const setCheckpoint = async (height: number, header: Buffer) => {
-    await program.methods.setCheckpoint(new anchor.BN(height), Array.from(header))
-      .accounts({ lightClient, authority: provider.wallet.publicKey }).rpc();
+    await timelockedCheckpoint(gov, height, header);
   };
 
   const attemptPush = async (raw: Buffer): Promise<string> => {
@@ -1495,5 +1770,105 @@ describe("solbeam — real mainnet headers (F1, F2, F3)", () => {
     // A commit closes the staging account and returns the rent.
     const gone = await provider.connection.getAccountInfo(staging);
     expect(gone).to.be.null;
+  });
+});
+
+/**
+ * The authority timelock (F4).
+ *
+ * `set_checkpoint` and `set_paused` were one signature and one slot, and both
+ * are powerful: the first can install a trusted root that makes a fabricated
+ * deposit provable, the second halts header advancement and therefore
+ * redemption. This pins the replacement — a change is proposed into a singleton
+ * PDA with an `effective_slot` at least `TIMELOCK_SLOTS` ahead, cannot be
+ * executed before that slot, can be cancelled instead, and closes the PDA when
+ * it finally applies.
+ *
+ * It runs last in the file, so the pause it leaves and lifts cannot colour
+ * another suite.
+ */
+describe("solbeam — the authority timelock (F4)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
+
+  const isPaused = async (): Promise<boolean> =>
+    (await program.account.lightClient.fetch(lightClient)).paused;
+
+  it("refuses an execute before the timelock, then applies it after", async () => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 12;
+    await proposeChange(gov, { pause: { paused: true } }, effective);
+
+    // The pending change is visible, with who proposed it and when it lands —
+    // that visibility is the whole of what a timelock buys.
+    const proposed = await program.account.pendingAuthorityChange.fetch(pending);
+    expect(proposed.effectiveSlot.toNumber()).to.equal(effective);
+    expect(proposed.authority.toBase58())
+      .to.equal(provider.wallet.publicKey.toBase58());
+
+    // Immediate execute is refused, and it must not have half-applied.
+    try {
+      await executeChange(gov);
+      expect.fail("an authority change must not execute inside its timelock");
+    } catch (e: any) {
+      expect(String(e)).to.contain("TimelockNotElapsed");
+    }
+    expect(await isPaused()).to.equal(false);
+
+    await waitForSlot(provider.connection, effective);
+    await executeChange(gov);
+    expect(await isPaused()).to.equal(true);
+    // Executing closes the PDA, so at most one change is ever outstanding.
+    expect(await provider.connection.getAccountInfo(pending)).to.equal(null);
+  });
+
+  it("refuses a proposal whose effective_slot is inside the timelock", async () => {
+    const now = await provider.connection.getSlot("processed");
+    try {
+      await proposeChange(gov, { pause: { paused: false } }, now + 1);
+      expect.fail("a proposal may not name a slot inside the timelock");
+    } catch (e: any) {
+      expect(String(e)).to.contain("TimelockTooSoon");
+    }
+    // A refused proposal reverts, so the singleton is still free.
+    expect(await provider.connection.getAccountInfo(pending)).to.equal(null);
+  });
+
+  it("can be cancelled, and a cancelled change never takes effect", async () => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 12;
+    await proposeChange(gov, { pause: { paused: false } }, effective);
+
+    await program.methods.cancelAuthorityChange()
+      .accounts({ lightClient, pending, authority: provider.wallet.publicKey })
+      .rpc();
+    expect(await provider.connection.getAccountInfo(pending)).to.equal(null);
+
+    // Wait past the slot the cancelled change named, and prove the client is
+    // untouched: the pause applied by the first test is still in force.
+    await waitForSlot(provider.connection, effective);
+    expect(await isPaused()).to.equal(true);
+    try {
+      await executeChange(gov);
+      expect.fail("a cancelled change must not be executable");
+    } catch (e: any) {
+      // The pending PDA is gone, so account resolution fails before the body.
+      expect(String(e)).to.not.equal("");
+    }
+  });
+
+  it("applies an unpause through the same path", async () => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 12;
+    await proposeChange(gov, { pause: { paused: false } }, effective);
+    await waitForSlot(provider.connection, effective);
+    await executeChange(gov);
+    expect(await isPaused()).to.equal(false);
   });
 });

@@ -28,6 +28,16 @@ skip-lint = false
 [test]
 upgradeable = true
 
+# The F4 authority timelock is measured in slots, deliberately, so that it can be
+# read from `Clock` without trusting a wall clock. Tests have to wait it out, and
+# at the validator's default 64 ticks per slot that is ~400 ms a slot; sixteen
+# ticks a slot makes the local chain advance ~3x faster and keeps the suite near
+# its former runtime. This changes nothing the program does — `Clock::slot` is a
+# slot either way — only how long the local validator takes to produce one. (Two
+# ticks a slot is too fast: the validator stops confirming transactions.)
+[test.validator]
+ticks_per_slot = 16
+
 [programs.localnet]
 # Derived from the keypair in target/deploy/solbeam-keypair.json, which is
 # gitignored. A fresh clone with an empty target/ must run `anchor keys sync`

@@ -78,7 +78,7 @@ while the numbers are still provisional.
 | `gov.signal` | Signal from proposal | **true** `dec` | Live from the moment it is raised, not when it passes |
 | `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. Nothing is immutable — governance could rewrite even `gov.delay_min` — so the exit window, not the rule, is the protection |
 | `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `dec` | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint |
-| `gov.authority_timelock` | Authority timelock | **open** | **F4.** Delay before a checkpoint or pause takes effect. Must be long enough to exit |
+| `gov.authority_timelock` | Authority timelock | **32 slots** `ph` (**built**: `TIMELOCK_SLOTS`, a PoC value) | **F4.** Delay before a checkpoint or pause takes effect. Must be long enough to exit |
 | `gov.pause_threshold` | Pause threshold | **>50%** `ph` | Lower than a governance change, because the power is bounded |
 | `gov.pause_duration` | Pause auto-lift | **open** | Days before a pause lapses unless renewed |
 

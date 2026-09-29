@@ -28,6 +28,10 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::bpf_loader_upgradeable;
+// Not in `prelude`: the trait that carries `DISCRIMINATOR`, needed to write the
+// replay nullifier's account data by hand (its PDA seeds come from instruction
+// arguments, so it cannot be created by an Anchor `init` constraint).
+use anchor_lang::Discriminator;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 // Solana 3.x moved hashing out of `solana_program` entirely — there is no
@@ -113,14 +117,37 @@ pub const MIN_CONFIRMATIONS: u64 = 12;
 /// needed when minting a deposit.
 pub const TOKEN_DECIMALS: u8 = 8;
 
-/// How many deposits the replay list remembers at once. **Not a lifetime limit.**
+/// Seed prefix of the per-deposit replay **nullifier**.
 ///
-/// Entries are pruned once their block leaves the header window, because a claim
-/// against a height below `window_start` is refused before the replay check is
-/// ever reached — so the list only has to cover the window. It is therefore a
-/// bound on *deposits per window*, not on total usage; the original fixed list was
-/// never pruned and silently stopped the peg-in path after 256 mints in its life.
-pub const MAX_USED: usize = 200;
+/// The nullifier is a PDA seeded on `(txid, vout)` — the identity of a deposit —
+/// so its **existence is the whole replay record**. There is no list, and so no
+/// ceiling: the fixed `UsedDeposits` list this replaces capped the peg-in path at
+/// 200 mints per 32-hour window with no attacker required (F6/A9), and the pruned
+/// list was still a bound on usage per window rather than a replay defence.
+/// Decision P5 replaced it with this.
+///
+/// **The replay key is `(txid, vout)` and deliberately not the height.** A reorg
+/// re-includes the same transaction at a different height, and a height-keyed
+/// record would hand it a fresh key and mint it a second time — an unbacked mint
+/// out of a legitimate deposit. See [`DepositNullifier`].
+pub const NULLIFIER_SEED: &[u8] = b"nullifier";
+
+/// How long a checkpoint or pause change must sit pending before it may be
+/// executed, in slots. **This is the F4 fix's number.**
+///
+/// A timelock is not a threshold, and this one does not pretend to be: the same
+/// single upgrade-authority key proposes and executes. What it buys is the one
+/// thing `has_one = authority` alone cannot — **notice**. `set_checkpoint` can
+/// install a trusted root that makes a fabricated deposit provable, and
+/// `set_paused` halts header advancement and therefore redemption, and before
+/// this both took one signature and landed inside one slot. With this, a pending
+/// change is visible in a PDA for at least this long before it can be applied.
+///
+/// **This PoC value is deliberately short** so the test suite can advance the
+/// clock past it. It is a named constant precisely because the production value
+/// is a policy decision: doc 24 carries it as `gov.authority_timelock`, and that
+/// is the number to change, in one place.
+pub const TIMELOCK_SLOTS: u64 = 32;
 
 /// Size of one `HeaderRecord`: the block hash, the block's cumulative
 /// chainwork, and its timestamp.
@@ -176,11 +203,6 @@ pub const MAX_FORK_BATCH: usize = 12;
 const _: () = assert!(
     LightClient::SPACE <= MAX_ACCOUNT_CREATE,
     "LightClient::SPACE exceeds Solana's account-creation cap: shrink HeaderRecord or WINDOW"
-);
-
-const _: () = assert!(
-    UsedDeposits::SPACE <= MAX_ACCOUNT_CREATE,
-    "UsedDeposits::SPACE exceeds Solana's account-creation cap: lower MAX_USED"
 );
 
 const _: () = assert!(
@@ -838,14 +860,17 @@ pub mod solbeam {
         Ok(())
     }
 
-    /// Create the bridge's own state: the script a deposit must pay, and the
-    /// list of deposits already minted.
+    /// Create the bridge's own state: the script a deposit must pay.
     ///
     /// `deposit_script` is the one address every peg-in must pay, so setting it
     /// is a privileged act: a first caller free to choose it would redirect
     /// every deposit into their own output. Like `initialize`, this is gated on
     /// the program's **upgrade authority**, read from the loader's `ProgramData`
     /// account — see [`Initialize`].
+    ///
+    /// There is no longer a replay-list account to create here. Replay is a
+    /// per-deposit **nullifier PDA**, created by [`verify_deposit`] at the first
+    /// mint and closed by [`prune_nullifier`] once its block leaves the window.
     pub fn initialize_bridge(ctx: Context<InitializeBridge>, deposit_script: Vec<u8>) -> Result<()> {
         require!(
             is_p2pkh(&deposit_script),
@@ -854,10 +879,6 @@ pub mod solbeam {
         let ds = &mut ctx.accounts.deposit_script;
         ds.script = deposit_script;
         ds.bump = ctx.bumps.deposit_script;
-
-        let used = &mut ctx.accounts.used_deposits;
-        used.keys = Vec::new();
-        used.bump = ctx.bumps.used_deposits;
 
         msg!("SOLBEAM bridge initialised");
         Ok(())
@@ -869,6 +890,16 @@ pub mod solbeam {
     /// This is the trustless half of the peg, and it is deliberately explicit
     /// about what it does NOT take on trust. Everything the caller supplies -
     /// the branch, the transaction, the claimed output - is re-derived here.
+    ///
+    /// **It proves the output *paid* the deposit script. It does not, and cannot,
+    /// prove the outpoint is *unspent*** — Solana has no view of BSV's UTXO set.
+    /// Under the federation the deposit script is the pooled reserve and the same
+    /// members hold the key, so a consolidation or payout can spend a deposit
+    /// output while the original deposit stays provable and mintable. The
+    /// software's answer is the replay **nullifier** below, which records that
+    /// *this program* has already minted a given `(txid, vout)`; that is a
+    /// mint-side gate, and it is not the same thing as spentness. See A2/N5 and
+    /// decision P5.
     ///
     /// The token mint is not wired up yet: this records the claim and emits the
     /// amount and recipient. Adding the SPL CPI is the next increment, and
@@ -945,38 +976,24 @@ pub mod solbeam {
             SolbeamError::InsufficientConfirmations
         );
 
-        // 7. Replay. The (txid, vout) pair is the identity of a deposit, so it is
-        //    what gets remembered.
-        let used = &mut ctx.accounts.used_deposits;
-
-        // Drop entries whose block has left the window. Pruning is safe precisely
-        // because of check 1 above: a claim is refused unless its height is at or
-        // above `window_start`, so a deposit whose block has fallen out can never
-        // reach this point to be replayed. Without the prune the list fills and
-        // the peg-in path stops working permanently — a cap on total usage rather
-        // than a replay defence, and one that ordinary volume reaches on its own.
-        let window_start = ctx.accounts.light_client.window_start;
-        used.keys.retain(|k| k.height >= window_start);
-
-        let key = DepositKey {
-            txid: claim.txid,
-            vout: claim.vout,
-            height: claim.height,
-        };
-        // Identity is (txid, vout) and deliberately NOT the height. A reorg
-        // re-includes the same transaction at a different height, so comparing
-        // the stored height would hand the deposit a fresh key and mint it a
-        // second time — an unbacked mint from a legitimate deposit. The height is
-        // stored only so stale entries can be pruned.
-        require!(
-            !used
-                .keys
-                .iter()
-                .any(|k| k.txid == key.txid && k.vout == key.vout),
-            SolbeamError::AlreadyMinted
-        );
-        require!(used.keys.len() < MAX_USED, SolbeamError::NoRoomForMoreDeposits);
-        used.keys.push(key);
+        // 7. Replay. The (txid, vout) pair is the identity of a deposit, so a
+        //    PDA seeded on exactly those two values is the record. Creating it
+        //    *is* the mint; a second claim finds it already there and reverts
+        //    with `AlreadyMinted`.
+        //
+        //    No list, no prune on this path and no `MAX_USED`: the old fixed list
+        //    was a cap on usage per window reached by ordinary volume, not a
+        //    replay defence. The height is stored **inside** the nullifier so the
+        //    later prune can be checked against it rather than trusted — see
+        //    [`prune_nullifier`].
+        create_nullifier(
+            &ctx.accounts.nullifier.to_account_info(),
+            &ctx.accounts.submitter.to_account_info(),
+            ctx.program_id,
+            claim.txid,
+            claim.vout,
+            claim.height,
+        )?;
 
         // 8. The recipient named in the OP_RETURN is the account that receives
         //    the tokens. This is the binding between the BSV payload and the
@@ -1014,41 +1031,160 @@ pub mod solbeam {
         Ok(())
     }
 
-    /// Replace the trusted checkpoint. Timelocked governance in production;
-    /// here it exists so a test can prove the checkpoint is enforced rather
-    /// than decorative.
+    /// Propose a timelocked change to the trusted checkpoint or the pause flag.
     ///
-    /// **F2.** This used to take a bare `tip_hash` and reset only the hash,
-    /// height and window. `expected_bits`, `no_retargeting` and
-    /// `pow_limit_bits` survived from the *previous* chain, so a client that had
-    /// ever been anchored on regtest kept `no_retargeting = true` after being
-    /// re-anchored on mainnet, and `required_bits()` returned regtest's target
-    /// forever — every subsequent header accepted at the easiest encodable
-    /// target. It now takes the **raw 80-byte header**, exactly as
-    /// `initialize` does, and re-derives all three through the same
-    /// [`LightClient::anchor_checkpoint`] the initialiser uses. A hash alone
-    /// cannot carry `bits`, which is why the signature had to change rather
-    /// than the body.
-    pub fn set_checkpoint(
-        ctx: Context<SetCheckpoint>,
-        height: u64,
-        header: [u8; HEADER_LEN],
+    /// **F4.** `set_checkpoint` and `set_paused` used to be one signature and one
+    /// slot: `authority` is the program's upgrade authority, so a single key
+    /// could install a trusted root that makes a fabricated deposit provable
+    /// (`set_checkpoint` proves a fake deposit, then `verify_deposit` mints it)
+    /// or halt header advancement and therefore redemption. Neither is wrong to
+    /// *exist* — somebody must be able to repair a bad root or stop a bleeding
+    /// client — but neither should be instant and unannounced.
+    ///
+    /// So a change is now two steps. This one records exactly one pending change
+    /// in a **singleton PDA**, with the proposing authority and an
+    /// `effective_slot` at least [`TIMELOCK_SLOTS`] in the future. The change
+    /// takes effect only when [`execute_authority_change`] runs at or after that
+    /// slot, and [`cancel_authority_change`] can withdraw it before then.
+    ///
+    /// One outstanding change at a time is structural, not a convention: the PDA
+    /// has no per-proposal seed, so a second `propose` fails while one is live.
+    /// That also means the delay cannot be restarted or leapfrogged by spamming
+    /// proposals — the proposer must execute or cancel before proposing again.
+    pub fn propose_authority_change(
+        ctx: Context<ProposeAuthorityChange>,
+        change: AuthorityChange,
+        effective_slot: u64,
     ) -> Result<()> {
-        let lc = &mut ctx.accounts.light_client;
-        lc.anchor_checkpoint(height, &header)?;
+        let earliest = Clock::get()?
+            .slot
+            .checked_add(TIMELOCK_SLOTS)
+            .ok_or(SolbeamError::Overflow)?;
+        require!(
+            effective_slot >= earliest,
+            SolbeamError::TimelockTooSoon
+        );
+
+        let pending = &mut ctx.accounts.pending;
+        pending.authority = ctx.accounts.authority.key();
+        pending.effective_slot = effective_slot;
+        pending.change = change;
+        pending.bump = ctx.bumps.pending;
+
+        emit!(AuthorityChangeProposed {
+            authority: pending.authority,
+            effective_slot,
+        });
         msg!(
-            "SOLBEAM checkpoint re-anchored at {} (no_retargeting {}, seed remaining {})",
-            height,
-            lc.no_retargeting,
-            lc.seed_remaining
+            "SOLBEAM authority change proposed, effective at slot {} (now {})",
+            effective_slot,
+            Clock::get()?.slot
         );
         Ok(())
     }
 
-    /// Pause header advancement. Minting must stop when the header chain stops,
-    /// so this is a safety valve rather than a convenience.
-    pub fn set_paused(ctx: Context<SetCheckpoint>, paused: bool) -> Result<()> {
-        ctx.accounts.light_client.paused = paused;
+    /// Apply the pending change, once its timelock has elapsed.
+    ///
+    /// Two things are enforced together, and both matter: the signer must be the
+    /// authority recorded on the pending account *and* the light client's own
+    /// `authority` (the account constraints check the second, the body the
+    /// first), and `Clock::slot` must be at or after `effective_slot`. The
+    /// account is closed on success, so the pending change exists exactly once
+    /// and cannot be replayed.
+    pub fn execute_authority_change(ctx: Context<ExecuteAuthorityChange>) -> Result<()> {
+        let pending = &ctx.accounts.pending;
+        require!(
+            ctx.accounts.authority.key() == pending.authority,
+            SolbeamError::Unauthorized
+        );
+        let slot = Clock::get()?.slot;
+        require!(
+            slot >= pending.effective_slot,
+            SolbeamError::TimelockNotElapsed
+        );
+
+        match &pending.change {
+            // F2's shared implementation, on purpose: a checkpoint installed here
+            // re-derives `expected_bits`, `no_retargeting` and `pow_limit_bits`
+            // from the raw header, exactly as `initialize` does. A second,
+            // divergent path is how F2 arose in the first place.
+            AuthorityChange::Checkpoint { height, header } => {
+                ctx.accounts.light_client.anchor_checkpoint(*height, header)?;
+                msg!(
+                    "SOLBEAM checkpoint re-anchored at {} (no_retargeting {}, seed remaining {})",
+                    height,
+                    ctx.accounts.light_client.no_retargeting,
+                    ctx.accounts.light_client.seed_remaining
+                );
+            }
+            AuthorityChange::Pause { paused } => {
+                ctx.accounts.light_client.paused = *paused;
+                msg!("SOLBEAM paused set to {}", paused);
+            }
+        }
+
+        emit!(AuthorityChangeExecuted {
+            authority: pending.authority,
+            slot,
+        });
+        Ok(())
+    }
+
+    /// Withdraw a pending change before it takes effect.
+    ///
+    /// Needed because a proposal the authority has thought better of would
+    /// otherwise occupy the singleton slot for its whole delay — and because a
+    /// change can be wrong, not only malicious.
+    pub fn cancel_authority_change(ctx: Context<CancelAuthorityChange>) -> Result<()> {
+        require!(
+            ctx.accounts.authority.key() == ctx.accounts.pending.authority,
+            SolbeamError::Unauthorized
+        );
+        msg!(
+            "SOLBEAM authority change cancelled before slot {}",
+            ctx.accounts.pending.effective_slot
+        );
+        Ok(())
+    }
+
+    /// Close a minted deposit's replay nullifier once its block has left the
+    /// header window, returning the rent.
+    ///
+    /// **The height rule is the whole of the safety argument.** A closed
+    /// nullifier means the deposit can be minted again, so a prune that could be
+    /// aimed at a live deposit would be a replay oracle: close the nullifier,
+    /// re-mint, repeat. The account therefore stores the `deposit_height` it was
+    /// created with, and this instruction refuses unless
+    /// `deposit_height < window_start` — a condition on *stored* state, not on an
+    /// argument the caller supplies. Once the deposit's block is below the
+    /// window, `verify_deposit` refuses any claim at that height before the
+    /// replay check is reached, and `window_start` is monotonic, so re-including
+    /// the same transaction at a later in-window height would require orphaning
+    /// the original block — a reorg deeper than the window itself.
+    ///
+    /// Permissionless on purpose: the caller takes the rent back as the reward
+    /// for housekeeping. This is the only path that closes a nullifier today; a
+    /// vault burn will close one as soon as such an instruction exists, and
+    /// nothing else may. See V1 in doc 19/20 for why the pending item and the
+    /// nullifier must not be the same account.
+    pub fn prune_nullifier(ctx: Context<PruneNullifier>, txid: [u8; 32], vout: u32) -> Result<()> {
+        // The address is Anchor's business: `seeds` on the account, bound to
+        // these two arguments by `#[instruction(...)]`. What is checked here is
+        // the rule, on the *stored* height — never on an argument, which is the
+        // whole difference between a sound prune and a replay oracle.
+        let deposit_height = ctx.accounts.nullifier.deposit_height;
+        require!(
+            deposit_height < ctx.accounts.light_client.window_start,
+            SolbeamError::NullifierNotPrunable
+        );
+
+        // `close = submitter` on the account returns the rent and zeroes it, so
+        // there is no manual close here and no second place to get it wrong.
+        emit!(NullifierPruned {
+            txid,
+            vout,
+            deposit_height,
+        });
         Ok(())
     }
 }
@@ -1686,8 +1822,41 @@ pub struct CommitFork<'info> {
     pub submitter: Signer<'info>,
 }
 
+/// Proposal of a timelocked checkpoint or pause change.
+///
+/// `light_client` is read-only here except for the `init` payer; the change is
+/// written to the pending account and applied later by
+/// [`ExecuteAuthorityChange`]. The pending account is a singleton PDA — no
+/// per-proposal seed — so a second proposal is impossible while one is live.
 #[derive(Accounts)]
-pub struct SetCheckpoint<'info> {
+pub struct ProposeAuthorityChange<'info> {
+    #[account(
+        seeds = [b"light_client"],
+        bump = light_client.bump,
+        has_one = authority @ SolbeamError::Unauthorized,
+    )]
+    pub light_client: Account<'info, LightClient>,
+    // `init` here is what makes "only one outstanding change" structural rather
+    // than a convention: while a pending change exists, this account exists and
+    // a second `propose` fails.
+    #[account(
+        init,
+        payer = authority,
+        space = PendingAuthorityChange::SPACE,
+        seeds = [b"pending_authority_change"],
+        bump
+    )]
+    pub pending: Account<'info, PendingAuthorityChange>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Apply a pending change. Both the pending account's recorded proposer and the
+/// light client's own `authority` must be the signer, and the timelock must have
+/// elapsed; the account is closed on success.
+#[derive(Accounts)]
+pub struct ExecuteAuthorityChange<'info> {
     #[account(
         mut,
         seeds = [b"light_client"],
@@ -1695,8 +1864,58 @@ pub struct SetCheckpoint<'info> {
         has_one = authority @ SolbeamError::Unauthorized,
     )]
     pub light_client: Account<'info, LightClient>,
-    /// Timelocked governance multisig in production.
+    #[account(
+        mut,
+        seeds = [b"pending_authority_change"],
+        bump = pending.bump,
+        close = authority,
+    )]
+    pub pending: Account<'info, PendingAuthorityChange>,
+    #[account(mut)]
     pub authority: Signer<'info>,
+}
+
+/// Withdraw a pending change. `close = authority` returns the rent.
+#[derive(Accounts)]
+pub struct CancelAuthorityChange<'info> {
+    #[account(
+        seeds = [b"light_client"],
+        bump = light_client.bump,
+        has_one = authority @ SolbeamError::Unauthorized,
+    )]
+    pub light_client: Account<'info, LightClient>,
+    #[account(
+        mut,
+        seeds = [b"pending_authority_change"],
+        bump = pending.bump,
+        close = authority,
+    )]
+    pub pending: Account<'info, PendingAuthorityChange>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+/// Close a deposit's replay nullifier once its block has left the window.
+///
+/// The nullifier is seeded on `(txid, vout)`, which are instruction arguments, so
+/// the seeds are bound with `#[instruction(...)]` and Anchor derives and checks
+/// the address itself. `close = submitter` returns the rent to whoever did the
+/// housekeeping, and it is the only way this account is ever closed besides a
+/// future vault burn.
+#[derive(Accounts)]
+#[instruction(txid: [u8; 32], vout: u32)]
+pub struct PruneNullifier<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(
+        mut,
+        seeds = [NULLIFIER_SEED, txid.as_ref(), &vout.to_le_bytes()],
+        bump = nullifier.bump,
+        close = submitter,
+    )]
+    pub nullifier: Account<'info, DepositNullifier>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1776,6 +1995,98 @@ pub fn work_from_bits(bits: u32) -> u128 {
     }
 }
 
+// -- the replay nullifier ---------------------------------------------------
+
+/// Create the replay nullifier for a deposit, refusing a second one.
+///
+/// The seeds are `(txid, vout)` — two **instruction arguments** — so the address
+/// cannot be expressed as an Anchor `seeds` constraint and the account is built
+/// by hand rather than through `init`. The derivation is reused verbatim by
+/// [`prune_nullifier`], and the client-side tests derive it the same way, so all
+/// three agree on which address identifies a deposit.
+///
+/// The existence check comes **before** the account is built: a deposit that has
+/// already been minted has this account, and `data_is_empty()` is false, so the
+/// caller gets `AlreadyMinted` rather than a system-program error about an
+/// account in use. The height is written into the account because
+/// [`prune_nullifier`] must be able to check it without trusting an argument.
+///
+/// **Built with `transfer` + `allocate` + `assign`, not `create_account`.** The
+/// system program's `CreateAccount` refuses a destination that already holds
+/// lamports, and this PDA's address is public the moment the deposit transaction
+/// is: one lamport sent to it would block that deposit from ever being minted — a
+/// targeted, near-free denial of service. `Allocate` only requires the account's
+/// data to be empty, so pre-existing lamports (which the attacker forfeits) are
+/// absorbed rather than fatal. What the attacker cannot do is write *data* into
+/// the account, because only the owner may do that and the owner is this program.
+fn create_nullifier<'info>(
+    nullifier: &AccountInfo<'info>,
+    submitter: &AccountInfo<'info>,
+    program_id: &Pubkey,
+    txid: [u8; 32],
+    vout: u32,
+    deposit_height: u64,
+) -> Result<()> {
+    let vout_bytes = vout.to_le_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[NULLIFIER_SEED, txid.as_ref(), &vout_bytes],
+        program_id,
+    );
+    require!(
+        nullifier.key() == expected,
+        SolbeamError::WrongNullifier
+    );
+    require!(nullifier.data_is_empty(), SolbeamError::AlreadyMinted);
+
+    let seeds: &[&[u8]] = &[NULLIFIER_SEED, txid.as_ref(), &vout_bytes, &[bump]];
+    let rent = Rent::get()?.minimum_balance(DepositNullifier::SPACE);
+    let existing = nullifier.lamports();
+    if existing < rent {
+        // From the submitter, which signs the outer transaction. Not a signed
+        // PDA transfer: the nullifier receives, it does not pay.
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                anchor_lang::system_program::ID,
+                anchor_lang::system_program::Transfer {
+                    from: submitter.clone(),
+                    to: nullifier.clone(),
+                },
+            ),
+            rent - existing,
+        )?;
+    }
+
+    anchor_lang::system_program::allocate(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Allocate {
+                account_to_allocate: nullifier.clone(),
+            },
+            &[seeds],
+        ),
+        DepositNullifier::SPACE as u64,
+    )?;
+    anchor_lang::system_program::assign(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Assign {
+                account_to_assign: nullifier.clone(),
+            },
+            &[seeds],
+        ),
+        program_id,
+    )?;
+
+    // The allocate CPI has given the account its data region, so this borrow sees
+    // it. Written field for field rather than through Borsh so the layout is
+    // explicit: discriminator, `deposit_height: u64`, `bump: u8`.
+    let mut data = nullifier.try_borrow_mut_data()?;
+    data[..8].copy_from_slice(DepositNullifier::DISCRIMINATOR);
+    data[8..16].copy_from_slice(&deposit_height.to_le_bytes());
+    data[16] = bump;
+    Ok(())
+}
+
 // -- small helpers ----------------------------------------------------------
 
 fn read32(buf: &[u8], at: usize) -> [u8; 32] {
@@ -1829,25 +2140,69 @@ pub struct DepositClaim {
     pub tx: Vec<u8>,
 }
 
-/// The identity of a deposit. A transaction can have several outputs, so the
-/// pair is the key, not the txid alone.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
-pub struct DepositKey {
-    pub txid: [u8; 32],
-    pub vout: u32,
-    /// The block the deposit is in. Carried so the list can be pruned once that
-    /// block leaves the header window — see the pruning in `verify_deposit`.
-    pub height: u64,
-}
-
+/// A minted deposit's replay record: **one PDA per `(txid, vout)`**, and nothing
+/// else.
+///
+/// The account's **existence** is the record. That is the whole design (decision
+/// P5) and it replaces a fixed `Vec<DepositKey>` capped at `MAX_USED = 200`:
+/// there is no list to fill, so there is no ceiling, and no per-window capacity
+/// limit for ordinary volume to reach. Solana cannot enumerate PDAs and does not
+/// need to — replay is answered by deriving the address and looking it up.
+///
+/// It is deliberately **not** the pending-mint item that the vault will hold.
+/// That item closes on release; this one must outlive it, or a released deposit
+/// could be minted again (V1 in doc 19/20). The two lifetimes are different
+/// accounts for that reason.
+///
+/// `deposit_height` is the field that makes pruning sound rather than trusted:
+/// [`prune_nullifier`] may only close this account when that stored height is
+/// below `window_start`. With the height supplied as an argument instead, a
+/// caller could name a stale height for a live deposit, close the nullifier and
+/// re-mint — a replay oracle at ~$0.001 a cycle (W1 in doc 20).
 #[account]
-pub struct UsedDeposits {
-    pub keys: Vec<DepositKey>,
+pub struct DepositNullifier {
+    /// The block the deposit was minted from. Written once, never updated.
+    pub deposit_height: u64,
     pub bump: u8,
 }
 
-impl UsedDeposits {
-    pub const SPACE: usize = 8 + 4 + (MAX_USED * 44) + 1; // 8,813 of 10,240
+impl DepositNullifier {
+    pub const SPACE: usize = 8 + 8 + 1; // 17 bytes: discriminator + height + bump
+}
+
+/// The one change awaiting its timelock, and who proposed it.
+///
+/// A singleton: the PDA seed is fixed (`[b"pending_authority_change"]`), so only
+/// one can exist. `authority` is what makes `cancel` and `execute` the proposer's
+/// to do; `effective_slot` is the earliest slot at which the change may be
+/// applied.
+#[account]
+pub struct PendingAuthorityChange {
+    pub authority: Pubkey,
+    pub effective_slot: u64,
+    pub change: AuthorityChange,
+    pub bump: u8,
+}
+
+impl PendingAuthorityChange {
+    /// Sizes the largest variant, which is `Checkpoint` (tag + `u64` + header).
+    pub const SPACE: usize = 8 + 32 + 8 + (1 + 8 + HEADER_LEN) + 1; // 138 bytes
+}
+
+/// The change a [`PendingAuthorityChange`] will apply.
+///
+/// Only the two instructions that used to be instant — the checkpoint and the
+/// pause flag — are representable here. Deliberately so: this is the complete
+/// set of privileged state changes the client has, and the enum is where that
+/// stays visible.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq)]
+pub enum AuthorityChange {
+    /// Re-anchor the trusted checkpoint. The raw 80-byte header is carried so
+    /// `anchor_checkpoint` can re-derive `expected_bits`, `no_retargeting` and
+    /// `pow_limit_bits` at execute time (F2), exactly as `initialize` does.
+    Checkpoint { height: u64, header: [u8; HEADER_LEN] },
+    /// Pause or unpause header advancement and therefore minting.
+    Pause { paused: bool },
 }
 
 /// The bridge's deposit script, passed in so the check is against the account
@@ -1876,9 +2231,6 @@ pub struct InitializeBridge<'info> {
             @ SolbeamError::Unauthorized,
     )]
     pub program_data: Account<'info, ProgramData>,
-    #[account(init, payer = payer, space = UsedDeposits::SPACE,
-              seeds = [b"used_deposits"], bump)]
-    pub used_deposits: Account<'info, UsedDeposits>,
     #[account(init, payer = payer, space = DepositScript::SPACE,
               seeds = [b"deposit_script"], bump)]
     pub deposit_script: Account<'info, DepositScript>,
@@ -1913,14 +2265,23 @@ pub struct InitializeToken<'info> {
 pub struct VerifyDeposit<'info> {
     #[account(seeds = [b"light_client"], bump = light_client.bump)]
     pub light_client: Account<'info, LightClient>,
-    /// Pinned to its PDA. It was previously bound only by the type and owner,
-    /// which Anchor enforces — so the attack of passing a counterfeit replay list
-    /// requires fabricating a program-owned account with this discriminator, which
-    /// the runtime prevents. Pinned regardless: the constraint costs nothing, the
-    /// reasoning is subtle enough to get wrong, and a future instruction that
-    /// creates another `UsedDeposits` would turn the subtlety into a double-mint.
-    #[account(mut, seeds = [b"used_deposits"], bump = used_deposits.bump)]
-    pub used_deposits: Account<'info, UsedDeposits>,
+    /// The replay nullifier for this deposit, one PDA per `(txid, vout)`.
+    ///
+    /// An `UncheckedAccount` because its seeds come from the `claim` argument,
+    /// which an Anchor `seeds` constraint cannot see. The address is re-derived
+    /// and checked inside [`create_nullifier`] before anything is created, and
+    /// the account is never trusted for data: existence is the only thing read.
+    ///
+    /// It was previously an `Account<UsedDeposits>` pinned to `[b"used_deposits"]`
+    /// and, before that, bound to nothing at all — so a caller could supply a
+    /// replay list of its own and mint the same deposit repeatedly. Deriving the
+    /// address from the claim itself removes that class of mistake rather than
+    /// pinning one instance of it.
+    /// CHECK: address re-derived from `(claim.txid, claim.vout)` and compared
+    /// against `NULLIFIER_SEED` in `create_nullifier`; only `data_is_empty` is
+    /// read from it.
+    #[account(mut)]
+    pub nullifier: UncheckedAccount<'info>,
     #[account(seeds = [b"deposit_script"], bump = deposit_script.bump)]
     pub deposit_script: Account<'info, DepositScript>,
     /// Pinned to the program's own mint PDA. Without this the caller supplies any
@@ -1964,6 +2325,30 @@ pub struct DepositMinted {
     pub recipient: [u8; 32],
     pub height: u64,
     pub confirmations: u64,
+}
+
+/// A timelocked authority change has been recorded and is now visible until it
+/// is executed or cancelled. Emitting it is the point of F4: notice.
+#[event]
+pub struct AuthorityChangeProposed {
+    pub authority: Pubkey,
+    pub effective_slot: u64,
+}
+
+#[event]
+pub struct AuthorityChangeExecuted {
+    pub authority: Pubkey,
+    pub slot: u64,
+}
+
+/// A minted deposit's replay nullifier has been closed, so the deposit's block
+/// has left the window. `deposit_height` is the stored value the prune checked,
+/// emitted so the rule can be audited from the log.
+#[event]
+pub struct NullifierPruned {
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub deposit_height: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -2124,8 +2509,14 @@ pub enum SolbeamError {
     InsufficientConfirmations,
     #[msg("this deposit has already been minted")]
     AlreadyMinted,
-    #[msg("the used-deposit list is full")]
-    NoRoomForMoreDeposits,
+    #[msg("the nullifier account is not the PDA this (txid, vout) derives")]
+    WrongNullifier,
+    #[msg("the deposit's block is still inside the header window, so its nullifier cannot be pruned")]
+    NullifierNotPrunable,
+    #[msg("effective_slot is sooner than the authority timelock allows")]
+    TimelockTooSoon,
+    #[msg("the authority timelock has not elapsed yet")]
+    TimelockNotElapsed,
     #[msg("the deposit script must be a P2PKH script")]
     DepositScriptNotP2pkh,
     #[msg("the recipient account does not match the OP_RETURN payload")]
