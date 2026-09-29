@@ -563,9 +563,14 @@ pub mod solbeam {
         ctx: Context<PushForkHeader>,
         branch_bytes: Vec<u8>,
     ) -> Result<()> {
-        let lc = &ctx.accounts.light_client;
-        require!(!lc.paused, SolbeamError::Paused);
-        require!(!lc.is_seeding(), SolbeamError::Seeding);
+        // Read the light client through the allocation-free view rather than as
+        // `Account<LightClient>`: deserialising a full 192-record window costs a
+        // ~28 KB `Vec` on a 32 KB heap, and this instruction also has to hold the
+        // staging account. See `LightClientView`.
+        let lc_data = ctx.accounts.light_client.try_borrow_data()?;
+        let lc = LightClientView::new(&lc_data)?;
+        require!(!lc.paused(), SolbeamError::Paused);
+        require!(lc.seed_remaining() == 0, SolbeamError::Seeding);
         let staging = &mut ctx.accounts.staging;
         require!(
             staging.submitter == ctx.accounts.submitter.key(),
@@ -601,10 +606,10 @@ pub mod solbeam {
                 record.hash
             }
             None => {
-                let record = lc
-                    .record(staging.fork_height)
+                let work = lc
+                    .chainwork_at(staging.fork_height)
                     .ok_or(SolbeamError::ForkPointNotInWindow)?;
-                chainwork = record.chainwork;
+                chainwork = work;
                 staging.fork_parent_hash
             }
         };
@@ -637,10 +642,10 @@ pub mod solbeam {
             .index_of(staging.fork_height)
             .ok_or(SolbeamError::ForkPointNotInWindow)?;
         let main_len = fork_idx + 1;
-        let prefix = &lc.headers[..main_len];
         let staged = &staging.records;
-
-        let pow_limit = compact_to_target(lc.pow_limit_bits);
+        let no_retargeting = lc.no_retargeting();
+        let expected_bits = lc.expected_bits();
+        let pow_limit = compact_to_target(lc.pow_limit_bits());
 
         // Validate the whole batch before writing any of it, so a bad header
         // half-way through does not leave a partial branch staged.
@@ -653,11 +658,12 @@ pub mod solbeam {
             // lookback is needed; on any real chain it is cw-144, and `None`
             // means the branch reaches below the client's window, which no
             // amount of branch data can repair.
-            let required = if lc.no_retargeting {
-                lc.expected_bits
+            let required = if no_retargeting {
+                expected_bits
             } else {
-                // Ancestry = prefix ++ staged ++ checked-so-far, trimmed to the
-                // newest LOOKBACK records because only those can be read.
+                // Ancestry = light-client prefix ++ staged ++ checked-so-far,
+                // trimmed to the newest LOOKBACK records because only those can
+                // be read.
                 let parent_height =
                     staging.fork_height + staged.len() as u64 + checked.len() as u64;
                 let total = main_len + staged.len() + checked.len();
@@ -667,8 +673,9 @@ pub mod solbeam {
                 difficulty::next_target_from(kept, oldest_height, pow_limit, |i| {
                     let idx = start + i;
                     if idx < main_len {
-                        let r = &prefix[idx];
-                        Record { time: r.time, chainwork: r.chainwork }
+                        let (_, work, time) =
+                            lc.record(idx).expect("index below the fork point is stored");
+                        Record { time, chainwork: work }
                     } else if idx - main_len < staged.len() {
                         let r = &staged[idx - main_len];
                         Record { time: r.time, chainwork: r.chainwork }
@@ -778,31 +785,33 @@ pub mod solbeam {
         // was built as it arrived — hash, work and time together — so the window
         // that results is a single contiguous chain with no gap in it.
         //
-        // Allocated once, at the exact final length, and filled by copying the
-        // surviving slices — NOT `to_vec()` followed by `extend()`. The doubling
-        // in `extend` momentarily holds two full windows (up to 12 KB each) on a
-        // heap that also holds both deserialised accounts, which is how this
-        // path runs out of memory on a real 192-record window. The arithmetic
-        // below is the same prune, expressed as indices first.
+        // Rebuilt **in place**, not into a fresh `Vec`. A deserialised live
+        // window already has a capacity of 256 records (borsh's growth leaves
+        // the vector larger than its length), and the result is at most 192, so
+        // `extend_from_slice` below never reallocates. A new `Vec` would hold a
+        // second full window — up to 16 KB — alongside both deserialised
+        // accounts, which is enough to exhaust the 32 KB SBF heap on exactly the
+        // reorg this instruction exists to perform.
         let total = (fork_idx + 1) + staging.records.len();
         let excess = total.saturating_sub(WINDOW);
-        let keep = total - excess;
-        let mut rebuilt: Vec<HeaderRecord> = Vec::with_capacity(keep);
-        if excess < fork_idx + 1 {
-            rebuilt.extend_from_slice(&lc.headers[excess..=fork_idx]);
-            rebuilt.extend_from_slice(&staging.records);
-        } else {
+        lc.headers.truncate(fork_idx + 1);
+        if excess >= fork_idx + 1 {
+            lc.headers.clear();
             let skip = excess - (fork_idx + 1);
-            rebuilt.extend_from_slice(&staging.records[skip..]);
+            lc.headers.extend_from_slice(&staging.records[skip..]);
+        } else {
+            if excess > 0 {
+                lc.headers.drain(0..excess);
+            }
+            lc.headers.extend_from_slice(&staging.records);
         }
         if excess > 0 {
             lc.window_start += excess as u64;
         }
-        if rebuilt.is_empty() {
+        if lc.headers.is_empty() {
             lc.window_start = new_tip_height;
         }
 
-        lc.headers = rebuilt;
         lc.tip_height = new_tip_height;
         lc.tip_hash = staging.records.last().unwrap().hash;
         lc.last_push_slot = Clock::get()?.slot;
@@ -1288,6 +1297,216 @@ impl LightClient {
     }
 }
 
+// ---------------------------------------------------------------------------
+// an allocation-free view of the light client's account data
+// ---------------------------------------------------------------------------
+
+/// Byte offsets into a **serialised** `LightClient`, discriminator included.
+/// Spelled out in full even where one is not read, so the layout stays legible.
+#[allow(dead_code)]
+mod lc_offsets {
+    pub const CHECKPOINT_HEIGHT: usize = 8; // after the 8-byte discriminator
+    pub const TIP_HEIGHT: usize = 16;
+    pub const TIP_HASH: usize = 24;
+    pub const WINDOW_START: usize = 56;
+    pub const RECORDS_LEN: usize = 64;
+    pub const RECORDS: usize = 68;
+    pub const RECORD_SIZE: usize = 52;
+    /// authority (32) + expected_bits (4) + no_retargeting (1) + pow_limit_bits
+    /// (4) + seed_remaining (4) + last_push_slot (8) + paused (1) + bump (1).
+    pub const TAIL_LEN: usize = 55;
+    pub const TAIL_EXPECTED_BITS: usize = 32;
+    pub const TAIL_NO_RETARGETING: usize = 36;
+    pub const TAIL_POW_LIMIT_BITS: usize = 37;
+    pub const TAIL_SEED_REMAINING: usize = 41;
+    pub const TAIL_PAUSED: usize = 53;
+}
+
+/// A read-only view of a `LightClient` account **that allocates nothing**.
+///
+/// `Account<'info, LightClient>` deserialises the whole window into a
+/// `Vec<HeaderRecord>`, and on Solana that is not free. borsh grows the vector
+/// through three allocations, and the SBF bump allocator cannot reuse the
+/// intermediate buffers, so a full window costs about 28 KB of a 32 KB heap.
+/// `push_fork_header` then has no room for the staging account, and fails with
+/// `memory allocation failed, out of memory` — which is exactly what happened
+/// the first time a real mainnet branch was staged.
+///
+/// Every field this instruction reads is at a fixed offset in the account data,
+/// so it can be read in place. [`view_matches_serialisation`] below serialises a
+/// real `LightClient` and asserts this view against it, so a field reorder
+/// breaks a test instead of silently reading the wrong bytes.
+///
+/// [`view_matches_serialisation`]: tests::view_matches_serialisation
+pub struct LightClientView<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> LightClientView<'a> {
+    pub fn new(data: &'a [u8]) -> Result<Self> {
+        let view = LightClientView { data };
+        require!(
+            view.data_len() <= data.len(),
+            SolbeamError::MalformedClientData
+        );
+        Ok(view)
+    }
+
+    /// Number of records the window holds.
+    pub fn len(&self) -> usize {
+        u32::from_le_bytes(
+            self.data[lc_offsets::RECORDS_LEN..lc_offsets::RECORDS_LEN + 4]
+                .try_into()
+                .unwrap(),
+        ) as usize
+    }
+
+    fn data_len(&self) -> usize {
+        lc_offsets::RECORDS + self.len() * lc_offsets::RECORD_SIZE + lc_offsets::TAIL_LEN
+    }
+
+    pub fn tip_height(&self) -> u64 {
+        u64::from_le_bytes(
+            self.data[lc_offsets::TIP_HEIGHT..lc_offsets::TIP_HEIGHT + 8]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
+    pub fn window_start(&self) -> u64 {
+        u64::from_le_bytes(
+            self.data[lc_offsets::WINDOW_START..lc_offsets::WINDOW_START + 8]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
+    /// Offset of the fixed fields that follow the records.
+    fn tail(&self) -> usize {
+        lc_offsets::RECORDS + self.len() * lc_offsets::RECORD_SIZE
+    }
+
+    pub fn expected_bits(&self) -> u32 {
+        let at = self.tail() + lc_offsets::TAIL_EXPECTED_BITS;
+        u32::from_le_bytes(self.data[at..at + 4].try_into().unwrap())
+    }
+
+    pub fn no_retargeting(&self) -> bool {
+        self.data[self.tail() + lc_offsets::TAIL_NO_RETARGETING] != 0
+    }
+
+    pub fn pow_limit_bits(&self) -> u32 {
+        let at = self.tail() + lc_offsets::TAIL_POW_LIMIT_BITS;
+        u32::from_le_bytes(self.data[at..at + 4].try_into().unwrap())
+    }
+
+    pub fn seed_remaining(&self) -> u32 {
+        let at = self.tail() + lc_offsets::TAIL_SEED_REMAINING;
+        u32::from_le_bytes(self.data[at..at + 4].try_into().unwrap())
+    }
+
+    pub fn paused(&self) -> bool {
+        self.data[self.tail() + lc_offsets::TAIL_PAUSED] != 0
+    }
+
+    fn record_bytes(&self, index: usize) -> Option<&'a [u8]> {
+        if index >= self.len() {
+            return None;
+        }
+        let at = lc_offsets::RECORDS + index * lc_offsets::RECORD_SIZE;
+        Some(&self.data[at..at + lc_offsets::RECORD_SIZE])
+    }
+
+    /// The hash, cumulative chainwork and time of one window record.
+    pub fn record(&self, index: usize) -> Option<([u8; 32], u128, u32)> {
+        let raw = self.record_bytes(index)?;
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&raw[..32]);
+        let chainwork = u128::from_le_bytes(raw[32..48].try_into().unwrap());
+        let time = u32::from_le_bytes(raw[48..52].try_into().unwrap());
+        Some((hash, chainwork, time))
+    }
+
+    /// Index of a height inside the window, if it is still held.
+    pub fn index_of(&self, height: u64) -> Option<usize> {
+        if height < self.window_start() || height > self.tip_height() {
+            return None;
+        }
+        Some((height - self.window_start()) as usize)
+    }
+
+    pub fn hash_at(&self, height: u64) -> Option<[u8; 32]> {
+        self.record(self.index_of(height)?).map(|(hash, _, _)| hash)
+    }
+
+    pub fn chainwork_at(&self, height: u64) -> Option<u128> {
+        self.record(self.index_of(height)?).map(|(_, work, _)| work)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_lang::Discriminator;
+
+    /// The view must agree with `LightClient`'s own serialisation, field for
+    /// field. Without this the offsets above are a guess that compiles and then
+    /// reads the wrong bytes on chain.
+    #[test]
+    fn view_matches_serialisation() {
+        let lc = LightClient {
+            checkpoint_height: 7,
+            tip_height: 9,
+            tip_hash: [0xa5; 32],
+            window_start: 8,
+            headers: vec![
+                HeaderRecord {
+                    hash: [1u8; 32],
+                    chainwork: 0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00,
+                    time: 111,
+                },
+                HeaderRecord {
+                    hash: [2u8; 32],
+                    chainwork: 42,
+                    time: 222,
+                },
+            ],
+            authority: Pubkey::new_from_array([9u8; 32]),
+            expected_bits: 0x207f_ffff,
+            no_retargeting: true,
+            pow_limit_bits: 0x1d00_ffff,
+            seed_remaining: 3,
+            last_push_slot: 4242,
+            paused: false,
+            bump: 251,
+        };
+
+        let mut data = Vec::new();
+        data.extend_from_slice(LightClient::DISCRIMINATOR);
+        AnchorSerialize::serialize(&lc, &mut data).unwrap();
+        assert_eq!(data.len(), LightClient::SPACE - (WINDOW - lc.headers.len()) * HEADER_RECORD_SIZE);
+
+        let view = LightClientView::new(&data).unwrap();
+        assert_eq!(view.len(), 2);
+        assert_eq!(view.tip_height(), 9);
+        assert_eq!(view.window_start(), 8);
+        assert_eq!(view.expected_bits(), 0x207f_ffff);
+        assert!(view.no_retargeting());
+        assert_eq!(view.pow_limit_bits(), 0x1d00_ffff);
+        assert_eq!(view.seed_remaining(), 3);
+        assert!(!view.paused());
+        assert_eq!(view.record(0).unwrap(), ([1u8; 32], 0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00, 111));
+        assert_eq!(view.record(1).unwrap(), ([2u8; 32], 42, 222));
+        assert_eq!(view.record(2), None);
+        assert_eq!(view.index_of(8), Some(0));
+        assert_eq!(view.index_of(9), Some(1));
+        assert_eq!(view.index_of(10), None);
+        assert_eq!(view.index_of(7), None);
+        assert_eq!(view.hash_at(8), Some([1u8; 32]));
+        assert_eq!(view.chainwork_at(9), Some(42));
+    }
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default, PartialEq, Eq, Debug)]
 pub struct HeaderRecord {
     /// Internal byte order, matching the Python reference. Everything a deposit
@@ -1412,8 +1631,19 @@ pub struct InitStaging<'info> {
 
 #[derive(Accounts)]
 pub struct PushForkHeader<'info> {
-    #[account(seeds = [b"light_client"], bump = light_client.bump)]
-    pub light_client: Account<'info, LightClient>,
+    /// Deliberately NOT `Account<'info, LightClient>`. Anchor would deserialise
+    /// the entire window into a `Vec`, which on a full 192-record window costs
+    /// ~28 KB of the 32 KB SBF heap — leaving no room for the staging account,
+    /// and failing with "out of memory" the first time a real mainnet branch was
+    /// staged. `LightClientView` reads the fields this instruction needs in
+    /// place. The account is still pinned to its canonical PDA and to this
+    /// program, so it can only ever be the one light client.
+    ///
+    /// CHECK: address and owner are both enforced below; the data is read only
+    /// through `LightClientView`, whose offsets are asserted against
+    /// `LightClient`'s own serialisation by `tests::view_matches_serialisation`.
+    #[account(seeds = [b"light_client"], bump, owner = crate::ID)]
+    pub light_client: UncheckedAccount<'info>,
     #[account(
         mut,
         seeds = [b"staging", submitter.key().as_ref()],
@@ -1934,4 +2164,6 @@ pub enum SolbeamError {
     DifficultyNotComputable,
     #[msg("the fork point is too close to the bottom of the window for cw-144")]
     ForkPointTooOld,
+    #[msg("the light client account data is not a well-formed LightClient")]
+    MalformedClientData,
 }
