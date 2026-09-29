@@ -34,15 +34,14 @@ key, relay headers, sign payouts, and challenge theft. **Open membership, 1,000 
 | **The reserve** | **Trusted, and bounded.** The BSV is held under a threshold key by the federation. No single member can move it. What protects you is a **bond that anyone can seize by proving misbehaviour on-chain**, not the absence of trust |
 
 **The one trust assumption: a threshold of federation members do not collude.** Everything else is
-verified. That assumption is not eliminated — it is **bounded**, by bonds that exceed what they
-could take, and by proofs anyone can submit.
+verified. That assumption is not eliminated — it is **bounded**, by bonds that **at `k = 1` equal** what a colluding threshold could take, so theft is not profitable and holders are made whole from the bond. **The bond is what answers theft; the exit window is what answers governance.**
 
 ---
 
 ## The account of a peg-in
 
 ```
-1  CHOOSE    terms; the fee is 30 bp, governed
+1  CHOOSE    terms; 30 bp to mint and 30 bp to redeem, both governed
 2  SEND      BSV to the federation's deposit script
              OP_RETURN = version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient
              (design. What is BUILT checks only that the recipient's 32 bytes appear in an
@@ -88,8 +87,9 @@ two conflicting intents has produced **their own proof of guilt** — see *Slash
 ## The federation
 
 **Open membership.** Anyone with a **1,000 BSV bond** may join. The bond is posted as `solBSV`
-because it must be seizable on Solana, and `bond ≥ k × owed` must always hold, so **a member cannot
-leave while owing.**
+because it must be seizable on Solana. The federation's **aggregate bond must always be at least
+`k ×` the outstanding `solBSV` supply**, with `k ≥ 1`, so bonded capital exceeds what a colluding
+threshold could take. A member cannot leave while its share of that cover is needed.
 
 **Members run software, not judgement.** There is no manual approval of any transaction. Each node
 watches both chains, verifies independently with its own light client, signs, and challenges —
@@ -105,11 +105,11 @@ capacity. That is a proof of concept.
 | | Default |
 |---|---|
 | Who may propose | Any member |
-| To pass | **85% of pledged coins** |
+| To pass | **85% of pledged coins** — the total bonded `solBSV`, weighted by bond size |
 | Delay | **30 days** |
 | Signal | **Live from the moment it is raised** |
 | Includes | **The upgrade authority** |
-| Cannot touch | **Redemptions. They are never pausable** |
+| Cannot pause | **Redemptions. Ever.** Governance *could* rewrite this, since it holds the upgrade authority — which is exactly why the 30-day exit is the real guarantee, not the rule |
 
 All of those are **parameters**, not constants.
 
@@ -140,7 +140,7 @@ to.** Members sign individually, so misbehaviour produces **its own evidence**:
 |---|---|
 | A member signs **two conflicting payout intents** | **Yes — self-proving.** Two signatures, one member, conflicting statements. Anyone submits it; anyone can be paid the bounty |
 | A member signs an intent matching **no authorised redemption** | **Yes** — intents are recorded on Solana, so it is checked against the redemption set |
-| A **threshold** of members signs something invalid | Attributable, since every signature is on record — but this is a governance matter, not a cryptographic one |
+| A **threshold** of members signs an intent matching **no authorised redemption** | **Yes — and this is the case that matters.** They do not equivocate, so equivocation slashing never fires. But every signature is on record and the intent is checkable against the redemption set, so **all signers are provably guilty and all are slashable.** No honest member is punished, because an honest member would not have signed |
 
 **This is copied from what RenVM actually shipped**, where `slashDuplicatePropose` and its siblings
 take a node's own two conflicting signatures as the entire proof. **Only that cryptographic half was
@@ -156,7 +156,7 @@ for darknodes to deregister other misbehaving darknodes. Right now, it is a plac
 It is **not** a general-purpose bridge, and it does not try to wrap anything but BSV.
 It is **not** a custodian in the single-party sense — no one entity holds the reserve.
 It is **not** an exchange: there is no book, no matching, and no market-making.
-It is **not** oracle-driven: nothing external gates funds. Reorg depth and block time come from BSV
+It is **not** oracle-driven: no external metric gates anything. **Minting is gated by nothing at all** — a verified proof is sufficient. Peg-**outs** are gated by the threshold key, which is an internal quorum, not an oracle. Reorg depth and block time come from BSV
 headers; deadlines come from Solana slots.
 
 ---
@@ -168,7 +168,7 @@ headers; deadlines come from Solana slots.
 | **Light client** | **Built.** cw-144 implemented and verified against 324/324 real mainnet headers |
 | **Token and mint** | **Built.** 20 on-chain tests, with negative controls |
 | **BSV-side peg-in** | **Built.** 51/51 synthetic, 21/21 against a live SV Node |
-| **Vault** | **Designed, not built.** Current design carries unfixed audit findings; being re-audited against this model |
+| **Vault** | **Designed, not built.** Rewritten against this model after two audits of the **pre-federation** vault (V1–V10, W1–W11, T1–T12): **28 of 33 findings dissolved on the model change**, 6 remain, two blocking |
 | **Federation** | **Designed, not built.** Threshold custody, governance, slashing |
 | **Peg-out** | **Designed, not built** |
 | **Order book** | **Removed.** A governed 30 bp fee replaces it |

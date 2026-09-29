@@ -1,8 +1,11 @@
 # 18. Before we code — the critical list
 
-> **Historical.** Items are preserved as recorded; where one has since been closed it carries a
-> **Fixed** note. F7, A7's test gap, P2, the window resize and the chainwork comparison were
-> addressed in W1 — see `workstreams/W1-light-client-verification.md`.
+> **Historical, and updated 2026-09-29 for the federation model.** Items are preserved as recorded;
+> where one has since been closed it carries a **Fixed** note. Item statuses below are re-based on
+> [`13-summary.md`](13-summary.md) (the canonical model) and
+> [`23-federation.md`](23-federation.md). **Fixed in code:** **P2** (W1.7), **P4/F7** (W1.6), the
+> **window resize** (W1.4) and **A7**. The federation model **makes several P-items moot** — see
+> §What the federation model makes moot — and adds four new open items at the end.
 
 Consolidated from three adversarial audits (findings A1–A18, F1–F7, C1–C4, plus the
 documentation verification). Organised by **when it has to be dealt with**, not by severity,
@@ -12,345 +15,312 @@ because that is the useful question now.
 
 ## Status at a glance — read this first
 
-**Nothing on this page was fixed when it was written.** Every item was either *decided* (the
-approach is agreed, no code written) or *open* (needs a decision). The code was unchanged from the
-A1/A2/A3/A7 fixes. Since then **P2 and P4 have been fixed — W1.7 and W1.6 respectively** — and the
-notes below say so inline; the rest is as recorded.
-
 | | Item | Status | What it needs |
 |---|---|---|---|
-| **P1** | Checkpoint race + self-declared difficulty | **Decided** — race accepted | Deploy privately; address-link later if wanted. No code |
+| **P1** | Checkpoint race + self-declared difficulty | **Moot for launch under governance** — code unchanged | `initialize` is a governed launch action, not a public race. A private deploy or a governance-gated initialize answers it |
 | **P2** | `commit_fork` does not re-anchor | ✅ **Fixed** (W1.7) | `fork_parent_hash` stored at init, linked from, re-checked at commit → `ForkPointMoved`. Commit now also compares **chainwork**, not height |
-| **P3** | Deposits have a hard ~32 h life | **Decided** — 48 h accepted, but **the window cannot hold it** | W1 measured the real limit at **32 h** (192 records). The app automates the mint; deadline disclosed; unproven receipts published off-chain. **The 48 is now wrong and needs re-deciding** |
-| **P4** | Retarget halts the client (F7) | ✅ **Fixed** (W1.6) | cw-144 computed and checked per block, verified against **324/324** real mainnet headers (`difficulty-vectors/`). What remains is **X3**: the rule is hard-coded and BSV may change it, so it needs to be swappable without a redeploy |
-| **P5** | Replay-list shutdown and hard ceiling | **Decided** | `MIN_PEG_IN = 1 BSV`, **and the fixed list replaced by a nullifier PDA per minted deposit** |
-| **P6–P10** | Vault-era items | **Design-in** | Depend on the vault, which is unbuilt |
+| **P3** | Deposits have a hard ~32 h life | **Decided — 32 h** | The window cannot hold 48. The app automates the mint; deadline disclosed; unproven receipts published off-chain. **The on-chain refund path is still absent** |
+| **P4** | Retarget halts the client (F7) | ✅ **Fixed** (W1.6) | cw-144 per block, verified **324/324** real mainnet headers. **X3 remains**: the rule is hard-coded, and governance can carry a change but not parameterise it |
+| **P5** | Replay-list shutdown and hard ceiling | **Decided, not built** | `MIN_PEG_IN = 1 BSV`, **and the fixed list replaced by a nullifier PDA per minted deposit** |
+| **P6** | The vault must release the replay entry when it burns (F1) | **Closed by the nullifier decision** | Burning the staged mint closes the PDA, releasing the entry as a side effect |
+| **P7** | Detection has no reward (F3) | **Moot — detection is a member job**, funded from fees and bounties | Under the federation the challenger is the node software, run by the parties with the most to lose |
+| **P8** | The unbacked path has no backstop (F2) | **Rebased — there is no per-deposit underwriter** | The question is now an exposure bound on the reserve before the bond set is large enough |
+| **P9** | Self-dealing profits when detection fails (F5, `k = 1`) | **Moot for per-relayer self-dealing** | No per-relayer underwriting exists. The residual is a colluding threshold at `k = 1`; the exit window is the answer |
+| **P10** | The bond must cover staged mints (F4) | **Carried into the federation bond definition** | `owed` includes staged mints and in-flight redemptions; the per-member attribution rule is still to design |
+| **P11** | Cross-deployment replay | **Closed by design, not built** | The deposit `OP_RETURN` now carries `cluster_id` and `program_hash`, binding the deposit to this deployment |
 
-**P1 is closed by a decision; P2 and P4 are closed by work (W1.7/W1.6).** Everything else is work
-still to do.
+**Fixed in code: P2 and P4 (W1.6/W1.7), the window resize (W1.4), and A7.** P1, P7, P8 and P9 are
+resolved by the model rather than by code; P3 and P5 are decided but unbuilt; P6 is closed by the
+nullifier decision and P10 is carried forward; P11 is closed by design.
 
-## What is materially outstanding
+## What the federation model makes moot
 
-After the decisions on P1–P7, four things carried real weight, in order. The first two are now
-closed and are kept in place:
+Several of these items existed **only because there was no operator or governance layer**. They do
+not need code; they need the layer that now exists.
 
-1. ~~**P2 — window splicing.**~~ The one genuine forgery vector. **Fixed in W1.7** —
-   `fork_parent_hash` is recorded at init and re-checked at commit.
-2. ~~**P4 — the retarget halt.**~~ Blocks testnet; self-contained; testable on regtest. **Fixed in
-   W1.6** — cw-144, verified 324/324. X3 (the hard-coded rule) remains.
-3. **The vault has no instruction set designed.** Release, burn, escrow and return do not exist
-   even on paper, so there is nothing to audit and P8/P10 depend on it. **This is the largest
-   design gap left.**
-4. **Cross-deployment replay.** Nothing binds a BSV deposit to *this* Solana deployment. If
-   SOLBEAM is ever deployed twice, the same deposit could mint on both — the recipient address is
-   a Solana pubkey and would resolve identically. **Not previously recorded anywhere.**
+| Item | Why it was a problem | Why it is moot now |
+|---|---|---|
+| **P1** | Unauthenticated `initialize` — the first caller picked the checkpoint | `initialize` is part of a governed launch (D10); the checkpoint is governance-set and published. The code is unchanged; the threat model is |
+| **P7** | Advancing and challenging were unpaid chores nobody owned | Detection is a **member job** with a bond behind it, paid from the governed fee (D9, O1) |
+| **P8** | A peg-in with no underwriter had no backstop | There is no per-deposit underwriter at all; what backs a mint is the reserve and the bonds. The residual is an exposure bound (see §Still open) |
+| **P9** | At `k = 1` a self-dealing staker was roughly break-even | There is no per-relayer underwriting to self-deal against. The analogous case — a colluding threshold — is a governance matter and is answered by the exit window, not by a bigger bond |
+| **P6** | Burning a staged mint had to release the replay entry | Still required, but the nullifier PDA releases it as a side effect of closing the account |
+| **P10** | The bond had to cover staged mints | Carried into the definition of `owed` (F4); the per-member attribution rule is still to design |
 
-Plus three smaller items: who pays the **first-time ATA rent** (~$0.11 per new user, the largest
-per-user cost and the only one that does not come back on its own); **A7's missing test**; and the
-**five unexamined areas** in section 4, of which the order book's economics matter most because
-D2's auto-approve rests on reasoning that has never been adversarially tested.
+**Not moot:** P3 (the 32-hour deposit life is real), P5 (the ceiling is real and unbuilt), P11
+(cross-deployment replay is real and now has a design fix), and the ATA-rent decision.
 
-### P11 — Cross-deployment replay · **fix defined, cheap now and awkward later**
+## Fixed in code, with evidence
 
-**Yes — redeploying the same code is the bug.** Nothing in a deposit commits to *which* Solana
-deployment it is for.
+| Item | Fix | Evidence |
+|---|---|---|
+| **P2** — `commit_fork` did not re-anchor | `fork_parent_hash` recorded at `init_staging`, linked from `push_fork_header`, re-checked at `commit_fork` (`ForkPointMoved`); commit compares accumulated chainwork | W1.7; two tests (stale commit refused, uncontested commit succeeds) |
+| **P4 / F7** — retarget halted the client | cw-144 from the node's `src/pow.cpp`, computed per block; `bits == expected_bits` is gone for every header with 147 records behind it | W1.6; `difficulty-vectors/` replays 471 mainnet headers — **324/324 exact** |
+| **The window resize** | `HeaderRecord` is `hash + chainwork(u128) + time` = 52 B; `WINDOW = 192`; `LIGHT_CLIENT_FIXED = 119`; **`SPACE = 10,103`** of 10,240 (137 B margin) | W1.4; compile-time assertions on `WINDOW > LOOKBACK` and `SPACE <= 10,240` |
+| **A7** — replay key included `height` | Identity is `(txid, vout)`; height is stored only so stale entries can be pruned | In code: the comparison is on `txid` and `vout` only |
 
-Concretely: the `OP_RETURN` carries the **recipient's Solana pubkey**. A second deployment of the
-same program — a fresh program id, its own light client, its own checkpoint — would verify the
-same BSV deposit, because the proof is against the BSV chain and the recipient pubkey resolves
-identically on both. The same BSV would then back `solBSV` on **two** deployments.
+The on-chain suite reports **20 passing**; Phase 1A is **51/51** synthetic and **21/21** against a
+live SV Node.
 
-It is not a double-spend of one token: the two deployments have **different mint addresses**, so
-they are different tokens. It is worse in a quieter way — **two tokens each claiming the same
-backing**, and only one of them is backed. The standard wrapped-asset failure.
+---
 
-**The fix, and it is small:** bind the deployment into the deposit. The `OP_RETURN` carries a
-**domain separator** — the program id, or a short hash of it — alongside the recipient, and
-`verify_deposit` rejects a claim whose separator is not this deployment's. A deposit made for
-deployment A then cannot mint on B, because B sees a commitment to A.
+## 1. P1–P5, in detail
 
-**Why now rather than later:** the separator has to be in the *deposit*, which is written by the
-depositor. Adding it after launch means every depositor must change what they sign, and every
-deposit made before the change stays replayable forever. **Cheap to add while `verify_deposit` is
-being touched for P5; painful to retrofit.**
+### P1 — The checkpoint race · **moot for launch under governance**
 
-### The first-time ATA rent · **decision needed**
+`initialize` accepts any 80-byte header that meets **its own declared `bits`**, and the transaction
+is front-runnable. Whoever calls it first chooses both the trusted root **and** the difficulty for
+the client's entire life.
 
-A recipient who has never held `solBSV` needs an associated token account created, which costs
-**0.00149 SOL (~$0.11)** in rent. It is the **largest per-user cost in the system** — against
-$0.0004 for the mint that triggers it — and the only one that does not come back on its own; it
-is recoverable only by closing the account.
-
-Against a 1 BSV minimum deposit (~$30) that is about **0.37%**, comparable to the fee itself.
-
-| Option | Effect |
-|---|---|
-| **Submitter pays (status quo)** ✅ | Minting is permissionless, so whoever submits pays. The app absorbs ~$0.11 per new user as an onboarding cost, and the depositor can reclaim it by closing the account |
-| Protocol reimburses | Cleaner for users; adds accounting and a withdrawal path |
-| Depositor pre-creates the account | Shifts the cost and the rent-reclaim to them, and adds a step before the first deposit |
-
-**Recommended: submitter pays, and say so in the docs.** It is small, it is recoverable, and it
-avoids inventing a reimbursement mechanism for eleven cents.
-
-## 1. Live in shipped code — fix or decide before writing anything new
-
-### P1 — The checkpoint race · **critical, unfixed**
-`initialize` accepts any 80-byte header that meets **its own declared `bits`**, and it is
-unauthenticated. Whoever calls it first chooses both the trusted root **and the difficulty for
-the client's entire life.** On a fresh deploy the transaction is front-runnable.
-
-The checkpoint being trusted is inherent to the design. **The race is not.** Options: deploy and
-initialize atomically; gate `initialize` on a known key; or accept it and document that the
-deploy transaction must be private. *Decision needed.*
+The checkpoint being trusted is inherent to the design. **The race is not**, and under the
+federation model it is a **launch-process** question rather than a code defect: `initialize` is
+part of a governed deployment (D10), taken privately or gated on a known key, and the checkpoint is
+published. *Decision: initialize as a governed launch action; the code is unchanged, which is a
+deliberate acceptance, not an oversight.*
 
 ### P2 — `commit_fork` does not re-anchor the staged branch · ✅ **fixed in W1.7**
-Linkage is validated when each branch header is *pushed*. At *commit* it only checks that the
-fork height is still in the window, then splices `headers[..=fork_idx] ++ staging.hashes`
-**without re-checking that `headers[fork_idx].hash` is still the block the branch links to.**
 
-If another fork commits in between, the stored window is spliced from two different chains.
-`verify_deposit` then proves against a record whose linkage is broken — **the only invariant the
-light client has.** This is a potential mint-forgery vector, not merely untidy. Fix: store the
-expected parent hash in the staging account at `init_staging` and re-verify it at commit.
+Linkage is validated when each branch header is *pushed*. At *commit* it used to check only that
+the fork height was still in the window, then splice `headers[..=fork_idx] ++ staging.hashes`
+**without re-checking that `headers[fork_idx].hash` was still the block the branch links to.** An
+intervening commit could splice the window from two different chains, and `verify_deposit` would
+then prove against a record whose linkage is broken — **the only invariant the light client has.**
 
-### P3 — A deposit has a hard ~32-hour life, and then it is unspendable · **critical, decided: 32 h**
+**Fixed:** the expected parent hash is stored in the staging account at `init_staging` and
+re-verified at commit (`ForkPointMoved`).
+
+### P3 — A deposit has a hard 32-hour life · **critical, decided: 32 h**
+
 `verify_deposit` requires the deposit's height to be **inside the window** (`index_of(height)`).
-The window holds **192** headers and `window_start` advances with every header pushed. (W1 measured this: 147 records are consumed by cw-144 itself, and 192 is the largest that fits the 10,240-byte cap with margin.)
+The window holds **192** headers and `window_start` advances with every header pushed. (W1 measured
+this: 147 records are consumed by cw-144 itself, and 192 is the largest that fits the 10,240-byte
+cap with margin.)
 
-So a deposit must be minted within roughly 32 hours of its block. After that the proof can never
-be verified again — **and the BSV is already with the relayer.** An honest depositor whose mint is
-delayed — because the advancer stalled, a gate closed, or they simply waited — loses the deposit
-permanently, with no on-chain refund path (A15).
+So a deposit must be minted within roughly 32 hours of its block. After that the proof can never be
+verified again — **and the BSV is already in the federation's deposit script.** An honest depositor
+whose mint is delayed — the advancer stalled, a gate closed, or they simply waited — loses the
+deposit permanently, with no on-chain refund path (A15).
 
-### P3 broken down
+**Four separate things, taken one at a time:**
 
-Four separate things get tangled here, so take them one at a time.
+**(a) The window advances by design.** Every BSV header pushed moves `window_start` forward. 192
+hashes is about 32 hours at ten-minute blocks. Normal operation, not an attack.
 
-**(a) The window advances by design.** Every BSV header pushed moves `window_start` forward. The
-window holds **192 hashes** — about 32 hours at ten-minute blocks. This is normal operation, not
-a reorg, not an attack.
+**(b) So every deposit has a deadline.** After ~192 blocks the answer is permanently no.
 
-**(b) So every deposit has a deadline.** `verify_deposit` asks "is the block at height H in the
-window?" After ~192 blocks the answer is permanently no. The proof can never be verified again.
+**(c) The BSV does not come back on-chain.** The deposit sits in the federation's script; moving it
+needs a threshold signature. **BSV has no timelocks** — `OP_CLTV`/`OP_CSV` are no-ops — so
+"refundable after 24 hours" cannot be written into the script. A refund is a **rule, not a
+guarantee**, and under the federation it is a member action, not a program one.
 
-**(c) The BSV does not come back.** The deposit sits in the relayer's own script. Moving it needs
-a BSV transaction signed by **that relayer's key**. The protocol is on Solana and cannot sign it,
-and **BSV has no timelocks** — `OP_CLTV` and `OP_CSV` are no-ops — so "refundable after 24 hours"
-cannot be written into the script. A refund is therefore a **rule, not a guarantee**.
-
-**(d) The incentive points the wrong way.** Until a deposit is *proven*, `owed_R` is zero: the
-relayer holds the BSV, carries no liability, and its bond is untouched. **The relayer profits by
-never minting.**
-
-**What protects the depositor is that minting is permissionless — and that minting is itself the
-enforcement.** Proving the deposit is what creates `owed_R` and makes the bond bind. So the
-depositor's own action is simultaneously the remedy and the thing that puts the relayer on the
-hook. They never need the relayer's cooperation to be made whole; they need only to act.
+**(d) The incentive is now different.** In the old per-relayer model, until a deposit was *proven*
+the relayer held the BSV and carried no liability. Under the federation the deposit is already in
+the pooled reserve, and members are bonded to the system rather than to a single deposit — so the
+"profit by never minting" incentive is gone. **What remains is the 32-hour deadline itself.**
 
 | Option | Extends the deadline? | Cost | Verdict |
 |---|---|---|---|
 | **Automate the mint** in the app | No — but the deadline stops mattering | trivial | **Do it.** The primary answer |
 | **Disclose the deadline** (32 h) in the UI | No | trivial | **Do it** |
-| **Publish unproven receipts** off-chain | No | low | **Do it.** This is the "24-hour rule" — monitoring and reputation, not code |
+| **Publish unproven receipts** off-chain | No | low | **Do it.** Monitoring and reputation, not code |
 | Historic-header bridging | By ~12 blocks (tx limit) | medium | Marginal |
-| Multiple window accounts (4 × 192) | Yes, 4× | 4× rent (~$16) + complexity | Possible if 32 h proves too short |
-| A refund path | — | — | Needs the relayer's key. A rule, not code |
-| A covenant | — | research | The structural fix: removes the relayer's discretion entirely |
+| Multiple window accounts (4 × 192) | Yes, 4× | 4× rent (~$22) + complexity | Possible if 32 h proves too short |
+| A refund path | — | — | Needs a threshold signature. A rule, not code |
+| A covenant | — | research | The structural fix: removes the signing set entirely |
 
 **The residual, stated plainly:** a depositor who does not use our app, does not mint, and does not
-watch for 32 hours can lose the deposit to a dishonest relayer. There is **no code fix for that
-while the reserve is key-controlled.** It belongs in the trust model explicitly.
-Options: size the window against `depth + maturity` with margin and state the deadline in the UI;
-allow a historic header to be supplied with a chain of headers; or add the refund path. *Decision
-needed, and it interacts directly with the maturity length.*
+watch for 32 hours can lose the deposit. There is **no code fix for that while the reserve is
+key-controlled.** It belongs in the trust model explicitly.
 
 ### P4 — `FLOOR` and the retarget · **F7, fixed in W1.6**
-`push_header` required `bits == expected_bits`, set once at `initialize` and never refreshed.
-**Fixed in W1.6:** the target is now computed per block by cw-144 — the node's rule, verified
-against **324/324** real mainnet headers.
-**The original note is kept for the record:** the client halted permanently at the first difficulty
-change, invisible on regtest and fatal on testnet or mainnet. The supposed fix here — a stored
-difficulty-period anchor, on the premise that "BSV retargets every 2016 blocks" — was itself wrong:
-BSV adjusts **every block**. What is still open is **X3**, not F7: the rule is hard-coded and BSV
-may replace it, so it needs a way to change without a redeploy.
 
-### P5 — The replay list is a cheap shutdown and a hard ceiling · **F6, unfixed**
+`push_header` required `bits == expected_bits`, set once at `initialize` and never refreshed.
+**Fixed in W1.6:** the target is computed per block by cw-144 — the node's rule, verified against
+**324/324** real mainnet headers. The original note is kept for the record: the client halted
+permanently at the first difficulty change, invisible on regtest and fatal on testnet or mainnet.
+The supposed fix — a stored difficulty-period anchor, on the premise that "BSV retargets every 2016
+blocks" — was itself wrong: BSV adjusts **every block**.
+
+**What is still open is X3:** the rule is hard-coded and BSV's own documentation says it may revert
+to 2016-block retargeting. Doc 23 calls the DAA governable, which lets governance **carry an
+upgrade** — but a parameter vote cannot swap an algorithm, so X3 is closed in the sense that there
+is now an owner, not in the sense that no code change is needed. That distinction is worth keeping.
+
+### P5 — The replay list is a cheap shutdown and a hard ceiling · **decided, not built**
+
 `MAX_USED = 200` with `MIN_PEG_IN` unimplemented. Two hundred dust deposits block every peg-in for
 the rest of the window, repeatably. Independently, it caps the protocol at **200 peg-ins per
 32 hours** with no attacker at all.
 
----
+**(a) Dust griefing — decided.** `MIN_PEG_IN = 1 BSV` is enforced on-chain. Two hundred
+one-satoshi self-deposits previously cost dust; they now cost 200 BSV. **But it is a capital-lockup
+attack, not a fee attack:** the attacker *receives tokens* for every deposit. Real, but not
+prohibitive.
 
-## P5 — settled: a minimum, plus a nullifier per deposit
-
-Two different problems were filed together, and only one is answered by a minimum deposit.
-
-**(a) Dust griefing — decided.** `MIN_PEG_IN = 1 BSV` is enforced on-chain. Two hundred one-satoshi
-self-deposits previously cost dust; they now cost 200 BSV. That is a real deterrent.
-
-**But it is not a full one, and it is worth seeing why:** the attacker *receives tokens* for every
-deposit. So this is **a capital-lockup attack, not a fee attack** — the cost is the opportunity
-cost of 200 BSV tied up for up to 32 hours, plus fees and slippage if they sell on a DEX rather
-than waiting to redeem. Real, but not prohibitive.
-
-**(b) The 200-per-window ceiling — NOT fixed.** `MAX_USED = 200` with a 192-block window means the
-protocol can process **at most 200 peg-ins per 32 hours, with no attacker at all.** A minimum
-deposit does nothing about this; it bounds the *cost* of filling the list, not the *size* of it.
-
-And it cannot simply be raised. The account is `8 + 4 + (MAX_USED × 44) + 1` bytes against a
-10,240-byte cap, so one account holds at most **232** entries — ~100 mints a day. That is a
-capacity limit, not a safety one, and it would bite in ordinary use.
+**(b) The 200-per-window ceiling — NOT fixed.** The account is `8 + 4 + (MAX_USED × 44) + 1` bytes
+against a 10,240-byte cap, so one account holds at most **232** entries — about 100 mints a day.
+That is a capacity limit, not a safety one, and it would bite in ordinary use.
 
 | Option | Ceiling | Cost | Verdict |
 |---|---|---|---|
 | Keep the fixed list at 200 | 200 per 32 h | — | Fine for a PoC; not for production |
 | Shrink `DepositKey` (u32 height) | ~255 | trivial | Marginal |
-| **A nullifier PDA per minted deposit** ✅ | **none** | ~0.002 SOL rent per mint, refundable when closed | **The structural fix.** Solana cannot enumerate PDAs, but it does not need to — replay is checked by looking up a derived address |
+| **A nullifier PDA per minted deposit** ✅ | **none** | ~0.001 SOL rent per mint, refundable when closed | **The structural fix.** Solana cannot enumerate PDAs, but it does not need to — replay is checked by looking up a derived address |
 | Multiple list accounts | 200 × n | n × rent | Works, more moving parts |
 
-**Decided: adopt the nullifier.** A deposit is "used" if its derived PDA exists, which removes
-the ceiling, the pruning logic and the accidental capacity cap at once. Solana cannot enumerate
-PDAs but does not need to — replay is checked by *deriving* an address, not by scanning a list.
-Rent is ~0.002 SOL per mint, refundable when the account is closed after the window.
-
-**Separately, the aggregate mint cap is still unimplemented.** `MAX_MINT_PER_WINDOW` was designed
-as the safety parameter; the replay list is a *different* thing that has been accidentally
-doubling as a capacity cap. They should not be conflated any longer.
+**Decided: adopt the nullifier**, which removes the ceiling, the pruning logic and the accidental
+capacity cap at once. **Not built.** Separately, the aggregate mint cap is still unimplemented;
+`MAX_MINT_PER_WINDOW` was designed as the safety parameter and the replay list is a *different*
+thing that has been accidentally doubling as a capacity cap.
 
 ---
 
-## 2. Live the moment the vault is built — design them in, not after
+## 2. P6–P10 — vault-era items, re-based on the federation
 
 ### P6 — Closed by the nullifier decision · **was F1**
 
 **Superseded by P5.** P6 said a burn must release the replay entry so a re-mined deposit can be
 minted again. With a nullifier PDA, burning the staged mint **closes the PDA**, so the entry is
-released as a side effect. No separate work.
+released as a side effect.
 
-*On the suggestion of pinning a transaction to a specific block:* BSV has `nLockTime`, but it
-sets a **lower bound only** — "not valid before height H". A transaction with `nLockTime = H` can
-still be mined in any later block, so it cannot be pinned to one block, and there is no native
-"expires after" either (`OP_CLTV`/`OP_CSV` are no-ops). The underlying problem is the height
-changing on re-inclusion, and the fix is to key replay on `(txid, vout)` — which is already done
-— plus the nullifier. The accepted posture, "even if mints fail sometimes it is safer", is
-right, and it is what keying on identity rather than height already gives us.
+*On pinning a transaction to a specific block:* BSV has `nLockTime`, but it sets a **lower bound
+only** — "not valid before height H". There is no native "expires after" either. Keying replay on
+`(txid, vout)` — already done (A7) — plus the nullifier is the answer.
 
-<details><summary>Original entry, kept for the record</summary>
+### P7 — Moot · **was F3**
 
-### P6 — The vault must release the replay entry when it burns · **F1**
-Pruning is by height, and a natural reorg does not remove a transaction — it returns it to the
-mempool to be mined again. So the ordinary case is: block orphaned, vault correctly burns the
-staged mint, transaction re-mined, **and the depositor can never mint again.** Their BSV is in the
-reserve and their tokens are gone. This is the most likely honest-user loss in the *designed*
-system and it needs no attacker.
+**The earlier framing was wrong and is corrected here.** P7 was written as though the risk were
+that someone relays *wrong* information. That was never the risk: the program verifies every
+header. A header that does not link to the tip, that declares its own difficulty, or that misses
+the target is rejected outright, and the submitter pays the fee for the privilege.
 
-</details>
+What remained was **liveness** — whether anyone bothers to deliver headers — and **under the
+federation that has an owner: it is a member's job**, funded from the governed fee, with a bond
+behind it. The cost is about **$0.39 a week** (doc 17). Advancing and fork staging are the two
+roles; the node software performs both, and a fraud that goes undetected eats the member's bond.
 
-### P7 — Largely dissolves · **was F3**
+**The genuine residual is narrower and covered by P2:** a *valid fork* block can be pushed and taken
+as the tip, and it is replaced only by a strictly heavier branch — which is where window splicing
+became possible, and P2 is the fix.
 
-**Downgraded after review, because the framing was wrong.** P7 was written as though the risk were
-that someone relays *wrong* information. That was never the risk: the relayer is entirely
-untrusted and the program **verifies every header**. A header that does not link to the tip, that
-declares its own difficulty, or that misses the target is rejected outright, and the relayer pays
-the fee for the privilege. Relaying bad information does not work.
+### P8 — Rebased · **was F2**
 
-What remained was **liveness** — whether anyone bothers to deliver headers at all — and that is
-much smaller than it looked:
+The old D6 allowed a peg-in with no underwriter, and then the vault and detection were the *entire*
+defence. **Under the federation there is no per-deposit underwriter at all**, so the question
+changes: what bounds how much reserve exposure the bond set can carry? With `k = 1`, total value
+locked is capped by total bonds pledged — that is the bound, and it is **tight rather than
+generous.** Whether an explicit exposure cap is wanted before the bond set is large enough is now
+open item 5 below.
 
-- The cost is about **$0.39 a week**.
-- **Anyone who wants to mint needs the tip current**, because a deposit is proven against it.
-- On the unbacked path, which is the **initial liquidity provision**, the party with a pending
-  deposit is exactly the party motivated to advance the chain, and at genesis there is nothing
-  worth attacking yet.
+### P9 — Moot · **was F5, `k = 1`**
 
-So this is a chore nobody minds doing, not a design flaw. **No bounty is needed for the PoC.**
-The genuine residual is narrower and already covered by P2: a *valid fork* block can be pushed and
-taken as the tip, and it is replaced only by a strictly heavier branch — which is where window
-splicing becomes possible.
+At `k = 1`, a staker underwriting its own fraudulent deposit was roughly break-even **only if the
+shortfall was detected.** Under the federation there is no per-relayer underwriting to self-deal
+against. The analogous case is **a threshold of members colluding**, and it is not
+cryptographically provable (each signs one consistent intent). It is a governance matter, and the
+answer is the 30-day live signal plus an exit that cannot be paused — not a larger bond.
 
-**Context, for the record: this is a Solana-side job.** The light client lives on Solana and stores BSV block
-hashes in its account. For it to know a new BSV block exists, **someone must submit a Solana
-transaction calling `push_header`.** That is what "pushing headers" means — one Solana
-transaction per BSV block, ~$0.0004 each, about **$0.39 a week** in total.
+### P10 — Carried forward · **was F4**
 
-Two separate roles, neither paid:
-
-1. **Advancing** — one `push_header` per BSV block. Permissionless, cheap, unstaked.
-2. **Fork staging** — when BSV reorganises, building and committing the competing branch. More
-   work, and *this* is the act of detection.
-
-**The incentive that does exist**, and it is probably enough: anyone whose deposit is affected
-wants the honest chain followed. A depositor whose mint was orphaned cannot re-mint until the
-client switches to the honest branch — so **they** are motivated to stage the fork. Stakers are
-too, since an undetected fraud eats their buffer. On the D6 unbacked path there are no stakers,
-which is where the incentive runs thinnest.
-
-**So the question is narrower than "should detection be paid":** is the affected-depositor
-incentive sufficient, or is an explicit bounty wanted? A formal reward is optional, not
-obviously necessary.
-
-<details><summary>Original entry</summary>
-
-Pushing headers is permissionless, unpaid and unstaked. Staging a competing branch — the actual
-detection act — has no bounty, while payout challenging does. On the unbacked path (D6) there is
-no staker whose buffer is at risk either, so **there is no incentive at all.** If detection is the
-backstop, it needs paying for. *Decision needed before the vault ships.*
-
-### P8 — The unbacked path has no backstop · **F2, accepted by decision**
-D6 allows a peg-in with no underwriter. Then the vault and detection are the *entire* defence: no
-bond, no buffer, nothing to slash. That is a deliberate risk acceptance, but it should be
-implemented as an explicit, visible mode rather than as the default.
-
-### P9 — Self-dealing is profitable when detection fails · **F5, `k = 1`**
-At `k = 1` a staker underwriting its own fraudulent deposit is roughly break-even **only if the
-shortfall is detected and the bond is slashed.** With detection failing, nothing is noticed to
-slash and the attacker keeps the mint *and* the bond.
-
-### P10 — The bond must cover staged mints · **F4**
-`owed_R` must include mints still maturing in the vault. A depositor whose mint is maturing has
-paid BSV and holds no tokens, so omitting them leaves exactly that window unbonded. Defined in
-doc 12; **must be implemented that way.**
+`owed` must include mints still maturing in the vault. A depositor whose mint is maturing has paid
+BSV and holds no tokens, so omitting them leaves exactly that window unbonded. **Carried into the
+definition of `owed`** in doc 12. **Still to design:** the rule that turns system-wide `owed` into
+a per-member attributed share under a threshold key.
 
 ---
 
-## 3. Known and accepted — do not re-litigate
+## 3. P11 — Cross-deployment replay · **closed by design, not built**
+
+**Yes — redeploying the same code was the bug.** Nothing in a deposit committed to *which* Solana
+deployment it was for.
+
+Concretely: the `OP_RETURN` carried the **recipient's Solana pubkey**. A second deployment of the
+same program — a fresh program id, its own light client, its own checkpoint — would verify the
+same BSV deposit, because the proof is against the BSV chain and the recipient pubkey resolves
+identically on both. The same BSV would then back `solBSV` on **two** deployments. It is not a
+double-spend of one token: the two deployments have **different mint addresses**, so they are
+different tokens, each claiming the same backing. The standard wrapped-asset failure.
+
+**The fix is now part of the canonical payload.** Doc 13's `OP_RETURN` is
+
+```
+version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient
+```
+
+so `verify_deposit` rejects a claim whose `cluster_id` or `program_hash` is not this deployment's.
+A deposit made for deployment A then cannot mint on B, because B sees a commitment to A.
+
+**Why now rather than later:** the separator has to be in the *deposit*, which is written by the
+depositor. Adding it after launch means every depositor must change what they sign, and every
+deposit made before the change stays replayable forever. It is cheap to build while
+`verify_deposit` is being touched for the vault and the nullifier.
+
+### The first-time ATA rent · **decision needed**
+
+A recipient who has never held `solBSV` needs an associated token account created, which costs
+**0.00203928 SOL (~$0.157)** in rent. It is the **largest per-user cost in the system** — against
+$0.0004 for the mint that triggers it, and larger than the 30 bp fee on a 1 BSV deposit ($0.09) —
+and the only one that does not come back on its own; it is recoverable only by closing the account.
+
+Against a 1 BSV minimum deposit (~$30) that is about **0.52%**, comparable to the fee itself.
+
+| Option | Effect |
+|---|---|
+| **Submitter pays (status quo)** ✅ | Minting is permissionless, so whoever submits pays. The app absorbs ~$0.16 per new user as an onboarding cost, and the depositor can reclaim it by closing the account |
+| Protocol reimburses | Cleaner for users; adds accounting and a withdrawal path |
+| Depositor pre-creates the account | Shifts the cost and the rent-reclaim to them, and adds a step before the first deposit |
+
+**Recommended: submitter pays, and say so in the docs.**
+
+## 4. Known and accepted — do not re-litigate
 
 | | |
 |---|---|
-| **The program upgrade authority** (A5) | Can mint arbitrarily by replacing the program. Out of scope for the PoC; the fix is governance, possibly tied to staking |
-| **The reserve is keys, not a covenant** (A6) | No covenant, and no timelocks on BSV to fall back on. Per-relayer deposits are the mitigation that does not require the covenant track |
-| **The buffer is off-chain** (A4) | Tracked, not verified. Its integrity rests on the custodian |
-| **Refunds need a key** (A15) | No on-chain return-to-sender path exists |
-| **Detection depends on somebody pushing headers** | A liveness condition anyone can satisfy — but see P7, since nobody is paid to |
+| **The program upgrade authority** (A5) | Can mint arbitrarily by replacing the program. **Now held by governance** (85% / 30 days / live signal). The residual is the threshold over a small bond set |
+| **The reserve is a threshold key, not a covenant** (A6) | No covenant, and no timelocks on BSV to fall back on. **The threshold key is the mitigation**; the covenant track is the destination |
+| **The reserve balance is off-chain** (A4) | Monitored, not verified (D8). The **bonded stake** is on-chain `solBSV` and seizable; the BSV behind it is not readable by the program |
+| **Refunds need a signature** (A15) | No on-chain return-to-sender path exists |
+| **Detection depends on somebody pushing headers** | A funded member job under the federation — see P7 |
 
----
+## 5. Audit gaps — not yet examined at all
 
-## 4. Audit gaps — not yet examined at all
-
-These have had **no adversarial attention** and are worth a pass before mainnet, if not before
-code:
-
-1. **The order book's economics.** No analysis of whether a staker can be systematically picked
-   off, griefed out of capacity, or manipulated by a large depositor. The auto-approve decision
-   rests on the vault reversing a reorged fill — untested reasoning.
-2. **The vault's instruction set.** No design yet for release, burn, escrow and return — so no
-   audit of their authorisation, recipients or edge cases.
-3. **Cross-chain replay.** Whether a BSV transaction used on one Solana deployment can be replayed
-   against another, and whether a chain-id or programme-id is bound into the deposit.
+1. **The vault's instruction set.** Still the largest design gap: release, burn, escrow and return
+   do not exist even on paper in a form that has been audited, so there is nothing to audit and
+   P8/P10 depend on it. It should be **re-audited against this model**.
+2. **The threshold key.** Threshold value, key generation, the signing protocol, the per-member
+   attribution of `owed`, and what happens during a resharing or a member's exit.
+3. **Cross-chain replay.** Design fixed (P11); **no test creates a second deployment and asserts
+   rejection.**
 4. **The `used_deposits` counterfactual.** X2 argued the missing `seeds` constraint was not
    exploitable. It is now pinned, but **no test creates a counterfeit account and asserts
    rejection** — the closure is by argument, not by evidence.
 5. **`verify_deposit`'s parsing.** No adversarial pass on malformed transactions, unusual output
    counts, or `OP_PUSHDATA` handling in the `OP_RETURN`.
 
----
+*(The order book's economics used to head this list. The book is removed — D2 reversed — so that
+gap is deleted rather than paid down.)*
 
-## The three decisions this document needs
+## 6. Still open — the new items
 
-1. **P1** — how is the first `initialize` protected?
-2. **P3** — how long may a deposit wait before it is unmintable, and what happens then?
-3. **P7** — is detection paid for, or is it assumed to happen?
+1. **The genesis bootstrap.** Members bond `solBSV`, which does not exist until a mint happens. The
+   first members need a path; the G2 vault-gated genesis mint (D3) answers how the first supply is
+   backed but not how the first bond is posted.
+2. **Sharding.** One threshold key across all members, or several groups with their own? Shards
+   contain both theft and signing latency, at the cost of coordination.
+3. **The threshold-key choice.** The threshold value itself, and how it trades against signing
+   latency and the 30-day exit.
+4. **The vault re-audit.** Doc 21 is the current vault design and carries unfixed findings. It
+   should be re-audited against the federation model, since several findings came from trying to
+   enforce BSV-side behaviour that the federation now handles by different means.
+5. **The unbacked exposure bound.** Whether an explicit cap is wanted on reserve exposure before
+   the bond set is large enough (the residual of P8).
+6. **The ATA rent.** Whichever option is chosen, record it rather than discovering it.
 
-Everything else here is either fixed, scheduled, or explicitly accepted.
+## The decisions this document needs
 
-</details>
+1. **The ATA rent** — submitter pays, recommended above.
+2. **The genesis bootstrap** — how the first members bond.
+3. **The threshold key** — value, key generation, and the attribution rule.
+
+Everything else here is either fixed, decided, moot under the federation model, or explicitly
+accepted.

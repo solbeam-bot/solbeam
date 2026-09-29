@@ -194,3 +194,18 @@ has to satisfy, not a description of a mechanism that runs.
 ---
 
 Next: [Roadmap](07-roadmap.md)
+
+---
+
+## What replaced the order book
+
+The book, matching and market-making were removed, so this document absorbs the two facts that
+survived them.
+
+- **The fee is 30 bp to mint and 30 bp to redeem**, set by governance — not discovered.
+- **Capacity is capped by bonds pledged.** With `k = 1` the aggregate bond must be at least the
+  outstanding `solBSV` supply, so total value locked is bounded by total bonded capital. Ten members
+  at 1,000 BSV is roughly **$300k** — a proof of concept, stated plainly.
+
+There is no on-chain market, no matching and no liquidity mining. Any market for `solBSV` exists
+outside this system.

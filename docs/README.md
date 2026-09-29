@@ -65,4 +65,3 @@ BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals 
 - [FAQ](08-faq.md)
 - [Glossary](09-glossary.md)
 - [Brand](10-brand.md)
-- [Markets & liquidity](11-markets-and-liquidity.md)

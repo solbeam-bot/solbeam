@@ -1,41 +1,62 @@
 # 14. Decision register
 
-**Read this first.** [`12. Peg-in and peg-out: the mechanism`](12-peg-mechanism.md) holds the
-full reasoning and the audit findings. This page is the short version: the flows as they
-stand, what is settled, and every decision still open — in one place, so it can be reviewed
-with fresh eyes. **Nothing is settled unless its Status says so.**
+**Read this first.** [`13-summary.md`](13-summary.md) is the canonical model. This page is the
+short version: the flows as they stand, what is settled, and every decision still open — in one
+place, so it can be reviewed with fresh eyes. [`12-peg-mechanism.md`](12-peg-mechanism.md) holds
+the full reasoning and the audit findings; [`23-federation.md`](23-federation.md) holds
+membership, governance and slashing. **Nothing is settled unless its Status says so.**
+
+> **Rewritten for the federation model, 2026-09-29.** The system is now a light client, a
+> **vault**, and a **bonded federation** holding the reserve under a **threshold key**. Several
+> earlier decisions are **reversed, not edited** — §Reversals records each with what it was, what
+> it is now, and why. The reversals are the point of this register.
+
+**Built or designed?** Built: the **light client with cw-144**, the **`solBSV` token**, the
+**mint**, and **fork staging**. Everything else is designed and does not exist in code — the vault,
+the federation, governance, slashing and all of peg-out. The shipped mint goes straight to the
+depositor's token account and charges no fee.
 
 ---
 
 ## The flows
 
-**As designed** — the vault and everything downstream of it are not built; the shipped
-program mints straight to the depositor. Both directions have the same shape: **enter the
-program's vault, then leave it either to the counterparty or back to the sender.** No failure
-path mints; every one returns.
+**As designed** — the vault and everything downstream of it are not built. Both directions have
+the same shape: **enter the program's vault, then leave it either to the counterparty or back to
+the sender.** No failure path mints; every one returns.
 
 ### Peg-in — BSV → solBSV
 
 ```
-1  CHOOSE   the depositor takes terms from the book
-2  SEND     BSV to a relayer's script; OP_RETURN carries the Solana address
-3  DEPTH    wait the depth the bid named, measured in block time
-4  MINT     solBSV issued into the program's vault — not to the depositor
-5  MATURE   no reorg followed -> the vault releases, fee to the stakers
-            reorg followed    -> the staged tokens are burned. Nobody loses
+1  CHOOSE   terms; the fee is 30 bp, governed
+2  SEND     BSV to the federation's deposit script
+            OP_RETURN = version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient
+3  DEPTH    12 confirmations (FLOOR)
+4  STAGE    solBSV is minted INTO THE VAULT, not to the depositor, and a record stores
+            the block hash the deposit was proven against
+5  MATURE   144 blocks
+6  RELEASE  permissionless: the tip has advanced past the deposit AND the stored hash
+            still matches -> the vault releases to the recipient
+            if the hash DIFFERS -> the staged tokens burn, and the depositor keeps the
+            BSV the reorg returned. Nobody loses
 ```
+
+**Step 6 is decided by the program from its own headers.** `release_mint` and `burn_staged` are
+permissionless, so no party's cooperation is ever required.
 
 ### Peg-out — solBSV → BSV
 
 ```
-1  ESCROW    solBSV moves into the vault; a BSV destination is named
-2  ACCEPT    a relayer whose bond covers it takes the request
-3  DEADLINE  measured in slots, so a Solana halt freezes the clock
-4  PAY       the relayer pays BSV and proves it against the light client
-5  CHALLENGE a reorged payout is caught here
-6  SETTLE    burn the escrow and pay the fee
-             or on failure, return the escrow. Supply never changes
+1  ESCROW    solBSV moves into the vault; a BSV destination and a deadline are set
+2  ACCEPT    federation members sign payout intents individually, on Solana
+3  PAY       once enough attributed intents exist, the threshold key signs the BSV payment
+4  SETTLE    the payout is proved against the light client; the escrow burns
+   or
+4' CANCEL    permissionless after the deadline: the escrow returns to the holder
 ```
+
+**Failure returns; it never mints.** Supply never changes. **Step 2 is the attribution
+mechanism:** each member signs separately, so a member who signs two conflicting intents has
+produced their own proof of guilt (D13). **Redemptions are never pausable** (D11, D12).
 
 ---
 
@@ -43,84 +64,152 @@ path mints; every one returns.
 
 | | |
 |---|---|
-| **No oracles** | The program reacts only to BSV headers and Solana slots. External metrics — price, hashrate, reorg cost — are published on the website and never consulted by the program |
-| **No operators** | A relayer is a role anyone may run, not a privileged party. Minting has no trusted participant at all |
+| **No oracles** | The program reacts only to BSV headers and Solana slots. External metrics — price, hashrate, reorg cost — are published and never consulted by the program |
+| **Minting has no trusted participant; the reserve is trusted and bounded** | The program verifies proof of work and inclusion itself, and the mint authority is a program PDA. The reserve is held by a threshold of bonded members — one explicit trust assumption, bounded by seizable bonds and by an exit that cannot be paused. *(Replaces "No operators": there is no privileged operator for minting, but there is now an operator class holding the reserve)* |
 | **Reversibility without a freeze authority** | The vault is program-owned, so staged tokens can be burned or returned. No freeze authority, no Token-2022 hooks |
 | **Time is chain-native** | BSV depth and block time from headers; Solana deadlines from slots |
 | **Fees mature with the principal** | A fee withdrawable earlier than its mint would be an exit from maturity |
-| **Same-asset yield** | BSV stakers earn BSV; `solBSV` stakers earn `solBSV` |
-| **Do not pool the reserve** | Aggregation is what creates a single key worth stealing. Per-relayer deposits mean no reserve contract to write, audit or trust |
-| **Confirmed by test** | 20 on-chain tests, 21/21 live SV Node checks, all Python checkers, on the local validator |
+| **Fees are governed and paid pro rata to pledged stake** | One fee, 30 bp each way, governed (85% / 30 days). *(Replaces "Same-asset yield": with per-relayer custody removed there are no two staking sides to pay separately)* |
+| **One reserve under a threshold key** | No single member can move it; the bond is `solBSV` the program holds and can seize. *(Reverses "Do not pool the reserve")* |
+| **Confirmed by test** | 20 on-chain tests, Phase 1A 51/51 synthetic, 21/21 against a live SV Node, cw-144 324/324 real mainnet headers |
+
+---
+
+## Reversals
+
+Each row is a **reversal with a reason**, dated **2026-09-29**, not a silent edit. The full
+reasoning is in [`12-peg-mechanism.md`](12-peg-mechanism.md) §Changes in this revision and in
+[`23-federation.md`](23-federation.md).
+
+| # | Was | Now | Why |
+|---|---|---|---|
+| **R1** | **D7** — no governance in the PoC; parameters fixed in code | **D10** — 85% of pledged coins / 30 days / live signal, holding the **upgrade authority** | "No governance" left the upgrade authority as an unowned mint voucher (A5). Governance names who holds it and makes every use visible for 30 days |
+| **R2** | **D2** — fees **discovered** on an order book, bids auto-filling | **A governed fee, 30 bp each way**, changed by 85% / 30 days | The book solved discovery and capacity allocation; a governed fee plus a bond cap solves both more simply. It also removes the one subsystem that never received an adversarial review |
+| **R3** | **Per-relayer deposit scripts and independent keys** — "do not pool the reserve" | **One reserve under a threshold key** (D9) | Per-relayer isolation removed the single key but also removed the single reserve that can be attested to, and left no operator layer to detect, challenge or govern. A threshold key means no single member can move funds |
+| **R4** | **D1** — specialists first; anyone-may-stake a phase-2 goal | **D9** — open membership, **1,000 BSV bond** | A capital gate is objective, seizable and permissionless; nomination is a trusted choice. The phase-2 deferral is gone because the gate is what made it necessary |
+| **R5** | **D4** — `FLOOR` 12 blocks, **fixed in code**, change mechanism deferred | **12 blocks, a governed parameter** (D10) | The value stands; the named gap was that there was no way to change it. The floor itself is **not** made immutable — the exit window is the protection (D11) |
+| **R6** | **D6** — a peg-in may proceed with no underwriter, explicitly allowed | **Superseded** — there is no per-deposit underwriter to be present or absent | Minting is permissionless and trustless; a deposit pays the federation's script and is backed by the reserve and the bonds. The residual exposure question is re-opened as an open item |
+| **R7** | **O1** — same-asset yield: BSV stakers earn BSV, `solBSV` stakers earn `solBSV` | **Fees paid pro rata to pledged stake** | With one pooled reserve there are no two staking sides; there is one member set and one fee |
+| **R8** | **Gate symmetry** — a pause must close both directions | **D12** — pause stops **mints only**; redemptions are never pausable | The earlier argument treated the exit as a risk to gate. The exit is what makes governance safe: it is the protection, and 30 days of live signal is what makes a hostile change empty the bridge before it lands |
 
 ---
 
 ## Decisions
 
-All eight are settled for the PoC. Each records what was decided, and separately what it
-defers — because several of these are **decisions to defer**, which is different from leaving
-a question open.
+All are settled for the PoC unless their Status says otherwise. Each records what was decided, and
+separately what it defers — because several are **decisions to defer**, which is different from
+leaving a question open.
 
-### D1 — Who may stake — **specialists first; anyone-may-stake is a phase-2 goal**
+| ID | Decision | Status |
+|---|---|---|
+| **D1** | Who may join — specialists first, anyone-may-stake phase 2 | ✅ **Reversed by R4** → **D9** |
+| **D2** | Fees discovered on the order book, bids auto-approving | ✅ **Reversed by R2** → governed 30 bp |
+| **D3** | Genesis — **G2, the vault-gated genesis mint** | ✅ **Shape stands; bootstrap reopened.** G2 answers how the first supply is backed, not how the first members bond |
+| **D4** | `FLOOR` — 12 blocks | ✅ **Partially reversed by R5.** The value stands; it is a governed parameter now |
+| **D5** | Bond multiple — `k = 1`, self-dealing accepted | ✅ **Stands.** The framing changes: there is no per-relayer underwriting to self-deal against, and the `k = 1` break-even consequence is recorded |
+| **D6** | A peg-in with no underwriter — allowed, explicitly | ✅ **Superseded by R6**; residual re-opened as an open item |
+| **D7** | Governance — none in the PoC | ✅ **Reversed by R1** → **D10** |
+| **D8** | The reserve invariant — monitored, not enforced | ✅ **Stands.** A threshold key changes who holds the reserve, not what a Solana program can see |
+| **D9** | Membership — **open, 1,000 BSV bond** posted as `solBSV` | ✅ **Settled**, new |
+| **D10** | Governance — **85% of pledged coins / 30 days / live signal**, holds the upgrade authority | ✅ **Settled**, new |
+| **D11** | The floor — **the exit, not immutability**; redemptions never pausable | ✅ **Settled**, new |
+| **D12** | Pause — **mints only**, lower threshold, auto-lifts | ✅ **Settled**, new |
+| **D13** | Slashing — **self-proving equivocation** on individually-signed intents | ✅ **Settled**, new |
 
-Specialists only at launch, with an open-staking phase to follow. **The upgrade path is a
-deliverable, not a maybe** — the design must carry it from the start rather than have it
-bolted on. What that path looks like is deferred to final implementation.
+### D3 — Genesis: G2, the vault-gated genesis mint
 
-### D2 — Filling — **auto-approve, settled for the PoC**
+The genesis mint lands in the program vault and is released only once a matching BSV deposit is
+verified. No unbacked window exists at any point, so there is nothing to attack and nothing to keep
+quiet about. **What the federation model reopens:** G2 answers *how the first supply is backed*, but
+not *how the first members bond* — the bond is `solBSV`, and no `solBSV` exists until a mint
+happens. **The genesis bootstrap is now an open item** — see §Still open.
 
-Bids fill automatically. The reasoning is in the section below: the vault means a reorged fill
-reverses the liability and the staker loses nothing, so the loss is systemic rather than
-per-fill and there is little for a per-fill approval to inspect. **To be reviewed against the
-finished system** — if a last look turns out to be cheap insurance, it can be added then.
+### D4 — `FLOOR` — 12 blocks
 
-### D3 — Genesis — **G2, the vault-gated genesis mint**
+`FLOOR` is the minimum confirmation depth. Twelve blocks for the PoC, now a **governed parameter**
+rather than a constant. Depth and maturity are different parameters: depth sets **the cost of
+attacking** — a reorg must out-mine it — while maturity sets **the time available to detect**. A
+low floor makes attacks cheap and therefore frequent, which raises the number of chances for a
+detection failure to slip through.
 
-The genesis mint lands in the program vault and is released only once a matching BSV deposit
-is verified. No unbacked window exists at any point, so there is nothing to attack and nothing
-to keep quiet about.
+### D5 — Bond multiple — `k = 1`
 
-### D4 — `FLOOR` — **12 blocks, fixed in code**
+`bond ≥ k × owed` (with `k = 1`). `solBSV` and BSV are the same asset, so any deviation is an
+arbitrage and closes. **The consequence is recorded plainly:** at `k = 1` the bonded stake *equals*
+the value the system can hold, so a colluding threshold that takes the reserve loses an equal bond
+— roughly break-even. What makes collusion unattractive is the 30-day live signal and the exit, not
+the bond's excess size. The bond's other job is covering a member's provable misbehaviour and
+abandonment.
 
-`FLOOR` is the minimum confirmation depth. Depositors and bids may commit to *more*, never
-less. Twelve blocks for the PoC. The change mechanism is deferred; see the note below.
+### D8 — The reserve invariant — monitored, not enforced
 
-*Depth and maturity are different parameters, which is why `FLOOR` survives the book:* depth
-sets **the cost of attacking** — a reorg must out-mine it — while maturity sets **the time
-available to detect**. A low floor makes attacks cheap and therefore frequent, which raises
-the number of chances for a detection failure to slip through.
+`custodied BSV ≥ outstanding solBSV` is published and monitored, and **the protocol cannot enforce
+it** — the reserve is off-chain BSV the program cannot read. The website shows the ratio; the
+program does not check it.
 
-### D5 — Bond multiple — **`k = 1`, and self-dealing stakers are accepted**
+### D9 — Membership — open, 1,000 BSV bond
 
-`bond_R ≥ k × owed_R` (with `k = 1` here), and a staker underwriting its own deposit is an
-accepted risk rather than a prohibited one. The consequence is recorded plainly: at `k = 1` a
-self-dealing attack is roughly break-even, so what makes it unprofitable is **the mining cost of
-the reorg**, not the bond. The bond's job is covering an honest relayer's shortfall.
+**Anyone with a 1,000 BSV bond may join.** The bond is posted as `solBSV`, because it must be
+seizable on Solana, and `bond ≥ k × owed` must always hold, so **a member cannot leave while
+owing**. Leaving requires announcing and waiting the unbonding period. Fees are earned pro rata to
+pledged stake. **The bond size is the scale limit, and that is stated rather than implied:** with
+`k = 1`, total value locked is capped by total bonds pledged — ten members at 1,000 BSV is roughly
+**$300k** of capacity. That is a proof of concept.
 
-### D6 — A peg-in with no underwriter — **allowed, explicitly**
+### D10 — Governance — 85% / 30 days / live signal
 
-A peg-in may proceed with no underwriter at all. Whoever does so **accepts the initial risk of
-a system with nobody watching while liquidity is seeded**, and may keep topping up on those
-terms. This is a deliberate, stated risk acceptance rather than an oversight.
+| | Default |
+|---|---|
+| Who may propose | Any member |
+| To pass | **85% of pledged coins** |
+| Delay | **30 days** |
+| Signal | **Live from the moment it is raised** |
+| Includes | **The upgrade authority** |
+| Cannot touch | **Redemptions. They are never pausable** |
 
-*For final implementation, not the PoC:* the note should be made that this can be bounded if
-it proves necessary — for example expiring it after `n + 1000` blocks, or restricting it to a
-designated initial LP address. Neither is needed now; **both need writing down so the option
-is not lost.**
+All of those are **parameters**, not constants.
 
-### D7 — Governance — **none in the PoC**
+### D11 — The floor is the exit, not immutability
 
-The PoC is built without any governance mechanism. Details are to be figured out on review
-once the system is better understood and demonstrably working. Recorded so that "we launched
-without governance" is a decision rather than an omission, and so the upgrade path stays a
-named gap.
+**There is no immutable floor, deliberately.** A hostile change needs 85% *and* 30 days, and
+redemptions run throughout — so a proposal that would harm holders **empties the bridge before it
+lands.** The protection was never that the rules are frozen; it is that you can always leave before
+they change. **The residual, stated plainly:** a holder who does not watch and does not act within
+30 days is exposed. That is a disclosure obligation, not a mechanism.
 
-### D8 — The reserve invariant — **monitored, not enforced**
+### D12 — Pause stops mints only
 
-`custodied BSV ≥ outstanding solBSV` is published and monitored, and **the protocol cannot
-enforce it** — the reserve is off-chain BSV the program cannot read. The website shows the
-ratio; the program does not check it.
+**Mints can be paused. Redemptions cannot.** Pausing inbound is a safety valve; pausing outbound is
+taking hostages. The power is bounded and lifts automatically, so a pause carries a lower threshold
+than a governance change rather than waiting 30 days for an emergency.
+
+### D13 — Slashing is self-proving equivocation
+
+You cannot deduce who was at fault from an opaque threshold signature, **so the design does not
+try to.** Members sign individually, so misbehaviour produces its own evidence:
+
+| Misbehaviour | Provable? |
+|---|---|
+| A member signs **two conflicting payout intents** | **Yes — self-proving.** Two signatures, one member, conflicting statements. Anyone submits it; anyone can be paid the bounty |
+| A member signs an intent matching **no authorised redemption** | **Yes** — intents are recorded on Solana, checked against the redemption set |
+| A **threshold** of members signs something invalid | Attributable, since every signature is on record — but a governance matter, not a cryptographic one |
+
+**Copied from what RenVM actually shipped.** Only the cryptographic half was ever built; RenVM's own
+documentation says the slashing contract *"will become a voting system … Right now, it is a
+placeholder."* We copy the half that shipped and say plainly that the rest has no precedent.
 
 ---
+
+## Not settled, and deliberately out of scope for the PoC
+
+| | |
+|---|---|
+| **The genesis bootstrap** | Members bond `solBSV`, which does not exist until a mint happens. The first members need a path (D3's G2 shape does not supply one) |
+| **Sharding the threshold key** | One key across all members, or several groups with their own? Shards contain theft and signing latency, at the cost of coordination |
+| **The threshold key's shape** | Threshold value, key generation, signing protocol, and the attribution rule that turns system-wide `owed` into a per-member share |
+| **The vault's re-audit** | The current vault design carries unfixed findings and should be re-audited against this model, since several were caused by trying to enforce BSV-side behaviour the federation now handles differently |
+| **The unbacked exposure bound** | Whether an explicit cap is wanted on reserve exposure before the bond set is large enough (the residual of R6/D6) |
+| **Independent audit** | The critical defects found so far were found by our own adversarial review, which is not the same as an audit by someone with no stake in the answer |
 
 ## Deferred to final implementation
 
@@ -128,42 +217,17 @@ These are named so they cannot be quietly forgotten. None blocks the PoC.
 
 | Deferred | From | Note |
 |---|---|---|
-| The open-staking upgrade path | D1 | Anyone-may-stake is a phase-2 goal; the design must carry it from the start |
-| Bounding the unbacked peg-in | D6 | Block-height expiry, or a designated initial LP address |
-| The change mechanism for `FLOOR` | D4 | Voting, or the stakers. Fixed in code for now |
-| Governance generally | D7 | Absent by decision, not by accident |
-| The program upgrade authority | A5 | Can override every parameter. The fix is governance, possibly tied to staking |
+| The unbonding period | D9 | Longer than the redemption deadline plus the challenge window; the value is a parameter |
+| X3 — the hard-coded DAA | W1/A1 | cw-144 is implemented and verified 324/324, but BSV may change the rule. Governance can carry the upgrade; a parameterisable rule is not built |
+| The program upgrade authority | D10/A5 | Now held by governance. The residual is the 85% threshold over a small bond set |
+| The aggregate mint cap | P5/A10 | Set by policy rather than derived; not implemented |
+| Fee realisation mechanics | D2/O1 | Whether members withdraw from their own balance or accrue a claim is unresolved |
 | An independent audit | — | The critical defects found so far were found by our own adversarial review |
-
----
-
-## D2 in full — why auto-approve
-
-**An earlier draft of this document called a book of auto-filling bids "a book of sitting
-ducks". That framing was wrong**, and the correction is worth keeping because it is the
-reason the decision went the way it did.
-
-The argument was that a miner fills a passive bid, reorgs, and the staker eats the loss. But
-**the vault changes who bears it**: the mint is staged, not liquid, so if the reorg is detected
-the staged tokens are burned, the liability is reversed, and **the staker loses nothing.** The
-staker is only harmed when detection *fails*, which is a property of the system rather than of
-any individual fill.
-
-So the loss is **systemic, not per-fill** — and a toxic deposit is indistinguishable from an
-honest one, so a last look has little to inspect. The levers that actually matter are
-**maturity length**, **depth** (which keeps the attack rate down), and **the incentive to push
-the honest chain**. Auto-approve is the simple answer at PoC stage, to be revisited against
-the finished system.
-
-## Not settled, and deliberately out of scope for the PoC
-
-| | |
-|---|---|
-| **Upgrade authority** (A5) | It can override every parameter, which makes it an unconditional mint voucher. The fix is governance — a vote, or the stakers, possibly with additional tokens granting that right. Recorded so it is not silently forgotten |
-| **Independent audit** | The critical defects found so far were found by our own adversarial review, which is not the same as an audit by someone with no stake in the answer |
 
 ## Where to read more
 
 - [`12-peg-mechanism.md`](12-peg-mechanism.md) — full reasoning, scenarios, audit findings A1–A18
+- [`13-summary.md`](13-summary.md) — the canonical model
+- [`23-federation.md`](23-federation.md) — membership, governance, slashing
+- [`18-pre-code-checklist.md`](18-pre-code-checklist.md) — P1–P11 status against the new model
 - [`04-trust-model.md`](04-trust-model.md) — what is trusted, and the roadmap to a signerless reserve
-- [`05-federation.md`](05-federation.md) — the relayer role and bond custody

@@ -222,7 +222,7 @@ parameter is settable at runtime.)**
 plus a bond cap solves both more simply — and deleting it removes the one subsystem that never
 received an adversarial review. Its prose in [`12-peg-mechanism.md`](12-peg-mechanism.md) is
 **superseded**, as is the relayer model in the previous version of this chapter (the Git history of
-`docs/05-relayers.md` records it; what matters here is that it is not the model).
+`docs/05-federation.md` records it; what matters here is that it is not the model).
 
 ---
 
