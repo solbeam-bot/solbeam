@@ -56,7 +56,7 @@ exit window during which redemptions never pause, and by proofs anyone can submi
 
 The scale limit follows from the same fact, and it is stated rather than implied: with `k = 1`,
 value locked is capped by the bonds pledged. Ten members at the canonical **1,000 BSV** bond is
-roughly **$300k** of capacity. That is a proof of concept, and it says so.
+roughly **~$180k** of capacity. That is a proof of concept, and it says so.
 
 ---
 

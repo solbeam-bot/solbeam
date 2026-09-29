@@ -15,7 +15,7 @@
 
 **Status: designed, not built.** The vault, the federation, threshold custody, bonds and
 peg-out are **designs**. What exists in the program is the light client, the token, the mint
-and fork staging: **11 instructions, 27 on-chain tests**, cw-144 verified against **324/324**
+and fork staging: **12 instructions, 27 on-chain tests**, cw-144 verified against **324/324**
 real mainnet headers. The shipped `verify_deposit` **mints straight to the depositor's token
 account** — there is no vault in the code, no staged item, no maturity and no bond.
 
@@ -281,7 +281,7 @@ failing to enforce BSV-side behaviour that no longer needs enforcing from Solana
 | **T9** | `Marker` was three things at once (replay record, slash evidence, closeable object) with contradictory field lists | **Dissolved** | `Marker` is now one thing (replay) and `PayoutIntent` is another (evidence). The slash evidence is not a field on a shared record but a signature the member produced themselves |
 | **T10** | Chainwork arithmetic underspecified: 256-bit division, the `initialize` baseline (cumulative from genesis, never listed as trusted), and `commit_fork` never specified to write the new state | **Dissolved** | Each record stores its own cumulative chainwork; `commit_fork` compares chainwork and writes the rebuilt window, tip, hash and `last_push_slot`. The baseline is the checkpoint. The arithmetic is verified against **324/324** real mainnet headers. Remaining, and preserved: the comparison itself is exercised only on a constant-difficulty fixture, and `work_from_bits` must **saturate** rather than wrap |
 | **T11** | Rent rose to ~$0.11 extra per item, and no `stake`/`announce_unbond`/`withdraw_bond` instruction existed though the table said `Bond` was closed by one | **Changed** | Rent is worse, not better: one escrow token account per item became the structural answer to class 4, and `PayoutIntent` adds one account per member per redemption. The bond instructions are no longer missing from the design — they are in §The federation side — but they are still designed, not built |
-| **T12** | Silent decision reversals: requiring a registered relayer script reversed D6/P8; "genesis is the ordinary bonded path" reversed D3/G2; docs claimed a strictly-heavier commit while the commit compared height; the suite was said to be 17 tests | **Dissolved, with the record widened** | The chainwork claim is now true and the suite is **20** tests. The reversals are real and are now stated rather than silent: **D6/P8** are superseded by the single federation deposit script, **D2/D7** are superseded by doc 23, and **genesis is still open** — members bond `solBSV` and none exists until a mint happens |
+| **T12** | Silent decision reversals: requiring a registered relayer script reversed D6/P8; "genesis is the ordinary bonded path" reversed D3/G2; docs claimed a strictly-heavier commit while the commit compared height; the suite was said to be 17 tests | **Dissolved, with the record widened** | The chainwork claim is now true and the suite is **27** tests. The reversals are real and are now stated rather than silent: **D6/P8** are superseded by the single federation deposit script, **D2/D7** are superseded by doc 23, and **genesis is still open** — members bond `solBSV` and none exists until a mint happens |
 
 ---
 
@@ -391,7 +391,7 @@ is **held under the collective key and seized by the members collectively**, so 
 a **collective action by the majority** rather than an automatic on-chain rule (doc 13, *The two
 bonds*). This does not make slashing useless — it is the difference
 between recovery and full recovery — but the capacity claim ("ten members at 1,000 BSV is roughly
-$300k") assumes a price that an incident can move. **The bonds answer attribution; they do not fully
+~$180k") assumes a price that an incident can move. **The bonds answer attribution; they do not fully
 answer loss, and the document should not imply that they do.**
 
 ---

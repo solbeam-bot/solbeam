@@ -172,7 +172,7 @@ bond**, seizable on Solana, sized against the `solBSV` held. **Neither sits insi
 a member cannot leave while owing on either side. Leaving requires announcing and waiting the
 unbonding period. Fees are earned pro rata to pledged stake. **The bond sizes are the scale limit,
 and that is stated rather than implied:** with `k = 1`, total value locked is capped by total bonds
-pledged — ten members at 1,000 BSV is roughly **$300k** of capacity. That is a proof of concept.
+pledged — ten members at 1,000 BSV is roughly **~$180k** of capacity. That is a proof of concept.
 
 ### D10 — Governance — 85% / 30 days / live signal
 

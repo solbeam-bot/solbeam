@@ -37,7 +37,7 @@ fixed. Open entry with a capital gate, so the set is permissionless but not anon
 - Leaving: announce, wait the unbonding period, withdraw if still covered on **both** sides
 
 **The bond size is the scale limit.** With `k = 1`, total value locked is capped by total bonds
-pledged — ten members at 1,000 BSV is roughly $300k of capacity. That is a proof of concept, and it
+pledged — ten members at 1,000 BSV is roughly ~$180k of capacity. That is a proof of concept, and it
 is better to say so than to imply otherwise.
 
 **The BSV-side bond is enforced by the members, not by the Solana program.** It sits under the

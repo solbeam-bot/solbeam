@@ -60,8 +60,13 @@ by chance.
 > *"a bribery attack is not profitable as long as the sum value of all REN bonds of all Darknodes in
 > the shard is **greater than 3x the value of origin assets locked in the shard**."*
 
-The **3×** falls out of the **1/3** threshold: a briber must buy 1/3 of the bonds, so those bonds
-must be worth three times the assets for the bribe to cost more than it wins. **And the ratio is
+The multiple is **n/t**, and it falls out of the signing threshold: a briber must buy **t** of the
+**n** bonds, so the bonds must be worth **n/t times** the assets for the bribe to cost more than it
+wins.
+
+> **For RenVM that is 100/34 ≈ 3×. For our `3-of-5` it is 5/3 ≈ 1.67×.** The reference's 3× does
+> **not** transfer, and quoting it while running a 60% threshold overstated our capacity by 1.8×.
+> This was an error in an earlier revision of this document; see below. **And the ratio is
 managed by fees, not an oracle** — nodes vote on mint and burn fees to keep the bond valuable
 enough. *"No explicit price oracle is needed."*
 
@@ -83,10 +88,18 @@ member **slashable while their shares are still live.**
 RenVM regenerates every gateway key each epoch and forwards the assets to the new one, because a
 departing node would otherwise still know shares of a live key. **We do not need this.**
 
-**Rotation exists to bound what a member who has *left* can do with shares they still hold.** But in
-our design a member who has left **cannot move the reserve** — the threshold sees to that — and the
-rotation's real cost is high: the entire reserve moves on-chain every epoch, and the deposit script
-the program verifies against would have to change with it.
+**Rotation exists to bound what a member who has *left* can do with shares they still hold — and an
+earlier revision of this document claimed, wrongly, that the threshold already handles that. It does
+not.** A departing member **keeps a valid share**, and at `t = 3` two leavers plus one current member
+are three shares: the reserve.
+
+So removing rotation removes a real protection, and what replaces it is **proactive re-sharing** — a
+protocol that invalidates old shares of the *same* key. That is real cryptography, it requires the
+departing member's cooperation, and **it is not specified anywhere.**
+
+**Recorded as an open decision, not as resolved.** The costs of rotation remain real — the reserve
+moves on-chain every epoch, and the deposit script would have to change with it — but they are costs,
+not a reason to leave departed shares live.
 
 **And the built program fixes `deposit_script` once in `initialize_bridge`, with no instruction to
 change it.** So rotation is not merely unnecessary — it is currently unimplementable, and adopting it
@@ -147,13 +160,20 @@ outcome:     proof produced -> challenger loses their bond to the prover
 no reliance on a culprit volunteering evidence — which the audit correctly identified as the fatal
 flaw in layer 2.
 
-### 5. `bonds ≥ 3 × assets` — resolves the capacity arithmetic
+### 5. The capacity multiple is `n/t` — and the reference's `3×` does not transfer
 
 Our capacity claim was wrong: we sized the bond against the whole reserve, and with a symmetric
 two-sided bond that gave `H ≤ 0`, i.e. **zero capacity.**
 
-**The reference gives the rule.** Capacity is **bonds ÷ 3**, for a 1/3 threshold, because a briber
-must buy a third of the bonds and must still lose money.
+Originally we sized the bond against the whole reserve, and a symmetric two-sided bond gave
+`H ≤ 0` — **zero capacity.** Then we adopted the reference's **3×**, which is wrong for us:
+
+> **3× is `n/t` for RenVM's own parameters** — a 100-node shard at a 1/3 threshold, `100/34 ≈ 3`.
+> **Ours is `3-of-5`, so the multiple is `5/3 ≈ 1.67×`.** Quoting 3× while running a 60% threshold
+> **overstated our capacity by 1.8×.**
+
+**The rule is: a briber must buy `t` of the `n` bonds, so the bonds must be worth `n/t` times the
+assets for the bribe to cost more than it wins.**
 
 **And the ratio is held by fees, not an oracle** — which is the piece we were missing when we worried
 that a `solBSV`-denominated bond devalues in exactly the scenario it protects against.
@@ -221,8 +241,9 @@ assumption narrows to **custody of the reserve**, not to the truth of every depo
 `initialize`, a vault, a maturity period, and the 147-record bootstrap that took three audits to get
 right. **The reference avoids all of it by trusting its own shards to report.** We chose not to.
 
-**So the honest summary:** the federation, the epochs, the second quorum, the challenge mechanism
-and the `3×` capacity rule are **taken from the reference**. The **light client and the vault are
+**So the honest summary:** the federation shape, the epochs, the challenge mechanism and the capacity
+*rule* are **taken from the reference** — though **not its 3× multiple**, which does not transfer, and
+**not its co-signing second quorum**, which does not compose with our custody model. The **light client and the vault are
 ours**, and they exist for exactly one reason — **to remove the reorg risk that the reference accepts
 and cannot reverse.**
 
@@ -232,7 +253,7 @@ and cannot reverse.**
 |---|---|
 | Its own consensus chain (Hyperdrive) | **Not needed.** Solana is the state layer, and the program is the referee |
 | **Coordination shard** — picks members, orders transactions, holds no funds | **Replaced by the Solana program**, which cannot lie about state |
-| Greycore selected by community governance | **The founding set**, for a PoC — with the same *disjoint second quorum* structure |
+| Greycore selected by community governance, and **co-signing every gateway action** | An **appointed oversight body** that does **not** sign and does not hold the reserve. **Not disjoint at genesis** — the founders appoint it |
 | `REN` bond, REN-only, no oracle | **BSV-side and `solBSV`-side bonds**, per the two-sided model |
 | 100 Darknodes per shard | **5 members**, with the threshold and the 3× rule doing the work |
 
@@ -245,9 +266,9 @@ layer, because **Solana is the coordination layer and it cannot be equivocated w
 
 | Finding | Resolved by |
 |---|---|
-| **F5 — the mint gate is not expressible** | The gate becomes the **3× economic constraint**, checked where it can be (the `solBSV` side) and **declared and visible** on the BSV side. It is a solvency rule, not a per-mint script test |
-| **The capacity arithmetic (`H ≤ 0`)** | **`capacity = bonds ÷ 3`**, derived from the 1/3 threshold rather than asserted |
-| **Collective-key bonds are a hostage** | **The second quorum.** Neither set can move funds or seize a bond alone |
+| **F5 — the mint gate is not expressible** | **Partly.** It becomes the **`n/t` economic constraint**, checked where it can be (the `solBSV` side) and **declared and visible** on the BSV side. It is a solvency rule, not a per-mint script test — and **it is not built** |
+| **The capacity arithmetic (`H ≤ 0`)** | **`capacity = bonds ÷ (n/t)`** — derived rather than asserted. For `3-of-5` that is **1.67×**, not 3× |
+| **Collective-key bonds are a hostage** | **Not resolved.** The oversight body does not sign, and a 3-of-5 reserve quorum can move funds alone. **Withdrawn as a resolution** — see §3 |
 | **Attribution does not work** | **Challenge-and-prove, shard-wide.** Attribution is avoided, not solved |
 | **Genesis first hour** | **The first epoch.** Founders form both quorums, bond, and the first mint is a founder's ordinary peg-in |
 | **Threshold is unstated** | **1/3**, taken from the reference, with the key-extraction consequence it openly acknowledges |
@@ -276,11 +297,14 @@ there is a team to work on them.**
 
 ### The `3×` rule and the two-sided bond do not reconcile
 
-The reference requires **`bonds ≥ 3 × assets`**, derived from a **1/3** threshold: a briber must buy
-a third of the bonds, so those bonds must be worth three times what they would win. Our parameters
-carry **`fed.k = 1`**, and at `k = 1` a briber needs roughly `0.4 × assets` — so **the design is
-about 3× under-collateralised against the rule it cites.** Either `k` becomes 3, or the capacity
-figure is 3× too large. Neither is chosen.
+The multiple is **n/t**. With **`3-of-5`** it is **5/3 ≈ 1.67×**, so the bond must be **1.67× the
+assets**, not 3× — the reference's 3× comes from its own 100-node shard at a 1/3 threshold and does
+not transfer.
+
+Our parameters carry **`fed.k = 1`**, so the bond equals the assets and is **1.67× short**, not 3×
+short. **An earlier revision of this document said 3× and about $300k; the correct figures are 1.67×
+and about $180k.** Either `k` becomes 1.67 or the capacity figure is 1.67× too large. Neither is
+chosen.
 
 **And the `solBSV`-side bond devalues in exactly the scenario it is meant to protect against** —
 when the reserve is gone, `solBSV` is worth nothing, so seizing or burning it redistributes loss

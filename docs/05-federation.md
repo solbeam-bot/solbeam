@@ -60,7 +60,7 @@ residuals (a majority could seize an honest member's bond; the duty to slash is 
 doc 13, *The two bonds*.
 
 **The bond size is the scale limit, and that is stated rather than implied.** With `k = 1`, total
-value locked is capped by total bonds pledged. Ten members at 1,000 BSV is roughly **$300k** of
+value locked is capped by total bonds pledged. Ten members at 1,000 BSV is roughly **~$180k** of
 capacity. That is a proof of concept, and it is better to say so than to imply otherwise.
 
 ---

@@ -414,7 +414,7 @@ chose it.
 > `bonded stake  ≥  maximum mintable within one reorg window`
 
 **And the scale limit is the same number, stated rather than implied.** With `k = 1`, total value
-locked is capped by total bonds pledged: ten members at 1,000 BSV is roughly **$300k** of capacity.
+locked is capped by total bonds pledged: ten members at 1,000 BSV is roughly **~$180k** of capacity.
 That is a proof of concept. It also means the bound is **tight rather than generous** — at `k = 1`
 the bonds *equal* what a colluding threshold could take, not more than it. §What the bond answers
 says what that implies.

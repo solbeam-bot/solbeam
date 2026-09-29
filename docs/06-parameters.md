@@ -209,7 +209,7 @@ survived them.
 - **The fee is 30 bp to mint and 30 bp to redeem**, set by governance — not discovered.
 - **Capacity is capped by bonds pledged.** With `k = 1` each **two-sided bond** must cover what its
   side holds, so total value locked is bounded by total bonded capital. Ten members at 1,000 BSV is
-  roughly **$300k** — a proof of concept, stated plainly.
+  roughly **~$180k** — a proof of concept, stated plainly.
 
 There is no on-chain market, no matching and no liquidity mining. Any market for `solBSV` exists
 outside this system.
