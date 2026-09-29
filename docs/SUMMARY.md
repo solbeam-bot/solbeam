@@ -22,3 +22,4 @@
 * [19. The vault — instruction set](19-vault.md)
 * [20. The vault — revised](20-vault-revised.md) — *superseded by 21*
 * [21. The vault — structural redesign](21-vault-structural.md) — **current**
+* [22. The flow — every actor's journey](22-the-flow.md)
