@@ -98,7 +98,7 @@ This is where the trust model actually gets tested, and where the interesting fi
 | Play | What you try | Expected |
 |---|---|---|
 | `rogue-earmarked` | Take the float while a redemption you accepted is outstanding | The deadline **returns the escrow to the holder**; supply is unchanged, and the bond is **not** additionally transferred to a holder already made whole. The bond answers the deliberate theft — it does not top up a failed redemption. **Self-reporting** — no watcher needed. No failure path mints |
-| `rogue-naked` | Take an **idle** float with no redemption outstanding | Bounded by the float cap; the bond is seized **only if a challenger submits it**. Run it twice — once challenger active, once not — and confirm the honest residual: bounded but unpunished. This is the play that tests the least comfortable claim in [`docs/04-trust-model.md`](../docs/04-trust-model.md#the-naked-option-attack) |
+| `rogue-naked` | Spend reserve BSV with no redemption authorising it | **Provable on-chain**: the spending tx is submitted with a Merkle branch, and its outputs match no recorded payout. The bond is seized; the holder is made whole. *(Federation model — see [`23-federation.md`](../docs/23-federation.md))* |
 | `rogue-vanish` | Accept a job, then disappear | The escrow is **returned to the holder**; supply is unchanged; the bond is **not** additionally transferred. The bond makes deliberate abandonment punishable — it is not compensation for a failed redemption |
 | `rogue-underpay` | Pay less than owed | Proof cannot match; the deadline returns the escrow |
 | `rogue-refuse-unbond` | Exit mid-commitment to dodge a slash | Blocked by the unbonding period |

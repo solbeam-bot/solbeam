@@ -1,14 +1,82 @@
 # SOLBEAM
 
-**Atomic wrapper on Solana for BSV.**
+**A wrapped-BSV token on Solana, pegged one-for-one.**
 
-`solBSV` is a 1:1 wrapper for native BSV on Solana: minting is verified by a BSV light client running on Solana, and redemption is permissionless and bonded. In the finished design every mint lands in a **program-owned vault** first and is released only after maturity. A relayer is a role **anyone may run** — there is no privileged operator — and the program consults **no oracle**: it reacts only to BSV headers and Solana slots.
+One `solBSV` is always backed by one BSV in the reserve. **Peg only:** no exchange mechanism, no
+order book, no leverage. Branding **SOLBEAM**, ticker `solBSV`, 8 decimals, MIT.
+
+**The system has three parts:**
+
+1. **A light client on Solana** that verifies BSV itself. It holds a checkpoint and a rolling
+   window of **192** BSV headers, verifies proof of work against BSV's real difficulty rule
+   (**cw-144**, verified against **324/324** real mainnet headers) and verifies Merkle inclusion of
+   a transaction in a block.
+2. **A vault.** Every mint lands in a program-owned token account rather than the depositor's. It
+   leaves when the program is satisfied, and it can be burned if it isn't.
+3. **A bonded federation** holding the reserve under a **threshold key**, relaying headers, signing
+   payouts and challenging theft. **Open membership, 1,000 BSV bond**; members run software, not
+   judgement.
+
+## What is trustless, and what is not
+
+| | |
+|---|---|
+| **Minting** | **Trustless.** The program verifies BSV proof of work and Merkle inclusion directly. No signature, no committee and no oracle can mint anything |
+| **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone |
+| **The reserve** | **Trusted, and bounded.** The BSV is under a threshold key, so no single member can move it. What protects you is a **bond anyone can seize by proving misbehaviour on-chain** |
+
+**The one trust assumption: a threshold of federation members do not collude.** It is not
+eliminated; it is bounded — by bonds that exceed what the members could take, by an exit window
+that never closes, and by proofs anyone can submit.
+
+## Governance, and the floor that is an exit
+
+| | Default |
+|---|---|
+| **Who may propose** | Any member |
+| **To pass** | **85% of pledged coins** |
+| **Delay** | **30 days**, signalled live from the moment a proposal is raised |
+| **Includes** | **The upgrade authority** |
+| **Cannot touch** | **Redemptions. They are never pausable.** A pause stops **mints only** |
+
+**There is no immutable floor, deliberately.** A hostile change needs 85% *and* 30 days, and
+redemptions run throughout — so a proposal that would harm holders empties the bridge before it
+lands. **The floor is the exit window, not a constitution.** The residual, stated plainly: a holder
+who does not watch and does not act within 30 days is exposed.
+
+The fee is a **governed 30 bp**, not a discovered one. Slashing is **self-proving equivocation**:
+members sign payout intents individually, so a member who signs two conflicting intents has
+produced its own evidence, and anyone may submit it.
+
+## Where it stands
+
+**Built and tested:** the light client with cw-144, the `solBSV` token, the mint, and fork staging
+with chainwork — **20 on-chain tests**, **51/51** synthetic Phase 1A checks, **21/21** against a
+live SV Node. The window is **192 records of 52 bytes**, `SPACE` **10,103** of 10,240, a
+**32-hour** deposit lifetime. F7 (the retarget), P2 (the fork re-anchor), A7 (double-mint) and the
+window resize are all fixed in code.
+
+**Designed, not built:** the **vault**, the **federation** (threshold custody, governance,
+slashing) and **all of peg-out**. Those are a specification, not a property of the code; the
+shipped program mints straight to the depositor's token account.
+
+**Removed:** the order book and discovered fees, per-relayer independent keys, and the
+"no governance" posture.
+
+**Still open, and not dressed up:** the vault's design carries unfixed audit findings and is being
+re-audited against this model; the genesis bootstrap has no path (members bond `solBSV`, which
+does not exist until a mint happens); sharding the threshold key is undecided; the DAA is
+hard-coded; and F6, the replay-list ceiling, is a hard **200 peg-ins per 32-hour window**.
+
+**Nothing here is audited. Do not put money in it.**
 
 | | |
 |---|---|
 | Website | <https://solbeam.me> |
-| Documentation | [`docs/`](docs/README.md) — the GitBook; read this first |
-| Proof of concept | [`poc/`](poc/README.md) — throwaway test code, fixtures, scripts and the phased plan |
+| The model, in one document | [`docs/13-summary.md`](docs/13-summary.md) — read this first |
+| The federation in detail | [`docs/23-federation.md`](docs/23-federation.md) |
+| Documentation | [`docs/`](docs/README.md) — the GitBook |
+| Proof of concept | [`poc/`](poc/README.md) — test code, fixtures, scripts and the phased plan |
 | Licence | MIT |
 
 ---
@@ -17,36 +85,11 @@
 
 | Path | What it is |
 |---|---|
-| `docs/` | The project documentation. Trust model, relayers, parameters, roadmap, FAQ |
+| `docs/` | The project documentation. The model, the federation, trust model, parameters, roadmap, FAQ |
 | `website/` | The static site at `solbeam.me`. Deployed by a Cloudflare Worker named `solbeam-main`, configured by `wrangler.jsonc` at the repo root — see [`website/README.md`](website/README.md) |
-| `poc/` | The proof of concept: Python checkers, fixtures, scripts and the Phase 0–5 plan. Deliberately disposable — the production stack is a separate decision, made on the evidence this produces |
+| `poc/` | The proof of concept: Python checkers, fixtures, scripts and the phased plan. Deliberately disposable — the production stack is a separate decision, made on the evidence this produces |
+| `workstreams/` | Measurement workstreams. [`W1`](workstreams/W1-light-client-verification.md) closed the difficulty rule and the window resize |
 | `GITHUB_SETUP.md` | How this account, its keys and its deploy key are set up |
-
----
-
-## The claim, and its limits
-
-**Trustless in, trust-minimised out.**
-
-A BSV deposit is proved against proof of work and proof of inclusion, and the design places the mint in a program-owned vault rather than with the depositor. There is no attestor to bribe, no oracle to spoof, and no committee to capture — the program reacts only to BSV headers and Solana slots, and external metrics are published on the website and never consulted by it.
-
-Redemption needs a BSV signature, and BSV Script cannot verify Solana's consensus — so a key must exist somewhere. There is no pooled hot wallet: each relayer holds its own deposits and posts a bond in `solBSV` (the same asset as the exposure, so no price move can shrink it relative to what it protects). A relayer is a role anyone may run, so the design has **no privileged operator**, and the bond makes cheating **punishable**.
-
-Bonding can make cheating unprofitable. It cannot make it impossible, and it does nothing against someone who takes a relayer's key and never posted a bond. That is stated plainly, with its mitigations, in [`docs/04-trust-model.md`](docs/04-trust-model.md#the-naked-option-attack).
-
-**One limit worth naming here.** Trading is outside the protocol's control: if a fraudulent mint ever succeeded, the loss would land on whoever bought the unbacked token, and the protocol cannot compensate them — which is why the design stages every mint in the vault instead of releasing it at once.
-
----
-
-## Status — built vs designed
-
-**Early, and the split matters.**
-
-**Built and tested:** the light client, the `solBSV` token and the mint — **20 on-chain tests**, plus 21/21 checks against a live SV Node and the full Python checker suite. The shipped program mints straight to the depositor's token account.
-
-**Designed, not built:** the vault and its two gates, the order book, staking and bonds, per-relayer deposits, and **all of peg-out**. Those are a specification at this point, not a property of the code. See [`poc/TEST_PLAN.md`](poc/TEST_PLAN.md) §0 for the honest baseline and [`docs/14-decisions.md`](docs/14-decisions.md) for the settled decisions.
-
-Nothing here is audited. Do not put money in it.
 
 ---
 
@@ -56,7 +99,8 @@ Nothing here is audited. Do not put money in it.
 bash poc/checks/run_all.sh      # the BSV checker suite — needs only Python 3
 ```
 
-The checkers run anywhere Python runs. Two validate against live chain data over the network; the rest are offline.
+The checkers run anywhere Python runs. Two validate against live chain data over the network; the
+rest are offline.
 
 ---
 

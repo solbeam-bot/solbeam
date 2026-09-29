@@ -1,61 +1,104 @@
 # 2. How it works
 
-> **Built or specified?** The light client, the `solBSV` token and the mint exist today and pass
-> 20 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
-> designed, not built.** The program that ships mints straight to the depositor, so every step
-> below that depends on the vault is a specification rather than a description of running code.
-> [`13-summary.md`](13-summary.md) is the authoritative account; the reasoning is in
-> [`12-peg-mechanism.md`](12-peg-mechanism.md).
+> **Built or designed?** The built set is exactly four things: the **light client** (with cw-144
+> difficulty verification and Merkle inclusion), the **`solBSV` token**, the **mint**, and **fork
+> staging with chainwork**. That is **20 passing on-chain tests**, **51/51** synthetic BSV peg-in
+> checks (Phase 1A) and **324/324** real mainnet headers replayed exactly.
+>
+> **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
+> designed, not built.** Where this document describes them it is describing a specification, and
+> it says so. The shipped program mints straight to the depositor's token account.
+> [`13-summary.md`](13-summary.md) is the authoritative model; where this document and that one
+> disagree, that one is right.
+
+## Three parts
+
+```
+  1  A LIGHT CLIENT on Solana     verifies BSV proof of work (cw-144) and
+                                  Merkle inclusion. It holds no funds
+
+  2  A VAULT                      every mint lands here first, not with the
+                                  depositor. It leaves when the program is
+                                  satisfied, and it can be burned if it isn't
+
+  3  A FEDERATION                 bonded members who run nodes, relay headers,
+                                  hold the BSV reserve under a THRESHOLD key,
+                                  sign payouts and challenge theft
+```
+
+The division of trust is the design: **minting and reversal are trustless** — the program checks
+BSV proof of work itself and compares its own stored header hash — while the **reserve is trusted
+and bounded**, held under a threshold key that no single member can move, and protected by a bond
+anyone can seize by proving misbehaviour on-chain. The one assumption is that a threshold of
+members do not collude. [`04-trust-model.md`](04-trust-model.md) is the honest account of it.
+
+---
 
 ## The two directions
 
 ```
    PEG IN — BSV to solBSV                  PEG OUT — solBSV to BSV
 
-   1  send BSV + OP_RETURN                 1  escrow solBSV + a BSV address
-   2  wait the agreed depth                2  a relayer pays BSV and proves it
-   3  mint into the VAULT                  3  a challenge window follows
-   4  MATURE: release to you               4  success: burn the escrow, the
-      reorg first: burn the staged           relayer keeps the fee
-      tokens. Your BSV went with           failure: return the escrow.
-      the reorg, so you end where          Supply never changes.
-      you started.
+   1  send BSV + OP_RETURN                 1  escrow solBSV + a BSV destination
+   2  wait FLOOR = 12 confirmations        2  members sign payout INTENTS
+   3  mint into the VAULT, not to you         individually, on Solana
+   4  MATURE: 144 blocks                   3  the THRESHOLD KEY signs the BSV
+   5  RELEASE to you                          payment once enough intents exist
+      reorg first: the staged              4  SETTLE: the payout is proved
+      tokens BURN. Your BSV went               against the light client; the
+      with the reorg, so you end               escrow burns
+      where you started.                       or
+                                            4' CANCEL: after the deadline the
+                                               escrow returns to you
 ```
 
-Both directions have the same shape: **enter the vault, then leave it either to the
-counterparty or back to the sender.** A failure is a return, never a new mint.
-
-That is the whole of the user experience. Everything below is what happens underneath.
+Both directions have the same shape: **enter the vault, then leave it either to the counterparty
+or back to the sender.** A failure is a return, never a new mint. Supply is unchanged on every
+failure path.
 
 ---
 
 ## What it costs to run
 
-The light client is the only part of SOLBEAM that has to be kept alive continuously, so it is worth being precise about which of its costs actually recur.
+The light client is the only part of SOLBEAM that has to be kept alive continuously, so it is worth
+being precise about which of its costs actually recur. The figures below are measured constants
+rather than guesses; [`17-costs.md`](17-costs.md) carries the working.
 
 ### Storage is a one-time deposit, not a burn
 
-Solana charges rent-exemption up front, at roughly **5,080 lamports per byte**, and **the entire amount is returned when the account is closed**. It is a deposit, not a fee.
+Solana charges rent-exemption up front, at roughly **5,080 lamports per byte**, and **the entire
+amount is returned when the account is closed**. It is a deposit, not a fee.
 
 | | Size | One-time | at $77/SOL |
 |---|---|---|---|
-| Light client, 32-hour window | 10,103 B | 0.051 SOL | **$3.96** |
+| Light client, 192 records / 32 hours | **10,103 B** | 0.051 SOL | **$3.96** |
 | *(Solana's per-account creation ceiling)* | *10,240 B* | *0.053 SOL* | *$4.06* |
 
-A 24-hour window would be 144 records — 7,607 B — for about three-quarters of the rent. The 32-hour window is what is built, because the extra records buy eight more hours of reorg horizon — see below.
+The arithmetic is worth stating because it is what fixes the window:
 
-**This does not grow with the BSV chain, and that is the entire point of the rolling window.** If the client stored history instead, the same numbers would be:
+```
+LIGHT_CLIENT_FIXED = 119 bytes
+HEADER_RECORD_SIZE =  52 bytes   (32 hash + 16 chainwork + 4 time)
+SPACE              = 119 + 192 × 52 = 10,103   of 10,240  ->  137 bytes margin
+```
 
-| | Size | One-time | at $77/SOL |
-|---|---|---|---|
-| Every BSV header, 80 B each | 77 MB | 394 SOL | **$30,305** |
-| Every BSV block hash, 32 B each | 31 MB | 157 SOL | **$12,122** |
+**The 32-hour window is what fits, not what was chosen.** cw-144 needs per-block cumulative
+chainwork and time, which is 52 bytes a record rather than the 32 a bare hash took; 194 records is
+the arithmetic maximum and 192 leaves real margin. A 24-hour window (144 records) would fit
+comfortably but would shorten the reorg horizon, and cw-144's own lookback already consumes **147
+records**, so 192 is only 45 records of slack above the minimum.
 
-…and it would keep climbing forever. The window turns a cost that grows without bound into a fixed deposit of a few dollars — roughly a **3,000×** reduction, and permanently capped.
+**This does not grow with the BSV chain, and that is the entire point of the rolling window.** If
+the client stored history instead, the same numbers would be roughly **77 MB** for every 80-byte
+header (about **394 SOL**, or **$30,305** at $77/SOL) — and it would keep climbing forever. The
+window turns a cost that grows without bound into a fixed deposit of a few dollars: a
+**~3,000×** reduction, permanently capped.
 
 ### The recurring cost is transaction fees
 
-Every BSV block needs one header pushed, so the client costs **144 transactions a day — 52,560 a year.** Each is a single-signature transaction whose base fee is 5,000 lamports. The measured compute is about 4,571 CU, so priority fees stack on top:
+Every BSV block needs one header pushed, so the client costs **144 transactions a day — 52,560 a
+year.** Each is a single-signature transaction whose base fee is 5,000 lamports. The measured
+compute is about 4,571 CU, so priority fees stack on top:
 
 | Priority fee (µlamports/CU) | Fee per header | Per year | At $77/SOL |
 |---|---|---|---|
@@ -65,96 +108,156 @@ Every BSV block needs one header pushed, so the client costs **144 transactions 
 | 10,000,000 | 50,710 | 2.665 SOL | $205 |
 | 100,000,000 | 462,100 | 24.29 SOL | $1,870 |
 
-**Base fees are trivial; priority fees are the real variable.** Under congestion this is the number that matters, and it is beyond the protocol's control.
+**Base fees are trivial; priority fees are the real variable.** Under congestion this is the number
+that matters, and it is beyond the protocol's control.
 
-Two mitigations exist. Headers can be **batched**, since about 12 fit in one transaction: that cuts base fees to **$1.56/year**, at the cost of the client lagging about two hours behind the chain — acceptable, because a mint already waits out the confirmation depth the depositor chose, and then the maturity window on top. Batching does not reduce priority fees, which dominate.
+Two mitigations exist. Headers can be **batched**, since a 1232-byte transaction fits about **12** of
+them (the built constant `MAX_FORK_BATCH = 12` is that ceiling): that cuts base fees by an order of
+magnitude, at the cost of the client
+lagging about two hours behind the chain — acceptable, because a mint already waits out `FLOOR`
+(12 blocks, ~2 hours) and then `MATURITY` (144 blocks, ~24 hours) on top. Batching does not reduce
+priority fees, which dominate.
 
 ### Being parsimonious: what the window stores, and why
 
-An earlier layout kept a 32-byte block hash **and** a 32-byte Merkle root per header. The hash is what authenticates the header — but **the Merkle root is a field inside the header**, bytes 36 to 68 of the same 80 bytes the hash was computed from. Storing it separately was redundant: the hash already commits to it.
+An earlier layout kept a 32-byte block hash **and** a 32-byte Merkle root per header. The hash is
+what authenticates the header — but **the Merkle root is a field inside the header**, bytes 36 to
+68 of the same 80 bytes the hash was computed from. Storing it separately was redundant: the hash
+already commits to it.
 
-The window stores **no Merkle root**. A deposit claim carries the raw 80-byte header; the program checks `hash(supplied) == stored_hash[height]`, then reads the Merkle root straight out of it. That is 32 bytes saved per record — and the check is not optional, because without it a claimant could substitute a header of its own choosing and prove anything. There is a test for exactly that. The record itself is still **52 bytes** — block hash (32), cumulative chainwork (16) and timestamp (4) — because cw-144 needs the last two.
+The window stores **no Merkle root and no `bits`**. A deposit claim carries the raw 80-byte header;
+the program checks `hash(supplied) == stored_hash[height]`, then reads the Merkle root straight out
+of it. That check is not optional, because without it a claimant could substitute a header of its
+own choosing and prove anything — there is a test for exactly that. `bits` is deliberately not
+stored either: it is a re-encoding of the target the client recomputes anyway, so a stored copy
+could only agree with itself or hide a wrong target.
 
 | | Per header | Window | Account |
 |---|---|---|---|
-| Before | 64 B (hash + root) | 144 (24 h) | 9,322 B |
-| Now | **52 B (hash + chainwork + time)** | **192 (32 h)** | 10,103 B |
+| Earlier layout, before cw-144 | 32 B (hash only) | 288 (48 h) | 9,322 B |
+| **Now** — what the difficulty rule needs | **52 B (hash + chainwork + time)** | **192 (32 h)** | **10,103 B** |
 
-**The window is 32 hours, not 24** — the same account holds 192 records rather than 144, and the extra records are spent on reorg horizon rather than on margin.
+**The window had to shrink from 288 records to 192, and the reason is not storage economy.** The
+extra 20 bytes per record are what cw-144 consumes, and at 52 bytes 288 records would be 14,976
+bytes — 46% over the 10,240-byte cap, so `initialize` would simply revert. **The window is 32 hours,
+not 48**, and the lost sixteen hours are the difficulty rule's cost.
 
-A further step is possible — store only every Nth hash and have the claimant supply the handful of headers that bridge the gap — but it runs into the same 1232-byte transaction limit that constrains everything else here, and it buys storage the protocol does not currently need. Worth knowing about; not worth doing yet.
+A further step is possible — store only every Nth hash and have the claimant supply the handful of
+headers that bridge the gap — but it runs into the same 1232-byte transaction limit that constrains
+everything else here, and it buys storage the protocol does not currently need. Worth knowing
+about; not worth doing yet.
 
 ---
 
-## Peg-in — BSV → `solBSV` (trustless, permissionless)
+## Peg-in — BSV → `solBSV` (trustless)
 
 ```
   YOU                    BSV CHAIN                    SOLANA
    │                         │                           │
-   │  1. take terms from the book                        │
-   │     (liquidity, fee, depth)                         │
-   │  2. send BSV + OP_RETURN│                           │
-   │     (your Solana addr)  │                           │
+   │  1. send BSV + OP_RETURN│                           │
+   │     naming your Solana  │                           │
+   │     address             │                           │
    ├────────────────────────►│                           │
-   │                         │  3. wait the agreed depth │
+   │                         │  2. FLOOR = 12 blocks     │
+   │                         │     of confirmation       │
    │                         │                           │
-   │                         │  4. light client verifies │
-   │                         │     header + PoW + Merkle │
+   │                         │  3. light client verifies │
+   │                         │     header + cw-144 PoW   │
+   │                         │     + Merkle inclusion    │
    │                         ├──────────────────────────►│
-   │                         │                           │  5. mint into the VAULT
-   │                         │                           │     (not to you)
+   │                         │                           │  4. mint into the VAULT
+   │                         │                           │     (not to you), with the
+   │                         │                           │     deposit's block hash
+   │                         │                           │     recorded
    │                         │                           │
-   │                         │                           │  6. still canonical after
-   │                         │                           │     maturity?
-   │◄────────────────────────────────────────────────────┤     yes: released to you
-   │                         │                           │     no:  staged tokens burned
+   │                         │                           │  5. MATURITY: 144 blocks
+   │                         │                           │  6. RELEASE — permissionless
+   │◄────────────────────────────────────────────────────┤     hash still matches:
+   │                         │                           │       vault → you
+   │                         │                           │     hash differs (reorg):
+   │                         │                           │       staged tokens BURN
 ```
 
-1. **You take terms from the book.** An order book of underwriting lists what stakers will serve: how much liquidity, at what fee, waiting how many confirmations. You pick a bid. **Depth is a term of the trade, not a fixed number** — accept a longer wait and you should get a better rate, because that wait is less risk for whoever fronts the mint.
-2. **You send BSV** to that relayer's own script, attaching an `OP_RETURN` that carries your Solana address and the depth you agreed. There is **no shared bridge address**: each relayer receives its own deposits, so there is no single key whose theft drains the system. (BSV's data-carrier limit is effectively unlimited, so this is a normal transaction.)
-3. **The agreed depth passes**, measured in block time from the BSV headers — never against a wall clock.
-4. **The light client proves it.** A BSV light client running on Solana verifies the 80-byte header, its proof-of-work against the difficulty target, the header chain linkage, and the Merkle branch showing your transaction is in that block.
-5. **`solBSV` is minted into the vault, not to you.** The tokens exist, but they are not yet yours to spend: they sit in a token account the program owns.
-6. **The vault releases after maturity.** Once a maturity window passes with your deposit's block still canonical, the tokens are released to the address you named. If a reorg is followed first, the staged tokens are **burned** instead — and your BSV went back with the reorg, so you end exactly where you started.
+1. **You send BSV** to the federation's deposit script, attaching an `OP_RETURN` that carries your
+   Solana address. The design carries `version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient` so
+   a payload is bound to this program and this cluster; **the built program checks only that the
+   recipient's 32 bytes appear in an `OP_RETURN` in the same transaction**, which is what makes a
+   deposit non-transferable between claims.
+2. **You wait `FLOOR` — 12 BSV blocks**, about two hours, measured in *block time from the BSV
+   headers*, never against a wall clock. **12 is a floor, not a price**: the deposit waits at least
+   this long, and the design permits longer.
+3. **The light client proves it.** The program verifies the 80-byte header's hash against its own
+   stored window, the proof of work under **cw-144**, the header chain linkage, and the Merkle
+   branch showing your transaction is in that block. No signature, committee or oracle is involved:
+   **the proof is the authorisation**, and anyone may submit it for anyone.
+4. **`solBSV` is minted into the vault, not to you.** The tokens exist, but they are not yet yours
+   to spend: they sit in an account the program owns, and the record stores **the block hash the
+   deposit was proven against**. That stored hash is what makes the next step decidable without
+   asking anybody.
+5. **Maturity: 144 blocks.** The staged mint waits.
+6. **Release is permissionless.** Anyone may call it, and it requires two things of the program's
+   own state: the tip has **advanced past** the deposit, and the hash the client now stores **at
+   that height still matches** the recorded one. If it matches, the vault pays you. If it differs,
+   the deposit was reorged: the staged tokens **burn**, and your BSV went back with the reorg, so
+   you end exactly where you started. `release_mint` and `burn_staged` are both permissionless, so
+   **no party's cooperation is ever required**, and a resolver reclaims the item's rent.
 
-No one approves this. There is no oracle, no attestor, no committee vote. **The proof is the authorisation.** Anyone can do it, for anyone, at any time.
+**Step 4 is what makes a fraudulent mint unsellable.** A staged token is not in anyone's wallet, so
+there is nothing to dump and no innocent buyer to inherit the loss.
+
+### The honest cliff
+
+The block must still be inside the client's window when the proof is submitted, and the window is
+**32 hours**. A deposit nobody proves within that time can never be proven, and the BSV is with the
+federation. That is a real failure mode, disclosed rather than dressed up; the wallet-side app is
+what mitigates it by minting automatically.
 
 ---
 
-## Peg-out — `solBSV` → BSV (permissionless, optimistic)
+## Peg-out — `solBSV` → BSV (threshold-signed, verifiable)
 
 ```
   YOU                    SOLANA                       BSV CHAIN
    │                         │                           │
-   │  1. escrow solBSV       │                           │
-   │     into the VAULT      │                           │
-   │     + BSV destination   │                           │
+   │  1. escrow solBSV into  │                           │
+   │     the VAULT, naming a │                           │
+   │     BSV destination and │                           │
+   │     a deadline          │                           │
    ├────────────────────────►│                           │
-   │                         │  2. a relayer whose bond  │
-   │                         │     covers it accepts     │
+   │                         │  2. members sign payout   │
+   │                         │     INTENTS individually, │
+   │                         │     on Solana. Each is    │
+   │                         │     attributed on record  │
    │                         │                           │
-   │                         │  3. the relayer pays BSV  │
+   │                         │  3. once enough intents   │
    │                         ├──────────────────────────►│
-   │                         │     and proves the payout │
+   │                         │     exist, the THRESHOLD  │
+   │                         │     KEY signs the payment │
+   │                         │                           │
+   │                         │  4. the payout is PROVED  │
    │                         │     against the light     │
-   │                         │     client                │
+   │                         │     client: the escrow    │
+   │                         │     burns                 │
    │                         │                           │
-   │                         │  4. a challenge window    │
-   │                         │     follows; a reorged    │
-   │                         │     payout is caught here │
-   │                         │                           │
-   │  5. success: escrow     │                           │
-   │     burned, relayer     │                           │
-   │     keeps the fee       │                           │
-   │     failure: escrow ◄───┤                           │
-   │     returned to you     │                           │
+   │  5. or CANCEL — permissionless after the deadline:   │
+   │     the escrow returns to you                   ◄────┤
 ```
 
-1. **You escrow `solBSV` into the vault** and name the BSV address you want paid. The escrow and the destination are recorded in the bridge program — native Solana state, so nothing needs proving.
-2. **A relayer whose bond covers the amount accepts the request.** Any relayer may; this is underwriting rather than permission, and it is why the bond is denominated in `solBSV`.
-3. **The relayer pays you BSV and proves it.** It has a deadline measured in Solana slots — so a cluster halt freezes the clock rather than burning a relayer that could not act. It then submits the BSV transaction with an SPV proof; the program verifies the payout against the light client and checks the amount and destination match your request.
-4. **A challenge window follows**, during which a payout that a later reorg removes can be caught.
-5. **Settlement.** On success the escrowed `solBSV` is **burned** and the relayer keeps the fee. On failure the escrow is **returned to you**. Supply is unchanged either way: no failure path mints.
+1. **You escrow `solBSV` into the vault** and name the BSV destination and a deadline. The escrow
+   and the destination are native Solana state, so nothing needs proving.
+2. **Members sign payout intents individually**, on Solana. This is the attribution mechanism:
+   because each member signs separately, a member who signs two conflicting intents has produced
+   **their own proof of guilt** — see [Slashing](04-trust-model.md#slashing--self-proving-misbehaviour).
+3. **Once enough attributed intents exist, the threshold key signs the BSV payment.** The reserve is
+   under a threshold key, so this needs a quorum and **no single member can move it**.
+4. **Settlement is proved, not asserted.** The payout transaction is proved against the light
+   client — inclusion and amount — and the escrow **burns**. Unlike a report from a signer, this is
+   something the program can check.
+5. **Failure returns; it never mints.** After the deadline, `cancel` is **permissionless** and the
+   escrow returns to you. Supply is unchanged and you are whole without asking anyone.
+
+**Steps 2–5 are designed, not built.** Peg-out is the half of the system that no code yet
+implements; only the mint direction runs.
 
 ---
 
@@ -162,22 +265,35 @@ No one approves this. There is no oracle, no attestor, no committee vote. **The 
 
 | | |
 |---|---|
-| **Peg-in latency** | The agreed depth — 12 BSV blocks minimum, about two hours — plus the maturity window |
-| **Peg-out latency** | The relayer's deadline, in slots, plus the challenge window; usually much less |
-| **Fees** | Discovered on the order book, published, and paid to whoever underwrites the trade |
-| **Who approves you** | Peg-in: nobody. Peg-out: any relayer may take the request — underwriting, not permission |
+| **Peg-in latency** | `FLOOR` — 12 BSV blocks, about two hours — plus `MATURITY` at 144 blocks, about a day |
+| **Peg-out latency** | The federation's signing and the payout, plus the proof; usually much less, but it is a design target rather than a measurement |
+| **Fees** | **30 bp, governed** — on both directions. There is no order book and no discovered fee |
+| **Who approves you** | Peg-in: nobody. Peg-out: a quorum of the federation signs, and each signature is on record |
 | **What you need** | A BSV wallet and a Solana wallet |
 
-## Why the wait exists
+## Why the waits exist
 
-The waits are not arbitrary, and they now come from the market rather than a constant:
+- **Depth (`FLOOR`) sets the cost of attacking.** A reorg must out-mine 12 honest blocks to undo a
+  deposit, which is what makes the fraud expensive rather than free.
+- **Maturity (`MATURITY`) sets the time available to detect.** The tokens sit staged long enough for
+  honest headers to be pushed and an orphan noticed. Detect it and the staged tokens burn; the
+  deposit itself already went back with the reorg.
+- **The vault makes a detected fraud a non-event.** Because the tokens were never in a wallet,
+  burning them removes supply that was never sold.
 
-- **On the way in**, depth is what makes a reorg expensive — an attacker has to out-mine it — while maturity is what makes a reorg visible. The tokens are staged in the vault long enough for honest headers to be pushed and an orphan noticed. Detect it and the staged tokens are burned; the deposit itself already went back with the reorg.
-- **On the way out**, the challenge window gives the network time to see a payout and for any challenge to be raised before settlement is final.
+Everything is measured on a chain: depth and block time from BSV headers, deadlines from Solana
+slots. **A Solana cluster halt freezes a deadline rather than punishing anyone who could not act.**
 
-`FLOOR` — twelve blocks — remains as a backstop under the book, so no trade can commit to a depth so shallow that the attack is cheap. Everything is measured on a chain: depth and block time from BSV headers, deadlines from Solana slots.
+## What this document's predecessor said
 
-If you want speed without a wrapper, the market layer handles it: `solBSV` trades on Raydium/Orca, so you can buy and sell at Solana speed while peg-in and peg-out handle the edges.
+This chapter previously described **per-relayer deposit scripts, an order book of staked bids, and
+a fee discovered on it**. All three are **superseded**: deposits now pay one federation deposit
+script, the order book is removed, and the fee is a governed **30 bp**. The reasoning is in
+[`23-federation.md`](23-federation.md) §What this replaces. The old model's "depth is a term of the
+bid" survives only as `FLOOR` plus the fact that the design permits deeper waits.
+
+If you want speed without a wrapper, the market layer handles it: `solBSV` trades on
+Raydium/Orca, so you can buy and sell at Solana speed while peg-in and peg-out handle the edges.
 
 ---
 

@@ -45,6 +45,8 @@ could take, and by proofs anyone can submit.
 1  CHOOSE    terms; the fee is 30 bp, governed
 2  SEND      BSV to the federation's deposit script
              OP_RETURN = version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient
+             (design. What is BUILT checks only that the recipient's 32 bytes appear in an
+              OP_RETURN — see lib.rs. The longer form is the cross-deployment fix, P11, not built)
 3  DEPTH     12 confirmations (FLOOR)
 4  STAGE     solBSV is minted INTO THE VAULT, not to the depositor, and a record stores
              the block hash the deposit was proven against
@@ -170,6 +172,12 @@ headers; deadlines come from Solana slots.
 | **Federation** | **Designed, not built.** Threshold custody, governance, slashing |
 | **Peg-out** | **Designed, not built** |
 | **Order book** | **Removed.** A governed 30 bp fee replaces it |
+
+**A ceiling worth naming:** the built program caps the used-deposit list at `MAX_USED = 200` per
+window, which bounds peg-ins to 200 per 32 hours *with no attacker at all*. **Decision P5 replaces
+that list with a nullifier per minted deposit, removing the ceiling** — decided, not built. Until it
+is, a volume spike cannot be served, which bounds the "redemptions never pause" story from the
+peg-in side.
 
 **Open, and not dressed up:** the vault's design has failed two audits; the genesis bootstrap has no
 path (members bond `solBSV`, which does not exist until a mint happens); sharding is undecided; and

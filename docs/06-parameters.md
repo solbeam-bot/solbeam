@@ -1,178 +1,195 @@
 # 6. Parameters & governance
 
-> **Specification, not shipped behaviour.** The light client, the token, the mint and fork
-> staging are **built and tested** (20 on-chain tests). **The vault, the two gates, maturity, the
-> order book, staking, bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a
-> distinct parameter and all of peg-out are designed and not built.** The difficulty retarget is
-> **implemented** — cw-144, verified against 324/324 real mainnet headers (open item X3: the rule
-> is hard-coded and BSV may change it). The shipped program mints straight to the
-> depositor's token account, so the parameters below that depend on the vault or on a book are,
-> at this moment, a specification rather than a property of the code.
+> **Most of this is a specification, not shipped behaviour.** The built set is exactly four things:
+> the **light client** (cw-144 difficulty verification and Merkle inclusion), the **`solBSV`**
+> **token**, the **mint**, and **fork staging with chainwork** — 20 passing on-chain tests.
+> **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
+> designed and not built.** Nothing here is settable at runtime today: the only parameter in the
+> shipped program is `MIN_CONFIRMATIONS = 12`, **fixed in code**. [`13-summary.md`](13-summary.md)
+> is the authoritative model; where this document and that one disagree, that one is right.
 
-## Launch parameters
+## The parameters
 
-These are the parameters of the two-gate design, with the stable IDs from
-[`12-peg-mechanism.md` §Parameters](12-peg-mechanism.md#parameters). A **safety** parameter is
-one that bounds a fraud; an **economic** parameter sets price and size. The distinction is
-load-bearing, because the two classes cannot be governed the same way — see §Changing
-parameters.
+The defaults below come from [`13-summary.md`](13-summary.md) and
+[`23-federation.md`](23-federation.md). **All of them are parameters rather than constants** — that
+is the point of the governance design — except where the note says otherwise.
 
-| ID | Parameter | Proposed | Class | Why |
-|---|---|---|---|---|
-| **P1** | `FLOOR` — minimum confirmation depth | **12 BSV blocks** (~2 h) | **safety** | The hard bound. Depositors and bids may commit to *more*, never less. **Fixed in code for the PoC** (D4) |
-| **P2** | `C_payout` — payout confirmations | **12 BSV blocks** | **safety** | Depth a relayer must reach before it may claim a redemption was paid |
-| **P3** | `D` — redemption deadline | **6 h of Solana slots** | liveness | Measured in **slots**, not wall-clock, so a cluster halt freezes the clock rather than burning the relayer who could not act |
-| **P4** | `W` — challenge window | **24 h** | **safety** | Must exceed the reorg risk on the payout; a reorged payout is caught here |
-| **P5** | `RECENT_REORG_WINDOW` | **12 h** | **safety** | Intended as depth-aware: a reorg of depth `R ≥ FLOOR` would pause releases, `R < FLOOR` is ordinary tip churn and is ignored. **Whether it is enforced as an on-chain gate or merely monitored and published is a known open item** — it is a safety parameter either way, and this document does not assert which until that is decided |
-| **P6** | `TIP_STALENESS` | **2 h** | **safety** | Pause if the tip stops advancing. The one signal that needs a wall clock, and only for "now" |
-| **P7** | `MIN_PEG_IN` | **10 BSV** | economic | Fee economics, dust and spam. Unimplemented (A9) |
-| **P8** | `MAX_PEG_IN` | **10,000 BSV** | economic | Per *transaction* only. It does **not** bound a reorg — see §The limit that does not bound a reorg |
-| **P9** | `MAX_PEG_OUT` | **10,000 BSV** | economic | Also bounded by live capacity: a redemption is refused unless some relayer with sufficient bond accepts it |
-| **P10** | `HOT_FLOAT_CAP` | config | **safety** | The real bound on what a *successful* fraudulent mint can extract. With per-relayer deposits it is each relayer's own float, not a system hot wallet |
-| — | bond `k` | `k = 1` (D5) | **safety** | **`bond_R ≥ k × owed_R`**, where `owed_R` accumulates from proofs the program verified itself. Since `bond_R` is `solBSV` the program holds, the inequality is checkable on-chain |
+| Parameter | Default | Class | What it does |
+|---|---|---|---|
+| **Mint fee** | **30 bp**, governed | economic | Replaces the discovered order-book fee (D2, superseded) |
+| **Redeem fee** | **30 bp**, governed | economic | Same fee in the other direction |
+| **Bond** | **1,000 BSV**, posted as `solBSV` | **safety** | Open-membership gate; must be seizable on Solana, which is why it is not posted in BSV |
+| **Bond multiple `k`** | **1** | **safety** | `bond ≥ k × owed`. At `k = 1` the bond covers the credited liability in full and no more |
+| **Governance threshold** | **85% of pledged coins** | **safety** | The proposal bar |
+| **Governance delay** | **30 days** | **safety** | Signal time between passing and taking effect. **This is the exit window** |
+| **Signal** | **live from the moment it is raised** | **safety** | The proposal is visible while it is only a proposal |
+| **Governance scope** | **includes the upgrade authority** | **safety** | There is no immutable floor; the exit window is the floor |
+| **Pause** | mints only; majority threshold; lifts after N days | **safety** | **Redemptions can never be paused.** Pausing inbound is a safety valve; pausing outbound is taking hostages |
+| **`FLOOR`** | **12 BSV blocks** (~2 h) | **safety** | Minimum confirmation depth before a deposit may be minted. Settable in the design; **fixed as `MIN_CONFIRMATIONS = 12` in the built code** |
+| **`MATURITY`** | **144 blocks** (~24 h) | **safety** | How long a staged mint waits before it can be released |
+| **`WINDOW`** | **192 records / 32 h** | **fixed by arithmetic** | How far back the light client can prove anything at all |
+| **DAA** | **cw-144** as specified | **safety** | Governable in the design, so a BSV rule change is a vote; **hard-coded in the built program (X3)** |
+| **Unbonding period** | — | **safety** | Must outlast the payout deadline, or a member can take a job and leave |
+| **Challenge bounty share** | — | economic | Unspecified; see §Open parameters |
 
-**Depth and maturity are different parameters**, and both are needed. **Depth** sets the cost of
-attacking — a reorg must out-mine `FLOOR`. **Maturity** sets the time available to detect. A low
-floor makes attacks cheap and therefore frequent, raising the number of chances for a detection
-failure to slip through. `FLOOR` is a backstop beneath a market term, not a price: the depth a
-deposit actually waits is a **term of the bid**, committed in the deposit's `OP_RETURN`, and the
-program enforces both `confirmations ≥ committed_depth` and `committed_depth ≥ FLOOR`.
+**A safety parameter bounds a fraud; an economic parameter sets price and size.** The distinction is
+load-bearing where it comes to governance: whoever can set `FLOOR = 0` or `WINDOW = 0` holds a mint
+voucher, and whoever can pause redemptions holds the reserve hostage. That is why **redemptions are
+outside governance's reach entirely** rather than merely subject to a supermajority.
 
-**Safety parameters may only be moved in the conservative direction** — a rule for the deferred
-governance design, not a description of anything that exists (D7). Whoever can set
-`FLOOR = 0` or `RECENT_REORG_WINDOW = 0` holds a mint voucher; that is categorically different
-from whoever sets a fee. Loosening a safety parameter should require shipping a new program, not
-flipping a flag.
+### How the safety parameters actually protect
 
-**Test overrides are compile-time, not config.** "Remove the minimum during testing" must be a
-`#[cfg(feature = …)]`, never a runtime value — a runtime value can leak to mainnet, a
-compile-time one cannot. (G6 is the genesis equivalent.)
+The old model's answer was "safety parameters may only be moved in the conservative direction". The
+new model's answer is different, and it is the more important change in this chapter:
 
-## The limit that does not bound a reorg
+**There is no immutable floor. The floor is the exit window.**
 
-`MAX_PEG_IN` bounds one transaction. A BSV block holds thousands of transactions, so an attacker
-filling a fraudulent branch with many deposits slips under any per-transaction limit. The bound
-that works is an **aggregate cap per window** (`MAX_MINT_PER_WINDOW`), and it is set
-conservatively as policy rather than derived, because deriving it needs a BSV price feed and a
-hashpower-rental feed — exactly the oracles the design excludes.
+A change needs **85% of pledged coins** and takes **30 days**, with the proposal signalled **live
+from the moment it is raised** — and **redemptions run throughout, because they can never be
+paused**. So a proposal that would harm holders does not trap them: it **empties the bridge before it
+lands.** By the time it takes effect there is nothing left to take.
 
-It is a coarse backstop beneath the two bounds that need no oracle at all:
+**The residual, stated plainly:** a holder who does not watch and does not act within 30 days is
+exposed. That is a disclosure obligation, not a mechanism.
 
-- **`FLOOR` set high**, which is what makes out-mining the honest chain expensive;
-- **the hot float cap**, which limits what a *successful* attack can actually extract.
+## The parameters that are arithmetic, not choices
 
-Note the honest limit on all of it: the BSV-side buffer is off-chain, so
-`staked buffer ≥ maximum mintable within one reorg window` is **tracked, not verified**. Per
-relayer, `owed_R` and the seizable `bond_R` are the parts the program can measure; the BSV behind
-them is not.
+Two numbers are worth separating from the rest, because they are not policy and cannot be governed
+into being different. They are measured facts about the built client:
 
-### A caution on the stablecoin bond
+```
+WINDOW              = 192 records  = 32 hours at 600 s/block
+HEADER_RECORD_SIZE  =  52 bytes    (32 hash + 16 chainwork + 4 time)
+LIGHT_CLIENT_FIXED  = 119 bytes
+SPACE               = 119 + 192 × 52 = 10,103   of 10,240  ->  137 bytes margin
+LOOKBACK            = 147 records  (144 + 3 for cw-144's median-of-three)
+```
 
-An early draft specified the bond as a **stable unit (e.g. USDC)**, matched to a BSV exposure by a
-price governor, and sized it against a notional hot float plus a covenant tranche
-(`bond ≥ k × (hot float + releasable tranche)`). That was wrong on both counts, and it is worth
-recording why rather than quietly editing it.
+- **52 bytes a record, not 32.** cw-144 subtracts two cumulative chainworks and two timestamps 144
+  blocks apart, so a record must carry hash, chainwork and time. A bare-hash window cannot verify
+  the difficulty rule at all.
+- **147 records of lookback**, so 192 is only 45 records of slack above the minimum.
+- **194 is the arithmetic maximum** (10,207 bytes, 33 bytes of margin); **192 is the largest window
+  with real margin.** A 48-hour window would be 288 × 52 = 14,976 bytes plus overhead, 46% over the
+  cap, and `initialize` would simply revert. **The old 48-hour deposit deadline was never
+  achievable.**
 
-A stablecoin bond against a BSV liability is a **written call option on the reserve, struck at
-`bond ÷ float`**. Post `$500k` against `10,000 BSV` and the relayer is short `5,000 BSV`; at `$100`
-the option is in the money and absconding is the rational trade. Worse, the attacker does not need
-to time the move — a large holder can help the price along and manufacture the strike. A price
-governor cannot fix a written option: it is reactive, it needs an oracle, and the window between
-the move and the throttle *is* the trade. Denominate the bond in `solBSV`.
+**Consequence, and it is a product decision rather than a detail:** the deposit lifetime is **32
+hours**, down from the 48 the earlier design assumed. A deposit whose block has left the window can
+never be proven again.
 
-The second error was the **pooled hot float and covenant tranche** the old formula was sized
-against. That object no longer exists: deposits pay a relayer's own script, so there is no shared
-reserve to bound, and the constraint moved to `bond_R ≥ k × owed_R` per relayer. `k = 1` is
-defensible because `solBSV` and BSV are the same asset, so any deviation is an arbitrage and
-closes — no price margin is needed. `k` is a **sizing multiple on `owed_R`**, not a discount for a
-hoped-for detection probability: the measured liability is what sets the required collateral. The
-recorded consequence is that at `k = 1` a self-dealing attack is roughly break-even,
-and what makes it unprofitable is the **mining cost of the reorg**, not the bond (D5). The bond's
-job is covering an honest relayer's shortfall.
+## Security parameters, and the one that is a market
 
-The launch numbers will be conservative: low per-transaction limits, a small float cap, modest
-bonds. They rise as the system earns trust.
+The old design made **depth a term of the bid**, priced on an order book. **That is superseded.**
+Depth is now a protocol parameter:
 
-## Changing parameters as the system grows
+- **`FLOOR` = 12 blocks** is the minimum. It makes a reorg cost real mining work to undo a deposit;
+  a low floor makes attacks cheap and therefore frequent, raising the number of chances for a
+  detection failure to slip through.
+- **`MATURITY` = 144 blocks** sets the time available to detect. A staged mint is released only once
+  the tip has advanced past the deposit **and** the hash the client stores at that height still
+  matches the one recorded when the deposit was proven. If it differs, the deposit was reorged and
+  the staged tokens **burn**.
+- **`WINDOW` = 32 hours** bounds the reorg the client can see at all. Beyond it, a reorg is not
+  detectable *by definition*, because the client no longer holds the header.
 
-**There is no governance mechanism in the PoC at all** (D7). This is a decision rather than an
-omission: the PoC ships without any vote, multisig or timelock, and the details are to be figured
-out on review once the system is better understood and demonstrably working. **The upgrade path
-is a named gap** — recorded in
-[`14-decisions.md` §Deferred to final implementation](14-decisions.md#deferred-to-final-implementation)
-so it cannot be quietly forgotten.
+The bounds that need no oracle are exactly these: a high `FLOOR` makes out-mining expensive, and the
+vault means a *successful* fraud mints tokens that are **not in anyone's wallet** — there is nothing
+to dump and no innocent buyer to inherit the loss.
 
-What the earlier draft described here was a timelocked team multisig with a published change log,
-a 24–48 hour on-chain delay, and an emergency pause. **None of that is built, and it is not the
-PoC's position.** The reasons to be careful about it survive the rewrite:
+**The honest limit:** the reserve is off-chain BSV the program cannot read, so `custodied BSV ≥
+outstanding solBSV` is **tracked, not verified** (D8). What the program *can* compare is `bond ≥
+k × owed`, since both are `solBSV` quantities it holds or measures.
 
-- **Safety parameters are not freely loosenable.** Whoever can vote `FLOOR` down toward zero
-  holds a mint voucher, and no amount of deliberation makes that safe. The reconciling rule is
-  **increase-only under governance**: a vote can make the protocol more conservative at any time,
-  while making it *less* conservative means shipping a new program. That is a proposal for the
-  deferred design, not a shipped power — there is nothing to vote with yet.
-- **The program upgrade authority overrides every parameter** (A5). It is an unconditional mint
-  voucher, it is out of scope for the PoC, and it is recorded rather than hidden. The fix is
-  governance, possibly tied to staking.
-- **A change must be disclosed before someone transacts.** A user should be able to see `FLOOR`,
-  the caps and the float limit before they peg in. Published, the external metrics — BSV price,
-  estimated reorg cost, hashrate, observed block rate — are information; consulted by the program,
-  they would be oracles. Display anything; decide on nothing external.
+## What the program can and cannot see
 
-## Deferred, and named so it is not lost
-
-| Deferred | From | Note |
+| Quantity | Where it lives | How the program treats it |
 |---|---|---|
-| **Governance, generally** | D7 | Absent by decision, not by accident. No vote, no multisig, no timelock exists in the PoC |
-| **The `FLOOR` change mechanism** | D4 | Voting, or the stakers. `FLOOR` is fixed in code for now |
-| **Bounding the unbacked peg-in** | D6 | A peg-in may proceed with **no underwriter at all**, explicitly: whoever does so accepts the risk of a system with nobody watching while liquidity is seeded. It could be bounded later — expiring it after `n + 1000` blocks, or restricting it to a designated initial LP address. Neither is needed now; both need writing down |
-| **The open-staking upgrade path** | D1 | Specialists first; anyone-may-stake is a phase-2 goal the design must carry from the start |
-| **An independent audit** | — | The critical defects found so far were found by our own adversarial review |
+| BSV headers, chainwork, time | On Solana, in the light client | **Verified.** cw-144 replay, 324/324 real mainnet headers exact |
+| Deposit inclusion | Proved against the light client | **Verified** — proof of work and Merkle branch |
+| Deposit's block hash | Stored when the deposit is proven | **Compared later**, to decide release vs burn. No reporter |
+| Deadline | Solana slots | **Read natively.** A cluster halt freezes the clock; it does not burn anyone |
+| `owed` and the bond | On Solana, `solBSV` | **Compared on-chain**: `bond ≥ k × owed` |
+| The BSV reserve itself | Off-chain, under a threshold key | **Not readable.** Monitored and published, not enforced |
+| Price, hashrate, reorg cost | Off-chain | **Never consulted.** Published as information; deciding on them would make them oracles |
 
-The off-chain **reserve invariant** is monitored, not enforced (D8):
-`custodied BSV ≥ outstanding solBSV` is published and shown as a ratio, and the protocol cannot
-enforce it, because the reserve is off-chain BSV the program cannot read.
+## What was specified before, and is now superseded
 
-## Wind-down and LP exit
+The previous version of this chapter carried a stable of IDs — `P1`–`P10`, `FLOOR` as fixed-in-code
+(D4), `k = 1` (D5), "no governance at all" (D7), the reserve invariant as monitored (D8) — under a
+two-gate, per-relayer, order-book model. That model is **superseded**, and the table below records
+what became of each rather than rewriting it silently.
 
-There is no pooled reserve, and therefore no covenant to accelerate and no tranche schedule to
-open. Each relayer holds its own BSV, so "wind-down" is not one switch: a relayer stops accepting
-redemptions, its `owed_R` runs off as requests settle, and its bond — `solBSV` the program holds —
-is released only after its unbonding period. `solBSV` holders are unaffected throughout, because
-redemption does not depend on any one relayer: any bonded relayer may pay.
+| Old ID | Old content | Now |
+|---|---|---|
+| **P1** | `FLOOR` = 12 BSV blocks, fixed in code for the PoC | **Kept as the default**, but it is a **governable parameter**, not fixed — except that the built code has `MIN_CONFIRMATIONS = 12` and no setter |
+| **P2** | `C_payout` = 12 payout confirmations | **Superseded.** Payouts settle against the light client after a challenge window; the number is not yet specified |
+| **P3** | Redemption deadline = 6 h of Solana slots | **Superseded.** The deadline is set per redemption by the holder; the default is unspecified |
+| **P4** | Challenge window = 24 h | **Superseded.** The payout challenge/`MATURITY` design settles this; no default is specified |
+| **P5** | `RECENT_REORG_WINDOW` = 12 h, enforced-or-monitored undecided | **Superseded.** The vault compares stored hashes; there is no separate window parameter |
+| **P6** | `TIP_STALENESS` = 2 h | **Superseded** as a parameter; `set_paused` is the built authority-gated safety valve when the tip stops advancing |
+| **P7** | `MIN_PEG_IN` = 10 BSV | **Superseded** — an economic parameter, no longer specified |
+| **P8** | `MAX_PEG_IN` = 10,000 BSV | **Superseded.** The real bound is the bond: total value locked is capped by total bonds pledged |
+| **P9** | `MAX_PEG_OUT` = 10,000 BSV | **Superseded.** A redemption is bounded by the reserve and the payout path, not a per-transaction number |
+| **P10** | `HOT_FLOAT_CAP` | **Removed with the pooled float.** There is one reserve under a threshold key, and the bond is the bound |
+| **—** | bond `k` = 1 (D5) | **Kept.** `bond ≥ k × owed`, `k = 1`, and it is governable |
+| **D4** | `FLOOR` fixed in code | **Superseded.** The default is 12; the mechanism is governance |
+| **D7** | No governance in the PoC | **Superseded.** 85% / 30 days / live signal, holding the upgrade authority |
+| **D8** | Reserve invariant monitored, not enforced | **Kept**, and it is the honest residual |
 
-**The honest caveat**, unchanged in substance: whether the last BSV is actually paid depends on
-relayers honouring requests, and a relayer that simply stops is handled by returning the escrow to
-the holder rather than by a covenant. That keeps the exit open but does not make it final — the
-roadmap target in [Trust model](04-trust-model.md) is what would.
+**Two of the old reasons survive verbatim, because they were right:**
 
-### Entry is fast; exit is slow
+- **A stablecoin bond is a written call option on the reserve.** Post `$500k` against `10,000 BSV`
+  and the member is short `5,000 BSV`; at `$100` the option is in the money, and absconding becomes
+  the rational trade. A price governor cannot fix a written option — it is reactive, it needs an
+  oracle, and the window between the move and the throttle *is* the trade. **Denominate the bond in
+  `solBSV`.** That removes the position instead of hedging it, and it is also what makes `bond ≥
+  k × owed` checkable on-chain with nothing external consulted.
+- **A change must be disclosed before someone transacts.** A holder should be able to see the fee,
+  `FLOOR`, `MATURITY` and the bond before they peg in. Published, the external metrics are
+  information; consulted by the program, they would be oracles.
 
-This is worth stating plainly, because it is a deliberate choice rather than an oversight. The
-system is **easy to enter and slow to leave**. Peg-in is trustless once the deposit is deep enough.
-Exit is bounded at three separate points: the per-transaction and capacity limits cap how much can
-be requested at once, `D` and `W` cap how long a payout may take, and the unbonding period limits
-how fast relayer capital can leave. So a large holder cannot pull its whole position out in one
-move, and a relayer cannot recycle its bond quickly. That is the same machinery that protects
-holders, and it is why relayer capital has to be genuinely long-term. The asymmetry is acceptable
-for one reason: **the fast direction is the one that needs no trusted party**, and the slow
-direction is the one where trust has to be substituted with collateral.
+**One old reason does not survive:** "loosening a safety parameter should require shipping a new
+program." That was written for a design with **no governance**. The new model governs the upgrade
+authority itself, so the protection is not that the rules are frozen — it is that **you can leave
+before they change.**
 
-## Parameter change checklist
+## Open parameters, named so they are not lost
 
-Any parameter change should be:
+| Unspecified | Note |
+|---|---|
+| **The threshold itself** | `t` of `n` is not stated anywhere, and it interacts with shard count and `k` |
+| **Unbonding period** | Must outlast the payout deadline; no default |
+| **Pause threshold and duration** | "A majority of pledged coins" and "N days" — neither is fixed |
+| **Challenge bounty share** | How a seizure splits between the wronged holder and the challenger |
+| **Redeem deadline default** | The holder sets it; the minimum is not stated |
+| **Genesis** | Members bond `solBSV`, which does not exist until a mint happens (D3). The bootstrap has no path |
+| **Shards** | One threshold key, or groups with their own |
+
+**Three things are open in the built code, and are not governance questions:**
+
+1. **A5 — the program upgrade authority can override every parameter.** It is an unconditional mint
+   voucher. Governance holding it is the design's answer; until that exists, it is a live critical.
+2. **X3 — the DAA is hard-coded.** BSV's own documentation says the rule will change, so a
+   consensus change halts the bridge until a redeploy. Making it governable is the fix.
+3. **The vault's design has failed two audits** and is being re-audited against this model
+   ([`21-vault-structural.md`](21-vault-structural.md)).
+
+## Change checklist
+
+Any parameter change, once a mechanism exists, should be:
 
 1. **Proposed publicly**, with the reasoning and the new arithmetic.
-2. **Disclosed before it binds**, so a user can judge the risk they are taking before they
-   transact.
-3. **Published** in a changelog with the effective date.
-4. **Conservative or neutral on the safety class** — an increase-only move, unless a new program
-   is shipped.
-5. **Never able to move funds.** The bond and the vault are program-owned; parameters are not a
+2. **Signalled live from the moment it is raised**, so the 30 days are visible time rather than a
+   surprise.
+3. **Effective only after the delay**, with redemptions open throughout — **they are never
+   pausable**, and that is the one guarantee the design does not trade away.
+4. **Published** in a changelog with the effective date.
+5. **Incapable of moving funds.** The bond and the vault are program-owned; parameters are not a
    path to the reserve.
 
-**There is no process to execute any of this yet.** The checklist is the shape the deferred
-governance design has to satisfy (D7), not a description of a mechanism that exists.
+**No process to execute any of this exists yet.** The checklist is the shape the governance design
+has to satisfy, not a description of a mechanism that runs.
 
 ---
 

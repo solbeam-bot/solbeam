@@ -2,81 +2,90 @@
 
 Plain-English definitions of the terms used in this documentation.
 
-> **Specification, not shipped behaviour.** The light client, the token, the mint and fork
-> staging are **built and tested**. **The vault, the two gates, maturity, the order book, staking,
-> bonds, `owed_R`, consent, per-relayer deposit scripts, `FLOOR` as a distinct parameter and all
-> of peg-out are designed and not built.** The difficulty retarget is **implemented** — cw-144,
-> verified against 324/324 real mainnet headers (open item X3: the rule is hard-coded). The
-> entries for those are the vocabulary of the design, not a description of
-> running code.
+> **Specification, not shipped behaviour.** The light client with cw-144, the `solBSV` token, the
+> mint and fork staging are **built and tested**. **The vault, the bonded federation, threshold
+> custody, governance, slashing and all of peg-out are designed and not built.** The entries for
+> those are the vocabulary of the design, not a description of running code. A closing section
+> marks the terms of earlier models that the design no longer uses.
+> [`13-summary.md`](13-summary.md) is authoritative.
 
 **Atomic (in "atomic wrapper")** — here it means the wrapper is 1:1 and minting is authorised purely by a proof: the deposit either verifies on Solana or it doesn't, with no discretionary approval. It does **not** mean redemption is instantaneous.
 
-**The book** — the **order book of underwriting**. Stakers post sell orders — so much liquidity, at such a rate, at such a confirmation depth — and incoming deposits are matched against them by price then time, partially filled, with unused stake left with the staker. It replaces a chosen fee with a discovered one and makes **depth a term of the bid** rather than a protocol constant. Designed, not built.
+**Bond** — the collateral a **federation member** lodges on Solana to join: **1,000 BSV, posted as `solBSV`**, so it is seizable on-chain by the program. **`bond ≥ k × owed` must always hold**, with `k ≥ 1`, which is what stops a member leaving while it still owes — a bond withdrawable on demand is not a bond. Because `k = 1`, total value locked is capped by total bonds pledged: ten members at 1,000 BSV is roughly **$300k** of capacity, and that is the proof of concept's scale limit. Fees are earned **pro rata to stake**.
 
-**Bond (`bond_R`)** — collateral a **single relayer `R`** lodges on Solana: **`solBSV` held by the program, and therefore seizable on-chain**. The constraint is **`bond_R ≥ k × owed_R`** with `k = 1` — `k` is a **sizing multiple on `owed_R`**, not a price hedge and not a discount for a hoped-for detection probability. `owed_R` is what the relayer has been credited and not discharged, **including staged mints still in the vault**, and it comes from proofs the program verified itself, so the inequality is checkable without an attestation. It is **locked** — bonded `solBSV` cannot be redeemed, and release requires an unbonding period. It is a **performance bond** against a relayer's **deliberate theft or abandonment** of what it owes: it is *not* reorg insurance, it does *not* answer a failed redemption (where the escrow is returned instead), and it does *not* cover the relayer's own float. It secures that individual relayer's `owed_R`, not a pooled hot wallet.
+**Burn** — destroying `solBSV`. A reorg that is followed causes the **vault** to burn tokens that were minted but never released; a settled redemption burns the escrow. Supply on a failed path is unchanged.
 
-**Burn** — destroying `solBSV` on Solana in order to redeem the underlying BSV. The burn and the requested BSV destination are recorded by the bridge program. A reorg that is followed also causes the **vault** to burn tokens that were minted but never released.
+**Challenger** — the party that proves misbehaviour on-chain. Under the federation model the **node software is the challenger**: watching both chains is a funded job done by the members with the most to lose, not an unpaid chore. **Anyone** may still submit self-proving evidence and be paid the bounty.
 
-**Challenger / watchtower** — anyone who watches for a payout that is later reorged away, or a redemption that was never paid, and submits proof to the Solana program. Permissionless and automated; needs only gas money. A challenger earns a **bounty for a successful payout challenge**. There is **no bounty for detecting a reorg**; that is incentivised only indirectly, because an undetected fraud costs stakers (F3). *(With per-relayer deposits the pooled watchdog role is largely replaced by the deadline and the challenge window, which report a failure without anyone being appointed to look for it.)*
+**Checkpoint (light client)** — a recent, deeply buried BSV block header that the on-chain light client treats as its starting point, so it does not have to store the entire header chain. The chainwork baseline is checkpoint-relative and re-anchored by `set_checkpoint`.
 
-**Checkpoint (light client)** — a recent, deeply buried BSV block header that the on-chain light client treats as its starting point, so it does not have to store the entire header chain.
+**DAA (Difficulty Adjustment Algorithm)** — BSV's rule for adjusting mining difficulty, recalculated **every block** over a 144-block window. The light client verifies it per block: the rule is **cw-144**, taken from the SV Node's `src/pow.cpp` (median-of-three "suitable blocks" 144 apart, the work difference, the 72×/288× time clamps, `(-work)/work`), and it is verified against real mainnet headers at **324/324 exact**. The client must verify it or a fake header could be accepted, and it stores a hash, cumulative chainwork and timestamp per header (52 bytes) to do so — which is what fixed the window at 192 records. **Hard-coded, and that is an open item:** BSV says the rule will change, so it must become governable without a redeploy (X3; the federation model makes it a governance parameter).
 
-**Cold reserve / covenant** — *(superseded)* the pooled, covenant-locked BSV backing controlled by a single key. The design no longer has a pooled reserve: deposits pay individual relayers, so there is **no bridge address and nothing for a covenant to constrain**. The roadmap target in [Trust model](04-trust-model.md) — a signerless reserve — remains the destination, but per-relayer deposits are the path that does not depend on it landing.
+**Equivocation** — a member signing **two conflicting payout intents**. It is the design's answer to attribution: because each member signs individually and the intents are recorded on Solana, the two signatures are the entire proof. See *slashing*. (Copied from the half of RenVM's slasher that actually shipped.)
 
-**DAA (Difficulty Adjustment Algorithm)** — BSV's rule for adjusting mining difficulty, recalculated every block over a 144-block window. The light client verifies it per block: the rule is cw-144, taken from the SV Node's `src/pow.cpp` (median-of-three "suitable blocks" 144 apart, the work difference, the 72x/288x time clamps, `(-work)/work`), and it is verified against real mainnet headers at **324/324 exact**. The client must verify it or a fake header could be accepted. It stores a hash, cumulative chainwork and timestamp per header to do so, which is what fixed the window at 192 records. **Open question, not a gap in the code:** BSV says the rule will revert to 2016-block retargeting, so the algorithm needs a way to change without a redeploy.
+**Exit window** — the **floor of the system**, and deliberately not a constitution. Because redemptions **can never be paused**, a governance change takes **30 days** with **live signal from the moment it is raised**, so a proposal that would harm holders empties the bridge before it lands. The residual, stated plainly: a holder who does not watch and does not act within 30 days is exposed.
 
-**Exposure (`owed_R`)** — what a **single relayer `R`** has been credited and must stand behind: the sum accumulated from deposit proofs **the program verified itself**, grown by each mint that relayer consented to — **including staged mints still in the vault** — and reduced as rights settle. The bond constraint is `bond_R ≥ k × owed_R`. Unlike the earlier pooled `k × (hot float + releasable tranche)`, this is a quantity the program measures rather than one a custodian attests — see *bond*.
+**Federation member** — **an operator running software**, not a person exercising judgement. Anyone with a **1,000 BSV bond** may join; there is no manual approval of any transaction. Each node watches both chains, verifies independently with its own light client, signs payout intents individually, and challenges theft automatically. Holders of the reserve do so under a **threshold key**. Closest analogue: running a staked validator.
 
-**`FLOOR`** — the **minimum deposit confirmation depth**, 12 BSV blocks for the PoC, **fixed in code** (D4). Depositors and bids may commit to *more*, never less: the program requires both `confirmations ≥ committed_depth` and `committed_depth ≥ FLOOR`. It is a **safety** parameter and a **backstop**, not a price — depth is a term of the bid, and `FLOOR` exists to catch a bid nobody should accept. A depth below it is refused rather than discouraged. **Fixed in code also means there is no governance mechanism in the PoC at all** (D7): the change mechanism is a **named gap** deferred to final implementation, not a switch that exists. And as a *distinct parameter* `FLOOR` is designed, not built — the shipped mint uses a fixed `MIN_CONFIRMATIONS = 12` and parses no committed depth from the `OP_RETURN`.
+**FLOOR** — the **minimum deposit confirmation depth**, **12 BSV blocks**. It is the depth a deposit waits: depth is not a term of a bid, because there is no book. `FLOOR` is a **governable parameter** (85% of pledged coins, 30 days), which is why it can be raised against a changing hash rate without a program redeploy. See *maturity*.
 
-**Hot wallet** — a small BSV float a relayer holds to pay redemptions. With per-relayer deposits there is no shared hot wallet; each relayer's own float is the only freely spendable tier, and it is bounded by that relayer's `HOT_FLOAT_CAP`. **It is the relayer's own money and is not covered by its bond** — the bond answers `owed_R`, the liability the program measures, not the off-chain float it cannot read (F4). It should hold nothing outside outstanding redemption commitments — see *naked spend*.
+**Governance delay** — the **30 days** between a proposal passing at **85% of pledged coins** and taking effect. Its signal is **live from the moment the proposal is raised**, not only when it passes; the delay is what makes the signal useful. All the numbers are parameters with defaults, not constants.
 
-**Light client** — a program that verifies a chain's headers and transaction inclusion without downloading the whole chain. SOLBEAM runs a BSV light client **on Solana**.
+**Light client** — a program that verifies a chain's headers and transaction inclusion without downloading the whole chain. SOLBEAM runs a BSV light client **on Solana**, holding a checkpoint and a rolling window of **192 records** (52 bytes each, `SPACE` **10,103** of 10,240) that carry a hash, cumulative chainwork and time per header.
 
-**Maturity** — the **time a staged mint must stay unreorged before the vault releases it** to the depositor. Depth and maturity do different jobs: **depth sets the cost of attacking** (a reorg must out-mine `FLOOR`), while **maturity sets the time available to detect** one. A deposit that is followed by a reorg of depth `≥ FLOOR` is burned instead of released. See *vault* and *the two gates*.
+**Maturity** — the **144 blocks a staged mint must stay unreorged before the vault releases it** to the depositor. Depth and maturity do different jobs: **depth sets the cost of attacking**, while **maturity sets the time available to detect** one. If the program's own stored hash for the deposit's height no longer matches, the staged tokens are burned instead of released. See *vault*.
 
 **Merkle proof** — a short cryptographic path showing that a transaction is included in a block, without needing all the block's transactions.
 
-**Mint** — creating `solBSV` on Solana against a proven BSV deposit.
+**Mint** — creating `solBSV` on Solana against a proven BSV deposit. Under the design the new tokens land in the **vault**, not in the depositor's wallet.
 
-**Naked spend** — spending a relayer's float with **no redemption outstanding**. Unlike a theft attached to a redemption, there is no deadline to miss, so nothing reports it automatically. In the pooled design a challenger was the entire enforcement mechanism; with per-relayer deposits what bounds it is that each float is small and capped, and that a relayer which spends BSV it owes is failing `owed_R`, which the seizable bond secures. The float itself is **not covered by the bond**, so it should never hold anything outside outstanding commitments. See [Trust model](04-trust-model.md).
+**OP_RETURN** — a BSV output that can carry arbitrary data. A SOLBEAM deposit attaches `version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient` so the program knows which cluster and which Solana address the deposit is for.
 
-**OP_RETURN** — a BSV output that can carry arbitrary data. SOLBEAM uses it to attach your Solana address to a deposit, together with the **confirmation depth you commit to** — the commitment is what stops anyone downstream undercutting it to `FLOOR`.
+**Pause** — an emergency stop for **new mints only**. **Redemptions continue, always**, and the pause lifts automatically after N days unless renewed. Pausing inbound is a safety valve; pausing outbound is taking hostages, so the two are deliberately not bundled. Because the power is bounded it can carry a lower threshold (a simple majority of pledged coins) than a governance change.
 
-**`owed_R`** — what relayer `R` has been **credited**, accumulated from deposit proofs the program verified itself. It is the liability side of the per-relayer constraint `bond_R ≥ k × owed_R`, and unlike an off-chain reserve balance it is a chain fact. See *exposure* and *bond*.
+**Payout intent** — a federation member's **individual signature**, cast on Solana, approving a specific BSV payout for a redemption. Intents are recorded, so every approval is **attributed** to a member. Once enough attributed intents exist, the **threshold key** produces the BSV payout. Because members sign individually rather than as one opaque group, a member that signs two conflicting intents has produced its own proof of guilt — see *equivocation*.
 
-**Optimistic** — a design where an action is accepted immediately but can be challenged and reversed (or punished) within a window. SOLBEAM's redemption is optimistic.
+**Peg-in / peg-out** — moving value into the wrapper (BSV → `solBSV`) and back out (`solBSV` → BSV). Peg only: there is no exchange mechanism, no order book and no leverage.
 
-**Peg-in / peg-out** — moving value into the wrapper (BSV → `solBSV`) and back out (`solBSV` → BSV).
+**Pledged coins** — the `solBSV` members have pledged as bonds. Governance thresholds are counted against these: **85% of pledged coins** to pass, and a simple majority for a bounded pause.
 
-**Proof-of-reserves** — a published, independently checkable statement that the BSV held by the peg matches the `solBSV` supply.
+**Proof-of-reserves** — a published, independently checkable statement that the BSV held by the peg matches the `solBSV` supply. **The model does not specify one:** the reserve is native BSV under a threshold key and the Solana program cannot read it.
 
-**Relayer** — permissionless, bonded software that receives deposits at **its own BSV script**, pays redemptions in BSV and proves the payout to Solana. Not a committee, not a company, not an operator — a role. Because deposits pay individual relayers there is **no pooled bridge address and no shared hot wallet**, and a relayer's exposure is its own `owed_R`.
-
-**Relayer consent** — the **signature a relayer gives accepting the liability of a mint** that names its script. Without it, a fraudulent mint could credit `owed_R` to an innocent relayer whose bond is then slashed for an attack it never agreed to and could not have detected. Consent converts the reorg risk from an externality into a term the relayer priced and chose, and it is what makes the per-transaction capacity check meaningful.
+**Reserve** — the native BSV backing `solBSV`, held by the federation under a **threshold key**. It is **trusted, and bounded**: no single member can move it, and what protects a holder is a bond that anyone can seize by proving misbehaviour on-chain.
 
 **SIGHASH_FORKID** — the signature-hash scheme BSV requires for transaction signing. SOLBEAM implements it directly.
 
-**Slashing** — seizing a relayer's bond as punishment for proven misbehaviour: a deliberate theft or abandonment of what the relayer owes (`owed_R`). It is **not** the settlement for a failed redemption: there the escrow is **returned to the holder** and supply is unchanged, and the bond is **not additionally transferred**, because the returned escrow already makes the holder whole. Because the bond is `solBSV`, a punished theft leaves the peg no worse collateralised.
+**Slashing** — seizing a member's bond for **self-proving misbehaviour**: signing two conflicting payout intents (equivocation), or signing an intent that matches no authorised redemption. It is **not** the settlement for a failed redemption — there the escrow is returned to the holder, supply is unchanged, and the bond is **not** additionally transferred, because the returned escrow already makes the holder whole. A threshold of members signing something invalid is attributable from the record but is a **governance matter, not a cryptographic one**.
 
 **solBSV** — the wrapped BSV token on Solana: a classic SPL token, 8 decimals, no freeze authority.
 
 **SPV (Simplified Payment Verification)** — verifying that a transaction is in a chain by checking block headers and Merkle proofs, rather than validating the whole chain yourself.
 
-**The two gates** — the checks that surround the **vault**, on both directions of the peg. On **peg-in** the gate requires **no recent reorg at or above the committed depth, a non-stale tip, and a client that is not catching up** before the vault releases a matured mint. On **peg-out** the gate requires **capacity** — some relayer with sufficient bond accepting the request — before the escrow is burned. Both directions have the same shape: enter the vault, then leave it either to the counterparty or back to the sender. A gate that fails **delays** rather than refunds, and no failure path mints. **Designed, not built.** Whether `RECENT_REORG_WINDOW` is enforced as an on-chain gate or only monitored and published is a known open item.
+**Threshold key** — the key over the reserve, which requires a **threshold of federation members** to sign. No single member can move the funds. **The threshold value and whether the key is sharded into several groups are undecided** — sharding contains theft and signing latency at the cost of coordination.
 
-**Tranche** — *(superseded)* a scheduled slice of a pooled cold reserve released to a hot wallet. The design no longer has a pooled reserve, so there is no tranche schedule; per-relayer deposits make each relayer's own float the only spendable tier. Retained here so older documents that use the term are understood as historical.
-
-**Trustless** — correct without trusting any participant: verification rests on cryptography and on-chain code. Minting qualifies; redemption is *trust-minimised* rather than trustless, because paying BSV needs a signature.
+**Trustless** — correct without trusting any participant: verification rests on cryptography and on-chain code. **Minting and reversal qualify.** The reserve does not: it is trusted, and bounded by bonds and proofs.
 
 **Trust-minimised** — a small, bounded trust assumption remains, but it is enforced economically (bonds, slashing) and by on-chain proofs rather than by promises.
 
-**Unbonding period** — the notice period a relayer must wait before its bond is released, longer than the redemption deadline plus the challenge window. Without it a relayer could take a job, withdraw its bond, and be gone before anyone could slash. A bond withdrawable on demand is not a bond.
+**Unbonding period** — the notice a member must serve before its bond is released. Its length is an **undecided parameter** (doc 23 lists it with no default). Without it a member could take on obligations, withdraw its bond, and be gone before anyone could slash; `bond ≥ k × owed` must still hold at withdrawal.
 
-**Vault** — a **program-owned token account that every mint lands in first, never with the user**. It is the mechanism that makes the design work: because the tokens sit in the program's *own* account, the program can **burn them if a reorg is followed** or release them on maturity, all without a freeze authority and without Token-2022 hooks. It is also why a staged token is not liquid, so there is no window in which a fraudulent mint can be sold to an innocent buyer. Peg-out escrows into the same vault before the escrow is burned or returned. Designed, not built.
+**Upgrade authority** — the program's upgrade key, which can in principle change anything. Under the federation model it is **held by governance** — 85% of pledged coins and a 30-day delay with live signal — rather than being an unowned gap. It cannot pause redemptions.
 
-**Veto-only cosigner** — a second key on a relayer's float (2-of-2 bare multisig) held by a separate party that can only *refuse* a spend, never redirect one. It cannot steal, because stealing needs the relayer's key too. It reduces the trust assumption from "can take the money" to "can delay a redemption". *(This is the pooled-era mitigation; with per-relayer deposits the bounds are the seizable bond against `owed_R` and the float cap, and whether a cosigner is still wanted is open.)*
+**Vault** — a **program-owned token account that every mint lands in first, never with the user**. Because the tokens sit in the program's *own* account, the program can **burn them if a reorg is followed** or release them on maturity, all without a freeze authority and without Token-2022 hooks. It is also why a staged token is not liquid, so there is no window in which a fraudulent mint can be sold to an innocent buyer. Peg-out escrows into the same vault before the escrow is burned or returned. Designed, not built.
+
+---
+
+## Terms of earlier models — removed or superseded
+
+These are kept only so that older documents can be read. **None of them is part of the current design.**
+
+- **Order book / "the book"** — **removed.** Stakers posted liquidity and the book matched by price then time. The fee is now a **governed 30 bp**, and capacity is capped by bonds pledged, which solves both jobs more simply.
+- **Discovered fee** — **removed** with the book. The fee is a governed parameter.
+- **Bonded relayer** — **superseded** by *federation member*. There are no per-relayer independent keys and no per-relayer deposit scripts; the reserve is under one threshold key.
+- **`owed_R` / exposure / relayer consent** — **superseded.** The per-relayer liability accounting was the old model's way of bonding individual deposits. The federation bond secures `owed` at the member level.
+- **Hot wallet / naked spend** — **superseded.** There is no hot float and no pooled reserve; the earlier analysis that a hot float is a written option is the reasoning that led to bonding in `solBSV`, and it is historical.
+- **The two gates** — **superseded** by the vault's own release-and-burn rule: the program decides from its own stored headers, with no separate gate parameters to enforce.
+- **Cold reserve / covenant, tranche, veto-only cosigner** — **superseded.** There is no pooled, covenant-locked reserve and no tranche schedule.
 
 ---
 

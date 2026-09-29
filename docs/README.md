@@ -49,7 +49,7 @@ BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals 
 | **Bonds are in `solBSV`** | A relayer's collateral is the same asset as the exposure, so no BSV price move can shrink it relative to what it protects — and no oracle is needed to keep the two matched |
 | **FOSS** | The light client, programs and relayer software are open source |
 
-**Honest limits.** Minting is trustless. Redemption is *trust-minimised*: a bonded relayer holds a key to its own deposits, and the bond plus on-chain fraud proofs are what keep it honest. Bonding can make cheating unprofitable; it cannot make it impossible, and it does nothing against someone who takes a relayer's key and never posted a bond. There is no pooled hot wallet to drain and no privileged operator to compromise. We call that what it is, in [Trust model](04-trust-model.md#the-naked-option-attack). And a DEX or exchange exit is outside the protocol's control: if a fraudulent mint ever succeeded, the loss would land on whoever bought the unbacked token, and the protocol cannot compensate them.
+**Honest limits.** Minting and reversal are trustless: the program verifies BSV proof of work and Merkle inclusion itself, and decides a reorg by comparing its own stored header hashes. The **reserve** is trusted and bounded — the BSV sits under a **threshold key** held by the federation, so no single member can move it, and what protects a holder is a **bond anyone can seize by proving misbehaviour on-chain**. The residual is stated in [`04-trust-model.md`](04-trust-model.md): a threshold of members colluding is the one assumption that is bounded rather than removed.
 
 ---
 
@@ -59,7 +59,7 @@ BSV is fast to mine but slow to *move*. Exchanges hold deposits and withdrawals 
 - [How it works](02-how-it-works.md)
 - [Architecture](03-architecture.md)
 - [Trust model](04-trust-model.md)
-- [Relayers](05-relayers.md)
+- [Relayers](05-federation.md)
 - [Parameters & governance](06-parameters.md)
 - [Roadmap](07-roadmap.md)
 - [FAQ](08-faq.md)

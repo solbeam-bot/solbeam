@@ -1,9 +1,9 @@
 # 10. Brand & visual language
 
-> **Built or specified?** The light client, the `solBSV` token and the mint exist today and pass
-> 20 on-chain tests. **The vault, the order book, per-relayer deposits and all of peg-out are
-> designed, not built.** [`13-summary.md`](13-summary.md) is the authoritative account.
-
+> **Built or specified?** The light client with cw-144, the `solBSV` token, the mint and fork
+> staging exist today and pass **20 on-chain tests**. **The vault, the bonded federation,
+> threshold custody, governance, slashing and all of peg-out are designed, not built.**
+> [`13-summary.md`](13-summary.md) is the authoritative account.
 
 ## Name
 
@@ -80,32 +80,33 @@ The clearest expression of the product is two panels:
  ┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
  │                  │        │                  │        │                  │
  │   STEP 1         │  ───►  │   STEP 2         │  ───►  │    solBSV        │
- │   CHOOSE         │        │   WAIT           │        │    on Solana     │
- │   TERMS          │        │   the bid names  │        │                  │
+ │   SEND           │        │   WAIT           │        │    on Solana     │
+ │   BSV            │        │   12 blocks,     │        │                  │
+ │                  │        │   then maturity  │        │                  │
  └──────────────────┘        └──────────────────┘        └──────────────────┘
-      BSV wallet              depth is a term of           Solana wallet
-                              the bid, priced by
-                              the market
+      BSV wallet              12 confirmations,             Solana wallet
+                              then 144 blocks
+                              before release
 ```
 
 - Left panel: BSV mark.
-- Middle panel: a simple progress ring or the beam disc mid-rotation, with the confirmation depth beneath. **Depth is a term of the bid** — a staker names the depth it will accept, and the market prices it. `FLOOR` (12 blocks) is only a backstop, never a promise about any particular deposit, so never put a clock or a fixed number here.
+- Middle panel: a simple progress ring or the beam disc mid-rotation, with the confirmation depth beneath. **State the depth as `FLOOR`, 12 blocks**, then the **144-block maturity** before release. There is no bid and no market-priced depth, so never put a variable number or a clock here.
 - Right panel: Solana mark with the `solBSV` ticker.
 
-This graphic is the social-friendly summary and should appear on the landing page, in the litepaper header, and on relayer-app onboarding.
-
+This graphic is the social-friendly summary and should appear on the landing page, in the litepaper header, and on node-app onboarding.
 
 ## Voice
 
-- **Plain, not promotional.** State what is trustless and what is trust-minimised, every time.
-- **No overclaiming.** Avoid "fully trustless", "risk-free", "instant" for redemption, or "guaranteed" yields. **Never present a confirmation time as a guarantee:** depth is a term of the bid, the market prices it, and `FLOOR` is only a backstop.
+- **Plain, not promotional.** State what is trustless and what is trusted-and-bounded, every time.
+- **No overclaiming.** Avoid "fully trustless", "risk-free", "instant" for redemption, or "guaranteed" yields. **Never imply the reserve is trustless:** minting and reversal are verified, the reserve is held by a bonded federation under a threshold key, and what bounds it is a seizable bond plus an exit window that never closes.
+- **Say the federation, not "no operator".** The design has a federation, open membership, a **1,000 BSV bond**, and governance at **85% of pledged coins over 30 days**. Do not describe it as an operator-less system; that was an earlier model.
 - **No oracle.** The program reacts only to BSV headers and Solana slots. External metrics — price, hashrate, reorg cost — are published on the website and never consulted by the program, so copy must not imply it watches a market.
-- **Precise words:** mint, redeem, bond, liquidity, depth, bid, deadline, proof.
-- **Say the numbers.** The bid's liquidity, fee and confirmation depth; published caps. Depth is a term of the bid rather than a fixed constant, so quote it as a term, not a promise.
+- **Precise words:** mint, redeem, bond, threshold key, maturity, deadline, proof, equivocation.
+- **Say the numbers.** The fee (**30 bp, governed**), the confirmation depth (**12 blocks**), maturity (**144 blocks**), the bond (**1,000 BSV**), and the governance defaults (**85% / 30 days**). Do not present a confirmation time as a promise.
 
 ## Naming note
 
-The word **"relayer"** can read as a trusted intermediary. In user-facing copy prefer **"bonder"** or **"redemption fulfiller"**, with "relayer" reserved for technical documentation. The role is bonded and permissionless — **anyone may run a relayer, and there is no privileged operator** — and the language should say so.
+The word **"relayer"** belongs to an earlier, per-relayer model and should not be used in user-facing copy. Say **"federation member"**, or **"member"** where the context is clear — the role is open to anyone with the bond, membership is not a committee seat, and **members run software rather than approving transactions**. Reserve the technical detail for the federation documentation.
 
 ## Colour and type (directional)
 
@@ -120,4 +121,4 @@ The word **"relayer"** can read as a trusted intermediary. In user-facing copy p
 - [ ] Two-step graphic (light + dark)
 - [ ] Token logo for Raydium/Orca listings (`solBSV`, 512 px transparent PNG/SVG)
 - [ ] Social banner and OpenGraph image (1200×630)
-- [ ] Relayer app icons (desktop + mobile)
+- [ ] Federation member node app icons (desktop + mobile)

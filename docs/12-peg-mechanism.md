@@ -729,7 +729,7 @@ participants bearing the risk.
 ## O2 — There is no operator, and that was the point
 
 **Corrected.** An earlier draft proposed "a single bonded operator with a cold multisig
-reserve". That *contradicts* [`05-relayers.md`](05-relayers.md) and
+reserve". That *contradicts* [`05-federation.md`](05-federation.md) and
 [`04-trust-model.md`](04-trust-model.md), which describe a relayer as a **role anyone can
 run**, bonded in seizable `solBSV`, with a stated roadmap to a signerless reserve. This
 document should not have invented a privileged operator. The fix is to restate what those
@@ -891,7 +891,7 @@ vault and is released only once a matching BSV deposit is verified, so supply ex
 never liquid until it is backed — no unbacked window to attack, and nothing to keep quiet
 about. The first relayer is the team. It needs to be a separate instruction with its own
 rules and its own test, not a special case buried in the mint. See §D3 and
-[`05-relayers.md`](05-relayers.md).
+[`05-federation.md`](05-federation.md).
 
 ### On the reserve: do not pool it, rather than securing a pool
 

@@ -1,8 +1,42 @@
 # 15. Second audit — who loses funds
 
-> **Historical, as of the audit.** Findings are preserved as they were recorded. F7 and the
-> `commit_fork` height comparison have since been fixed (W1.6/W1.7); see `poc/TEST_PLAN.md` §0 and
-> `docs/13-summary.md` for the current state. The sections that were amended carry a note.
+> **Historical, as of the audit.** Findings are preserved as they were recorded, because what was
+> found when is the point of this document. **It does not describe the current model.** The
+> sections that were amended carry a note.
+
+## Subsequent fixes, and what the federation model supersedes
+
+**Four defects recorded here have since been fixed in code.** The workstream is
+[`workstreams/W1-light-client-verification.md`](../workstreams/W1-light-client-verification.md).
+
+| Finding | What it was | What closed it |
+|---|---|---|
+| **F7** | `push_header` required `bits == expected_bits`, so the client rejected every header after the checkpoint | **W1.6** — cw-144 implemented in `difficulty.rs` and replayed against real mainnet headers, **324/324 predicted exactly** |
+| **P2** | `commit_fork` compared height, not chainwork, and did not re-anchor the staged branch | **W1.7** — `fork_parent_hash` recorded at `init_staging` and re-checked at `commit_fork`, which fails `ForkPointMoved` if the fork point has moved |
+| **A7** | Double-minting one deposit | Deposit identity is `(txid, vout)` in the used-deposit list — recorded as fixed in this audit — and the counterfeit-list reading (**X2** below) is pinned by the account constraint |
+| **The window resize** | The window was 288 records of 32 bytes, with a 48-hour deposit lifetime | **W1.4** — **192 records of 52 bytes** (hash + chainwork + time), `SPACE` **10,103** of 10,240, deposit lifetime **32 hours**. Once cw-144 needs a work and a time difference, 288 records is arithmetically impossible |
+
+**The federation model supersedes the parts of this audit about there being no operator layer.**
+[`13-summary.md`](13-summary.md) is canonical and [`23-federation.md`](23-federation.md) is the
+detail. Specifically:
+
+- **There is a federation and there is governance.** Every finding here that rests on **D7** ("no
+  governance in the PoC"), on an unpaid permissionless challenger, on a per-relayer bond
+  (`bond_R ≥ k × owed_R`) or on **per-relayer independent keys** describes a system that is no
+  longer the design. The reserve is now held by a bonded federation under a **threshold key**, the
+  **node software is the challenger**, and slashing is **self-proving equivocation** on
+  individually-signed payout intents.
+- **A6 (one pooled deposit script) is answered differently.** The federation holds the reserve
+  under a threshold key, so the fix is no longer per-relayer scripts; A6 is retained as history.
+- **F2/D6 is no longer the design's posture.** This audit is right that in the shipped code *every*
+  peg-in is the unbacked path, because no vault, federation or bond exists. That remains true of
+  the code; it is no longer the model the system is being built to.
+- **F1, F4, F5 and the detection findings remain useful history** but are written against the
+  per-relayer model. **F6 is still open in the code that exists.**
+- **The vault findings should be read as the first pass of two.** Doc 13 records that the vault's
+  current design carries unfixed audit findings and is being re-audited against this model.
+
+The body below is unchanged.
 
 A focused adversarial pass on the mechanism as it now stands, organised around four
 questions: who loses in a **natural** reorg, who loses to a **reorg attacker**, who can
