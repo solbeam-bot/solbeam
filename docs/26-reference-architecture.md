@@ -78,32 +78,49 @@ epoch, and your bond is returned.
 **And the extra epoch after deregistration is the part that matters** — it is what keeps a departing
 member **slashable while their shares are still live.**
 
-### 2. Key rotation every epoch
+### 2. ~~Key rotation every epoch~~ — **not adopted**
 
-Directly from the source: a key is regenerated each epoch and **the assets are forwarded to it**,
-because otherwise a node that leaves still knows shares of a live key — and *"after exiting the
-network, Darknodes no longer have a bond that incentivises them against revealing their shares."*
+RenVM regenerates every gateway key each epoch and forwards the assets to the new one, because a
+departing node would otherwise still know shares of a live key. **We do not need this.**
 
-**This corrects an earlier statement in this repository.** We wrote that under threshold ECDSA *"the
-reserve never moves, the address never changes."* **It does move — once per epoch.** That is a
-deliberate, scheduled migration rather than an ad-hoc one, and it is what bounds the damage a
-departing member can do.
+**Rotation exists to bound what a member who has *left* can do with shares they still hold.** But in
+our design a member who has left **cannot move the reserve** — the threshold sees to that — and the
+rotation's real cost is high: the entire reserve moves on-chain every epoch, and the deposit script
+the program verifies against would have to change with it.
 
-### 3. A second, governance-selected quorum — resolves the collective-key finding
+**And the built program fixes `deposit_script` once in `initialize_bridge`, with no instruction to
+change it.** So rotation is not merely unnecessary — it is currently unimplementable, and adopting it
+would have made every deposit to the old address unprovable.
 
-The audit found that **collective-key bonds are a hostage, not a bond**: the same majority trusted
-with the reserve controls every member's bond, so it can seize any member's bond at will, and the
-bond therefore deters nothing it was meant to deter.
+**Adopting the reference does not mean adopting all of it.** This is the clearest case: a mechanism
+that solves a problem we do not have, at a cost we would have paid.
 
-**The Greycore is the answer.** Two independent quorums must both sign — one selected by chance, one
-selected by governance, with **disjoint membership**. Then:
+### 3. A second quorum — appointed, for change management and unwinding
 
-- the gateway majority **cannot** move funds alone
-- the Greycore **cannot** move funds alone
-- **and neither can unilaterally seize a bond**
+The reference has the **Greycore**: a second set, chosen by community governance rather than by
+chance, which **co-signs every gateway action**. We take the *shape* — a second set with a
+supermajority threshold — but **not the per-payout co-signature**, because that does not compose with
+threshold-ECDSA custody: one P2PKH address has one key, and a second signature would require a
+multisig script, which is the design we deliberately rejected.
 
-**For a five-member proof of concept, the Greycore is the founding set** — but the structure is what
-matters, and it is the mechanism the earlier design lacked entirely.
+**So the second quorum is an appointed oversight body, not a co-signer:**
+
+| | |
+|---|---|
+| **Size** | **5**, appointed at setup by the founders |
+| **Who** | **Honest public actors** — reputational stake, not an anonymous set |
+| **Threshold** | **4-of-5**, so a change needs near-unanimity and one dissenter can block |
+| **Role** | **Managing change, and unwinding if it becomes necessary** |
+| **Not a role** | It does **not** co-sign payouts, and it does not hold the reserve |
+
+**What it is for.** Managing parameter changes, and — if the thing has to be wound up — having a
+quorum with the standing to do it. It is the body that decides *what the rules are*, not one that
+executes them.
+
+**What it does not fix, stated plainly.** It is **not** a second signing quorum and therefore does
+**not** stop a majority of the reserve signers seizing a bond. The earlier claim that a second quorum
+resolves the collective-key problem **is withdrawn** — at `n = 5`, two disjoint 3-quorums need six
+people, so "a second quorum of the same five" is the same people twice.
 
 ### 4. Challenge-and-prove slashing — resolves the attribution problem
 
@@ -249,3 +266,32 @@ prevented.
 **And the reserve is still off-chain.** Publishing it is still an assertion by the party that could
 steal. The reference does not solve this either; it leans on the bond being larger than the assets,
 which is the economic answer rather than a verification one.
+
+---
+
+## Accepted risks, deferred
+
+Two things are **known to be unresolved, are recorded rather than fixed, and are deferred until
+there is a team to work on them.**
+
+### The `3×` rule and the two-sided bond do not reconcile
+
+The reference requires **`bonds ≥ 3 × assets`**, derived from a **1/3** threshold: a briber must buy
+a third of the bonds, so those bonds must be worth three times what they would win. Our parameters
+carry **`fed.k = 1`**, and at `k = 1` a briber needs roughly `0.4 × assets` — so **the design is
+about 3× under-collateralised against the rule it cites.** Either `k` becomes 3, or the capacity
+figure is 3× too large. Neither is chosen.
+
+**And the `solBSV`-side bond devalues in exactly the scenario it is meant to protect against** —
+when the reserve is gone, `solBSV` is worth nothing, so seizing or burning it redistributes loss
+among holders rather than restoring BSV. The BSV-side bond is under the same key as the reserve, so
+if that key moves, it sweeps the bonds too.
+
+**Accepted for now.** The honest statement is that **the bond deters and prices entry, and does not
+restore what is lost.** Fixing this properly is a real piece of work and it is deferred.
+
+### Collusion is unprevented
+
+A majority of the reserve signers can take the reserve, and **no mechanism here prevents it.** The
+bond does not stop it, the second quorum does not stop it, and the slashing layer cannot fire
+against it. Recorded as a **stated, accepted risk**.
