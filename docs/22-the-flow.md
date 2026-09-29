@@ -105,7 +105,8 @@ needed for a failed redemption — and paying both would compensate twice.
 |---|---|---|
 | The relayer accepts and never pays | After the deadline, `cancel_redeem` returns the escrow | **Nobody.** The holder is whole |
 | The relayer pays, but the payout is reorged before settling | It must pay again. If it does not, cancel returns the escrow | The relayer's float |
-| The payout settles, **then** is reorged away | **Currently unresolved.** The escrow is burned and the item closed, so neither instruction can run | **The holder.** Needs an unclaim path — see *Open* below |
+| The payout settles, **then** is reorged away | **Usually self-heals.** A valid signed transaction returns to the mempool and re-mines. The escrow stays burned and the holder gets their BSV | Nobody |
+| …and its inputs are **double-spent** so it cannot re-mine | The payout is permanently dead. This requires the relayer's own key, so it is a deliberate act | **The relayer's bond** — proven via `slash`, paid to the holder |
 | Nothing settles and the deadline is far away | The escrow sits. `deadline_slot` must be required to be `>= now + D` | The holder, briefly |
 
 ---
@@ -173,11 +174,21 @@ Anyone waiting on a deposit has a direct reason to push headers.
                  (same Merkle machinery verify_deposit already uses)
                → parses its outputs
                → requires they match NO registered payout for that relayer
-               → seizes bond_R; the challenger is paid
+               → seizes bond_R: the HOLDER is made whole, the challenger takes the bounty
 ```
 
 **This instruction is what makes the bond real rather than decorative.** It is also the fix
 for "who watches?" — the bounty is the incentive, so detection stops being an unpaid chore.
+
+**It is also the resolver for a reorged payout**, which is not obvious. A valid signed
+transaction that is reorged out returns to the mempool and re-mines by itself, so an ordinary
+reorg heals with nobody acting. The payout only dies permanently if someone **double-spends its
+inputs** — which requires the relayer's own key, and is therefore deliberate. And a deliberate
+double-spend of a credited outpoint is exactly the predicate `slash` evaluates.
+
+So the proceeds go to **the holder** (who lost the BSV, and whose escrow is gone) and to **the
+challenger** (the bounty). This is why the redemption item can legitimately be closed at settle:
+the remedy for the pathological case lives in the bond rather than in the item.
 
 **The window is 32 hours from the spend landing in a block.** That is the header window, and it
 is the honest weak point: a thief who spends and is unwatched for a day keeps the money.
@@ -187,6 +198,7 @@ is the honest weak point: a thief who spends and is unwatched for a day keeps th
 | A challenger submits a fabricated spend | It is not in a block; rejected | The challenger, plus the fee |
 | A challenger targets an honest relayer consolidating its own UTXO | **This is the over-broad case.** The predicate must distinguish an unauthorised spend from a mere re-spend of its own money | Needs specification |
 | Nobody challenges within 32 hours | The theft stands | Holders |
+| A relayer double-spends a settled payout | `slash` seizes the bond; the holder is made whole from it | The relayer |
 
 ---
 
@@ -197,14 +209,14 @@ Walking the five journeys against the failure tables:
 | | |
 |---|---|
 | **A depositor's worst case** | Losing the deposit to a relayer who never gets minted — **no on-chain remedy.** Real, disclosed, and the strongest argument for the app automating the mint |
-| **A holder's worst case** | A post-settle reorg with no resolver. **Fixable** — it needs a path, not a redesign |
+| **A holder's worst case** | A settled payout whose inputs are double-spent, leaving no BSV and no escrow. **Recovered from the bond** — `slash` pays the holder, not just the challenger |
 | **A relayer's worst case** | Its own float, which is its own capital |
 | **The system's worst case** | A theft no one challenges inside 32 hours. **Bounded by the bond, and only if the bond is large enough** |
 
 **Three things this walk exposes that the design did not:**
 
 1. **The depositor's cliff has no remedy.** Everything else returns; this does not.
-2. **The post-settle reorg has no resolver** — an item no instruction can move.
+2. ~~The post-settle reorg has no resolver~~ — **withdrawn.** An ordinary reorg self-heals by re-broadcast; the only fatal case is a deliberate double-spend, and that is what `slash` is for. The correction is that slash proceeds must pay **the holder**, not only the challenger.
 3. **The challenge window is the real security parameter**, not the bond size. A bond is worth
    nothing if nobody is watching in the 32 hours it can be seized.
 
