@@ -96,7 +96,7 @@ watches both chains, verifies independently with its own light client, signs, an
 automatically. It is **running a staked node**: pledge a bond, run the software, earn a yield, lose
 the bond for misbehaving.
 
-**The bond size is the scale limit, and that is stated rather than implied.** With `k = 1`, total
+**The bond size is the scale limit, and that is stated rather than implied. Capital inefficiency is accepted deliberately** — a bridge that caps its size at what its members will bond cannot outrun its own collateral, and growth then requires new members rather than larger ones. With `k = 1`, total
 value locked is capped by total bonds pledged. Ten members at 1,000 BSV is roughly **$300k** of
 capacity. That is a proof of concept.
 

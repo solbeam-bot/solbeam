@@ -53,10 +53,11 @@ while the numbers are still provisional.
 | ID | Name | Value | Description |
 |---|---|---|---|
 | `fed.bond_size` | Member bond | **1,000 BSV** `dec` | The price of admission. Sets the scale limit |
-| `fed.k` | Bond multiple | **1** `ph` | Aggregate bond ≥ `k ×` outstanding supply. At `k = 1` theft is unprofitable, not prevented |
+| `fed.k` | Bond multiple | **1** `dec` | Aggregate bond ≥ `k ×` outstanding supply. At `k = 1` theft is unprofitable, not prevented. **Capital inefficiency accepted** — over-collateralising is a member's choice, not a requirement |
 | `fed.threshold` | Signing threshold | **open** | `t` of `n`. **Stated nowhere yet** — this is a real gap |
 | `fed.shards` | Shard count | **open** | One key or several groups. Affects blast radius and latency |
 | `fed.unbond_slots` | Unbonding period | **open** | Must exceed the redemption deadline plus the challenge window |
+| `fed.delegated_staking` | Delegated staking | **disabled** `dec` | **Phase 2.** Lets non-members delegate `solBSV` to a member and share its fee. **Activatable by governance**, not built |
 | `fed.script` | Deposit script | **open** | The reserve pool address deposits pay |
 
 ## Governance
@@ -144,3 +145,22 @@ it is the honest answer to "who pays for a first-time user".
 
 **This also prices the risk.** A member's return is the fee share against a 1,000 BSV bond whose
 entire purpose is to be lost if it misbehaves. The market for members is the market for that trade.
+
+---
+
+## Capital efficiency, deliberately
+
+**Capital inefficiency is accepted, and tying up assets is the point.** At `k = 1` the aggregate bond
+must be at least the outstanding supply, and a member may over-collateralise if it wishes — but
+nothing forces the bond to *track* the reserve as it grows.
+
+That is a choice, not an oversight. Making the bond scale with the reserve would mean either forcing
+members to post more capital continuously, or throttling deposits to keep the ratio — both of which
+cost more in complexity and liveness than they buy. **A bridge that caps its size at what its members
+will bond is a bridge that cannot outrun its own collateral**, which is the property we want, and the
+cost is that growth requires new members rather than larger ones.
+
+**Phase 2: delegated staking.** Non-members delegating `solBSV` to a member and sharing its fee,
+**activatable by governance**. It would let the bond base grow without new operators, at the cost of
+introducing a staking layer with its own incentive problems. Deferred deliberately: the mechanism
+should not be designed until the thing it is meant to scale has been shown to work.

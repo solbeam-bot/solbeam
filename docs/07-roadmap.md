@@ -74,3 +74,10 @@ key is undecided; and the DAA is hard-coded until governance can change it.
 ---
 
 Next: [FAQ](08-faq.md)
+
+### Phase 2 — beyond the proof of concept
+
+**Delegated staking.** Lets non-members delegate `solBSV` to a federation member and share its fee,
+growing the bond base without new operators. **Activatable by governance.** Deliberately deferred:
+a staking layer has its own incentive problems, and it should not be designed until the thing it is
+meant to scale has been shown to work.
