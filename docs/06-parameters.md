@@ -73,7 +73,7 @@ document says X"* and *"the program can be set to X"* are different claims.
 | `lc.max_fork_batch` | Headers per fork tx | **12** `mea` | Set by the 1,232-byte transaction limit |
 | `lc.max_account_create` | Solana account cap | **10,240 bytes** `mea` | A Solana limit, not a choice |
 | `lc.cluster_id` | Deployment identifier | **open** | Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** — the code checks only that the recipient's 32 bytes appear in the `OP_RETURN` |
-| `lc.pow_limit_bits` | Maximum target | **open** | Regtest uses `0x207fffff`; mainnet must be set |
+| `lc.pow_limit_bits` | Maximum target | **`0x1d00ffff` / `0x207fffff`** `built` | In code as `MAINNET_POW_LIMIT_BITS`, with `no_retargeting` derived from the regtest value |
 | `lc.max_staleness_slots` | Freshness bound | **54,000 slots (~6 h)** `built` | How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator** |
 
 ## Vault
@@ -81,7 +81,7 @@ document says X"* and *"the program can be set to X"* are different claims.
 | ID | Name | Value | Description |
 |---|---|---|---|
 | `v.maturity_blocks` | Maturity | **0** `built` | Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks** |
-| `v.reorg_margin` | Detection margin | **48 blocks** at the designed values `der` | `window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth |
+| `v.reorg_margin` | Detection margin | **48 blocks** at the *designed* values `der` | `window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth |
 | `v.escrow_close_refund` | Rent refund on close | **true** `dec` | Closing an item returns its rent to the caller |
 
 ## Federation

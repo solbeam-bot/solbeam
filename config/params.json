@@ -25,7 +25,7 @@
       "name": "Window length (records)",
       "value": 192,
       "status": "built-frozen",
-      "description": "window_hours × 3600 / seconds_per_block. Bounded above by the account cap",
+      "description": "window_hours \u00d7 3600 / seconds_per_block. Bounded above by the account cap",
       "csv_value": "192 der"
     },
     {
@@ -66,7 +66,7 @@
       "value": 72,
       "status": "built-frozen",
       "description": "Multiplies seconds_per_block, not the averaging window",
-      "csv_value": "72 × 600 s mea"
+      "csv_value": "72 \u00d7 600 s mea"
     },
     {
       "id": "lc.daa_clamp_high",
@@ -74,7 +74,7 @@
       "value": 288,
       "status": "built-frozen",
       "description": "As above",
-      "csv_value": "288 × 600 s mea"
+      "csv_value": "288 \u00d7 600 s mea"
     },
     {
       "id": "lc.floor",
@@ -105,23 +105,23 @@
       "name": "Deployment identifier",
       "value": null,
       "status": "open",
-      "description": "Binds a deposit to one deployment (P11). Must differ per cluster. Not built — the code checks only that the recipient's 32 bytes appear in the OP_RETURN",
+      "description": "Binds a deposit to one deployment (P11). Must differ per cluster. Not built \u2014 the code checks only that the recipient's 32 bytes appear in the OP_RETURN",
       "csv_value": "open"
     },
     {
       "id": "lc.pow_limit_bits",
       "name": "Maximum target",
-      "value": null,
-      "status": "open",
-      "description": "Regtest uses 0x207fffff; mainnet must be set",
-      "csv_value": "open"
+      "value": "0x1d00ffff / 0x207fffff",
+      "status": "built-frozen",
+      "description": "Regtest uses 0x207fffff; mainnet 0x1d00ffff. In code as MAINNET_POW_LIMIT_BITS, with no_retargeting derived from the regtest value",
+      "csv_value": "0x1d00ffff / 0x207fffff"
     },
     {
       "id": "lc.max_staleness_slots",
       "name": "Freshness bound",
       "value": 54000,
       "status": "built-frozen",
-      "description": "How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. Implemented (StaleClient), untested on a local validator",
+      "description": "How recent the last accepted header must be before release. A multiple of BSV block time \u2014 ~1,500 Solana slots per block. Implemented (StaleClient), untested on a local validator",
       "csv_value": "54,000 slots (~6 h) built"
     },
     {
@@ -136,8 +136,8 @@
       "id": "v.reorg_margin",
       "name": "Detection margin",
       "value": 48,
-      "status": "built-frozen",
-      "description": "window − maturity. Do not add floor into this subtraction. Zero at the maximum committed depth",
+      "status": "derived",
+      "description": "window \u2212 maturity. Do not add floor into this subtraction. Zero at the maximum committed depth",
       "csv_value": "48 blocks at the designed values der"
     },
     {
@@ -150,10 +150,10 @@
     },
     {
       "id": "fed.bond_mint",
-      "name": "Mint-side bond — BSV side (the float)",
+      "name": "Mint-side bond \u2014 BSV side (the float)",
       "value": 1000,
       "status": "designed",
-      "description": "Held outside the reserve. The bond is the float — working capital for transfers — not a capital requirement sized against the reserve, and not a capacity ceiling. The k × (BSV held) line is a solvency check on mint and exit. Held under the collective (threshold ECDSA) key, not the member's own, and seized by the members collectively; slashing pays the slashers from it. A collective action by the majority, not an automatic rule",
+      "description": "Held outside the reserve. The bond is the float \u2014 working capital for transfers \u2014 not a capital requirement sized against the reserve, and not a capacity ceiling. The k \u00d7 (BSV held) line is a solvency check on mint and exit. Held under the collective (threshold ECDSA) key, not the member's own, and seized by the members collectively; slashing pays the slashers from it. A collective action by the majority, not an automatic rule",
       "csv_value": "1,000 BSV dec"
     },
     {
@@ -166,7 +166,7 @@
     },
     {
       "id": "fed.bond_redeem",
-      "name": "Redeem-side bond — solBSV side (the float)",
+      "name": "Redeem-side bond \u2014 solBSV side (the float)",
       "value": 1000,
       "status": "designed",
       "description": "Seizable on Solana. This side is enforceable. Neither bond sits inside the reserve",
@@ -193,7 +193,7 @@
       "name": "Bonds gate minting",
       "value": true,
       "status": "designed",
-      "description": "F5. A mint is refused unless the BSV-side bond covers the BSV held after it. A solvency floor, not a capacity claim. The old total_bond ≥ k × (non_bonded_supply + amount) is superseded",
+      "description": "F5. A mint is refused unless the BSV-side bond covers the BSV held after it. A solvency floor, not a capacity claim. The old total_bond \u2265 k \u00d7 (non_bonded_supply + amount) is superseded",
       "csv_value": "true dec"
     },
     {
@@ -217,7 +217,7 @@
       "name": "Bond coverage floor",
       "value": 1,
       "status": "designed",
-      "description": "bsv_bond ≥ k × (BSV held) and solbsv_bond ≥ k × (solBSV held), checked on mint and exit. A solvency check, not a capacity ceiling. The capacity arithmetic built on k and n/t is withdrawn. Capital inefficiency accepted",
+      "description": "bsv_bond \u2265 k \u00d7 (BSV held) and solbsv_bond \u2265 k \u00d7 (solBSV held), checked on mint and exit. A solvency check, not a capacity ceiling. The capacity arithmetic built on k and n/t is withdrawn. Capital inefficiency accepted",
       "csv_value": "1 dec"
     },
     {
@@ -233,7 +233,7 @@
       "name": "Greycore size",
       "value": null,
       "status": "designed",
-      "description": "The second signer set on the reserve script: trusted third parties, not node operators — people with reputations to lose, who do not run the reserve. The Greycore finds and admits replacement members",
+      "description": "The second signer set on the reserve script: trusted third parties, not node operators \u2014 people with reputations to lose, who do not run the reserve. The Greycore finds and admits replacement members",
       "csv_value": "open"
     },
     {
@@ -288,8 +288,8 @@
       "id": "fed.spent_report",
       "name": "Spent-outpoint record (N5)",
       "value": "one PDA per (txid, vout), written by the program authority built",
-      "status": "designed",
-      "description": "report_spent records a deposit outpoint the reserve has spent; verify_deposit refuses a deposit whose outpoint is in the record. The signer is the upgrade authority — a PoC stand-in for the federation, which does not exist yet. Permanent and rent-exempt with no prune: closing a record would re-open the mint of an already-spent deposit",
+      "status": "built",
+      "description": "report_spent records a deposit outpoint the reserve has spent; verify_deposit refuses a deposit whose outpoint is in the record. The signer is the upgrade authority \u2014 a PoC stand-in for the federation, which does not exist yet. Permanent and rent-exempt with no prune: closing a record would re-open the mint of an already-spent deposit",
       "csv_value": "one PDA per (txid, vout), written by the program authority built"
     },
     {
@@ -313,7 +313,7 @@
       "name": "Minimum delay (floor)",
       "value": null,
       "status": "designed",
-      "description": "F7. Both readings are defensible and the choice is open: with a floor, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; without, the exit window is whatever the current majority allows. A judgement about trust, not a correctness question",
+      "description": "F7. Both readings are defensible and the choice is open: with a floor, a majority cannot take the warning away \u2014 proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; without, the exit window is whatever the current majority allows. A judgement about trust, not a correctness question",
       "csv_value": "open (7 days proposed)"
     },
     {
@@ -335,10 +335,10 @@
     {
       "id": "gov.authority_threshold",
       "name": "Checkpoint/pause authority",
-      "value": "federation threshold designed — in code it is the upgrade authority, one key, timelocked",
+      "value": "federation threshold designed \u2014 in code it is the upgrade authority, one key, timelocked",
       "status": "designed",
       "description": "F4. Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. Not built",
-      "csv_value": "federation threshold designed — in code it is the upgrade authority, one key, timelocked"
+      "csv_value": "federation threshold designed \u2014 in code it is the upgrade authority, one key, timelocked"
     },
     {
       "id": "gov.authority_timelock",
@@ -369,7 +369,7 @@
       "name": "Peg-in fee (gross)",
       "value": 30,
       "status": "designed",
-      "description": "Covers all transaction fees; the remainder is member income. Its physical location is unspecified — N1",
+      "description": "Covers all transaction fees; the remainder is member income. Its physical location is unspecified \u2014 N1",
       "csv_value": "30 bp dec"
     },
     {
@@ -402,7 +402,7 @@
       "value": null,
       "status": "superseded",
       "description": "Replaced by a nullifier PDA per deposit, which is built. There is no list and no ceiling",
-      "csv_value": "200 der·superseded"
+      "csv_value": "200 der\u00b7superseded"
     },
     {
       "id": "pi.op_return_layout",
@@ -410,14 +410,14 @@
       "value": "version | cluster_id | program_hash | flags | recipient",
       "status": "designed",
       "description": "Designed. What is built checks only that the recipient's 32 bytes appear in an OP_RETURN",
-      "csv_value": "version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient dec"
+      "csv_value": "version \u2016 cluster_id \u2016 program_hash \u2016 flags \u2016 recipient dec"
     },
     {
       "id": "po.deadline",
       "name": "Redemption deadline",
       "value": null,
       "status": "designed",
-      "description": "D. Must satisfy D ≥ payout_confirmations + challenge_window",
+      "description": "D. Must satisfy D \u2265 payout_confirmations + challenge_window",
       "csv_value": "open"
     },
     {
@@ -441,7 +441,7 @@
       "name": "Solana rent",
       "value": 5080,
       "status": "measured",
-      "description": "(bytes + 128) × 5,080. The 128-byte overhead is inside this rate. 6,960 is an older toolchain's constant and overstates by ~37%. Measured: solana rent 0 = 650,240 lamports; solana rent 165 = 1,488,440",
+      "description": "(bytes + 128) \u00d7 5,080. The 128-byte overhead is inside this rate. 6,960 is an older toolchain's constant and overstates by ~37%. Measured: solana rent 0 = 650,240 lamports; solana rent 165 = 1,488,440",
       "csv_value": "5,080 lamports/byte mea"
     },
     {
@@ -457,7 +457,7 @@
       "name": "solBSV decimals",
       "value": 8,
       "status": "measured",
-      "description": "—",
+      "description": "\u2014",
       "csv_value": "8 mea"
     },
     {

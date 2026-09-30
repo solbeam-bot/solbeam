@@ -31,7 +31,7 @@
     "lc.max_fork_batch": 12,
     "lc.max_account_create": 10240,
     "lc.cluster_id": null,
-    "lc.pow_limit_bits": null,
+    "lc.pow_limit_bits": "0x1d00ffff / 0x207fffff",
     "lc.max_staleness_slots": 54000,
     "v.maturity_blocks": 0,
     "v.reorg_margin": 48,

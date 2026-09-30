@@ -45,6 +45,7 @@ EXPLICIT_VALUES = {
     "lc.daa": "cw-144",
     "fed.script": "2-of-2 OP_CHECKMULTISIG",
     "pi.op_return_layout": "version | cluster_id | program_hash | flags | recipient",
+    "lc.pow_limit_bits": "0x1d00ffff / 0x207fffff",
 }
 
 # The Rust constants the program turns on.  (name, type, parameter id, expression)
