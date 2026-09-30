@@ -20,9 +20,10 @@ reference**. If you are reviewing, the section "What we would attack" is the one
 | **The mint** | Deposit verified by Merkle inclusion; replay prevented by a **nullifier PDA per `(txid, vout)`** |
 | **Fork staging** | Chainwork-based, so a branch below the tip can be staged and force a burn |
 | **Authority** | Two-step, **timelocked** checkpoint and pause; the immediate setters were removed |
-| **Tests** | **34 passing / 0 failing**, including negative controls, on a local validator |
+| **The vault** | Every mint lands in a program-owned account. `release_mint` and `burn_staged` are **permissionless**, so a recipient does not depend on a relayer to release their own tokens |
+| **Tests** | **37 passing / 0 failing**, including negative controls, on a local validator |
 
-**The instruction set is 14 instructions.** Everything else in this document is **designed, not
+**The instruction set is 16 instructions.** Everything else in this document is **designed, not
 built.**
 
 ### The three findings that mattered
@@ -49,7 +50,7 @@ decode of a 192-entry window costs ~28 KB of a 32 KB per-instruction heap.
 
 | | |
 |---|---|
-| **The vault** | Every mint should land in a program-owned account, released after maturity, and **burned if a reorg is followed**. There is **no `release_mint` and no `burn_staged`** — today `verify_deposit` mints straight to the depositor |
+| ~~**The vault**~~ | **BUILT.** Every mint lands in a program-owned account; `release_mint` and `burn_staged` both exist and are permissionless. **But see the maturity caveat in §5** — at the shipped maturity of 0 the protective window is removed, so the reversal is *available and racy* rather than automatic |
 | **The reserve script** | Should be `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`. `is_p2pkh` is still hard-required and `DepositScript::SPACE` is still 38 bytes |
 | **Peg-out** | Entirely unbuilt |
 | **The Greycore** | Unbuilt. No account, no instruction, no parameter |

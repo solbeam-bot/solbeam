@@ -162,7 +162,8 @@
       </div>
       <ul>
         <li><strong>Designed, not built.</strong> Burn &rarr; a federation member pays BSV &rarr; the payout is proved on-chain &rarr; settled.</li>
-        <li><strong>The vault.</strong> Minted <code>solBSV</code> lands in a program-owned vault and is released only once its deposit is still canonical after a maturity window — and <strong>burned if a reorg is followed first</strong>. That makes a reorg reversible without a freeze authority. <strong>This is the addition the reference does not have</strong>, and none of it is built yet.</li>
+        <li><strong>Done: the vault.</strong> Minted <code>solBSV</code> lands in a program-owned vault, and <code>release_mint</code> / <code>burn_staged</code> are both <strong>permissionless</strong> — so a recipient does not need a relayer to release their own tokens, and anyone can burn a deposit the chain has moved against.</li>
+        <li><strong>But the protective window ships at 0.</strong> Maturity is a stored parameter, and the PoC ships it at zero: depth zero means <em>immediately releasable</em>. So the burn predicate is satisfied instantly rather than being unreachable — release and burn become a <strong>race</strong>, and release normally wins. <strong>What protects a deposit today is the twelve-confirmation delay (~2 hours), which is prevention, not reversal.</strong> The window exists so that reversal is not a race; raising it needs no redeploy.</li>
         <li><strong>The federation holds the reserve.</strong> Members bond <strong>BSV</strong> — working capital for transfers, the <em>float</em>, <strong>not</strong> capital sized against the vault. Sizing the bond against the vault produced an impossible inequality twice, so <strong>every capacity figure is withdrawn with the reason recorded</strong>.</li>
         <li><strong>A second quorum co-signs every reserve movement.</strong> The reserve script is a <code>2-of-2</code>: the members' threshold key <em>and</em> the second quorum's key. Neither can move funds alone, and that is what actually constrains the reserve. The second quorum is <strong>trusted third parties with reputations to lose, not node operators</strong>.</li>
         <li><strong>The design follows RenVM deliberately.</strong> A bonded member set, a second quorum, epochs for membership — the precedent is good, and it is the bridge that issued wrapped ZEC. <strong>What we add is reorg reversal</strong>, which the reference does not address at all.</li>
@@ -187,9 +188,9 @@
 
     <h2>What is proven so far</h2>
     <div class="tally">
-      <span><b>14</b> instructions built</span>
-      <span><b>34</b> on-chain tests</span>
-      <span><b>0</b> of the vault built</span>
+      <span><b>16</b> instructions built</span>
+      <span><b>37</b> on-chain tests</span>
+      <span><b>0</b> of peg-out built</span>
       <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>
     </div>
