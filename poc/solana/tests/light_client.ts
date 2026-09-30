@@ -495,6 +495,37 @@ describe("solbeam — verify a deposit against the window", () => {
   // need the PDAs it creates. Its opposite number — the stranger who is refused
   // — is the second test of the first describe block.
   it("initialises the bridge when the payer IS the upgrade authority", async () => {
+    // --- the reserve script shape, checked BEFORE the account exists ------------
+    // The ordering is load-bearing. Anchor refuses a second `init` on an existing
+    // account whatever the script, so a rejection checked after the successful
+    // initialise would pass for the wrong reason and prove nothing.
+    const reserve2of2 = Buffer.concat([
+      Buffer.from([0x52, 0x21]), Buffer.alloc(33, 0x02),
+      Buffer.from([0x21]),        Buffer.alloc(33, 0x03),
+      Buffer.from([0x52, 0xae]),
+    ]);
+    expect(reserve2of2.length).to.equal(71);
+    expect(reserve2of2[0]).to.equal(0x52);   // OP_2
+    expect(reserve2of2[1]).to.equal(0x21);   // push 33
+    expect(reserve2of2[35]).to.equal(0x21);  // push 33
+    expect(reserve2of2[69]).to.equal(0x52);  // OP_2
+    expect(reserve2of2[70]).to.equal(0xae);  // OP_CHECKMULTISIG
+
+    for (const bad of [
+      Buffer.from([0x00, 0x01, 0x02, 0x03]),               // arbitrary
+      reserve2of2.subarray(0, 70),                         // missing OP_CHECKMULTISIG
+      Buffer.concat([reserve2of2, Buffer.from([0x00])]),   // 72 bytes, over the bound
+    ]) {
+      let refused = false;
+      try {
+        await program.methods
+          .initializeBridge(bad)
+          .accounts({ depositScript, programData, payer: provider.wallet.publicKey })
+          .rpc();
+      } catch (e) { refused = true; }
+      expect(refused, `a wrong-shape script of ${bad.length} bytes must be refused`).to.equal(true);
+    }
+
     await program.methods
       // Vec<u8> must be a Buffer, not an Array: borsh encodes it as
       // `bytes` and calls .copy() on it.

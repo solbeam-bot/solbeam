@@ -873,7 +873,11 @@ pub mod solbeam {
     /// mint and closed by [`prune_nullifier`] once its block leaves the window.
     pub fn initialize_bridge(ctx: Context<InitializeBridge>, deposit_script: Vec<u8>) -> Result<()> {
         require!(
-            is_p2pkh(&deposit_script),
+            deposit_script.len() <= MAX_SCRIPT_LEN,
+            SolbeamError::DepositScriptTooLong
+        );
+        require!(
+            is_acceptable_deposit_script(&deposit_script),
             SolbeamError::DepositScriptNotP2pkh
         );
         let ds = &mut ctx.accounts.deposit_script;
@@ -2214,7 +2218,8 @@ pub struct DepositScript {
 }
 
 impl DepositScript {
-    pub const SPACE: usize = 8 + 4 + 25 + 1;
+    /// 8 discriminator + 4 vec length + MAX_SCRIPT_LEN + 1 padding.
+    pub const SPACE: usize = 8 + 4 + MAX_SCRIPT_LEN + 1;
 }
 
 #[derive(Accounts)]
@@ -2457,7 +2462,16 @@ pub fn op_return_payload(script: &[u8]) -> Option<&[u8]> {
     script.get(2..2 + len)
 }
 
+/// The longest deposit script the account will hold: a 2-of-2 multisig.
+///
+/// `OP_2 <33-byte key> <33-byte key> OP_2 OP_CHECKMULTISIG` is 1+34+34+1+1 = 71 bytes.
+/// Grown from 25 when the reserve script became a 2-of-2 rather than a plain P2PKH.
+pub const MAX_SCRIPT_LEN: usize = 71;
+
 /// A canonical P2PKH script: `76 a9 14 <20 bytes> 88 ac`, 25 bytes.
+///
+/// Retained because the current deployment pays a single key, and the Phase 1A fixture
+/// is a real deposit to a P2PKH address. The target model is [`is_reserve_multisig`].
 pub fn is_p2pkh(script: &[u8]) -> bool {
     script.len() == 25
         && script[0] == 0x76
@@ -2465,6 +2479,30 @@ pub fn is_p2pkh(script: &[u8]) -> bool {
         && script[2] == 0x14
         && script[23] == 0x88
         && script[24] == 0xac
+}
+
+/// The reserve script of the Greycore model:
+/// `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`.
+///
+/// One key is the federation's threshold key, which emits **one** signature however many
+/// members signed; the other is the Greycore's. **Both must sign**, so neither the
+/// federation majority nor the Greycore can move the reserve alone. That is what constrains
+/// the reserve — the bond does not, and cannot.
+///
+/// 71 bytes: `52 21 <33> 21 <33> 52 ae`.
+pub fn is_reserve_multisig(script: &[u8]) -> bool {
+    script.len() == 71
+        && script[0] == 0x52
+        && script[1] == 0x21
+        && script[35] == 0x21
+        && script[69] == 0x52
+        && script[70] == 0xae
+}
+
+/// Either accepted shape. Anything else is refused, so the authority cannot set a script
+/// nobody can pay — or one that is unspendable.
+pub fn is_acceptable_deposit_script(script: &[u8]) -> bool {
+    is_p2pkh(script) || is_reserve_multisig(script)
 }
 
 // ---------------------------------------------------------------------------
@@ -2517,8 +2555,10 @@ pub enum SolbeamError {
     TimelockTooSoon,
     #[msg("the authority timelock has not elapsed yet")]
     TimelockNotElapsed,
-    #[msg("the deposit script must be a P2PKH script")]
+    #[msg("deposit script must be a canonical P2PKH or a 2-of-2 reserve multisig")]
     DepositScriptNotP2pkh,
+    #[msg("deposit script exceeds MAX_SCRIPT_LEN")]
+    DepositScriptTooLong,
     #[msg("the recipient account does not match the OP_RETURN payload")]
     RecipientMismatch,
     #[msg("a competing branch must contain at least one header")]
@@ -2557,4 +2597,58 @@ pub enum SolbeamError {
     ForkPointTooOld,
     #[msg("the light client account data is not a well-formed LightClient")]
     MalformedClientData,
+}
+
+#[cfg(test)]
+mod script_shape_tests {
+    use super::*;
+
+    fn p2pkh() -> Vec<u8> {
+        let mut s = vec![0x76, 0xa9, 0x14];
+        s.extend([0u8; 20]);
+        s.extend([0x88, 0xac]);
+        s
+    }
+
+    fn reserve_2of2() -> Vec<u8> {
+        let mut s = vec![0x52, 0x21];
+        s.extend([2u8; 33]);
+        s.push(0x21);
+        s.extend([3u8; 33]);
+        s.extend([0x52, 0xae]);
+        s
+    }
+
+    #[test]
+    fn reserve_script_shapes() {
+        let m = reserve_2of2();
+        assert_eq!(m.len(), 71, "a 2-of-2 reserve script is 71 bytes");
+        assert!(is_reserve_multisig(&m));
+        assert!(is_acceptable_deposit_script(&m));
+        assert!(!is_p2pkh(&m));
+
+        let p = p2pkh();
+        assert_eq!(p.len(), 25);
+        assert!(is_p2pkh(&p));
+        assert!(is_acceptable_deposit_script(&p));
+        assert!(!is_reserve_multisig(&p));
+
+        assert!(MAX_SCRIPT_LEN >= m.len(), "the account must fit what we accept");
+
+        // Wrong shapes must be refused.
+        assert!(!is_acceptable_deposit_script(&[0x00, 0x01, 0x02, 0x03]));
+        assert!(!is_acceptable_deposit_script(&[]));
+        // 70 bytes: the last OP_CHECKMULTISIG is missing.
+        let mut short = reserve_2of2();
+        short.pop();
+        assert!(!is_acceptable_deposit_script(&short));
+        // 72 bytes: one byte too long.
+        let mut long = reserve_2of2();
+        long.push(0x00);
+        assert!(!is_acceptable_deposit_script(&long));
+        // A P2PKH with one byte altered.
+        let mut bad_p = p2pkh();
+        bad_p[2] = 0x15;
+        assert!(!is_acceptable_deposit_script(&bad_p));
+    }
 }
