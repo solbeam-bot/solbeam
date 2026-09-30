@@ -45,6 +45,13 @@ const TIMELOCK_SLOTS = 32;
 /** The program's `NULLIFIER_SEED`. */
 const NULLIFIER_SEED = Buffer.from("nullifier");
 
+/**
+ * The program's `STAGED_MINT_SEED`. Doc 31 specifies `[b"mint", txid, vout]` —
+ * deliberately the same bytes as the SPL mint's `[b"mint"]` seed, because the
+ * seed lists differ in length and the two addresses cannot collide.
+ */
+const STAGED_MINT_SEED = Buffer.from("mint");
+
 /** The singleton PDA holding the one timelocked authority change (F4). */
 function pendingChangePda(programId: anchor.web3.PublicKey): anchor.web3.PublicKey {
   return anchor.web3.PublicKey.findProgramAddressSync(
@@ -64,6 +71,25 @@ function nullifierPda(
   voutBuf.writeUInt32LE(vout, 0);
   return anchor.web3.PublicKey.findProgramAddressSync(
     [NULLIFIER_SEED, txidInternal, voutBuf], programId)[0];
+}
+
+/**
+ * The staged mint for a deposit: `[b"mint", txid_le, vout_le]`, derived exactly
+ * as the program's `create_staged_mint`, `release_mint` and `burn_staged` do.
+ * `txid` is in INTERNAL order, as everywhere else.
+ */
+function stagedMintPda(
+  programId: anchor.web3.PublicKey, txidInternal: Buffer, vout: number,
+): anchor.web3.PublicKey {
+  const voutBuf = Buffer.alloc(4);
+  voutBuf.writeUInt32LE(vout, 0);
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [STAGED_MINT_SEED, txidInternal, voutBuf], programId)[0];
+}
+
+/** The SPL token account's `amount`, a u64 at offset 64. */
+function tokenAmount(data: Buffer): number {
+  return Number(data.readBigUInt64LE(64));
 }
 
 /**
@@ -116,10 +142,16 @@ async function proposeChange(
 
 /** Execute the outstanding change; fails unless the timelock has elapsed. */
 async function executeChange(ctx: GovCtx): Promise<string> {
+  // `config` is a required account on every execute now — it is what
+  // `AuthorityChange::SetMaturity` writes — so it is passed rather than left to
+  // Anchor's PDA resolution.
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], ctx.program.programId);
   return ctx.program.methods
     .executeAuthorityChange()
     .accounts({
       lightClient: ctx.lightClient,
+      config,
       pending: ctx.pending,
       authority: ctx.provider.wallet.publicKey,
     })
@@ -139,7 +171,7 @@ async function timelockedCheckpoint(
   // read and the propose transaction landing, and `TimelockTooSoon` would
   // otherwise be a flaky failure rather than a finding.
   const effective = (await ctx.provider.connection.getSlot("processed"))
-    + TIMELOCK_SLOTS + 12;
+    + TIMELOCK_SLOTS + 40;
   await proposeChange(
     ctx,
     // Variant keys are camelCase: the client converts the IDL to camelCase
@@ -241,6 +273,10 @@ describe("solbeam — BSV light client", () => {
   const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("deposit_script")], program.programId);
 
+  // The singleton config, created by `initialize` alongside the light client.
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+
   before(async () => {
     // Anchor's localnet wallet is normally funded. Top up defensively, and do
     // not fail the suite if the airdrop is rate-limited.
@@ -274,7 +310,7 @@ describe("solbeam — BSV light client", () => {
     try {
       await program.methods
         .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(raws[0]))
-        .accounts({ lightClient, programData, payer: attacker.publicKey })
+        .accounts({ lightClient, config, programData, payer: attacker.publicKey })
         .signers([attacker])
         .rpc();
       expect.fail("a non-authority payer must not be able to initialize");
@@ -310,7 +346,7 @@ describe("solbeam — BSV light client", () => {
       // The whole 80-byte header, not its fields: nothing can be dropped or
       // mis-ordered this way, which is exactly how the version field got lost.
       .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-      .accounts({ lightClient, programData, payer: provider.wallet.publicKey })
+      .accounts({ lightClient, config, programData, payer: provider.wallet.publicKey })
       .rpc();
 
     const lc = await program.account.lightClient.fetch(lightClient);
@@ -412,11 +448,24 @@ describe("solbeam — verify a deposit against the window", () => {
     [Buffer.from("deposit_script")], program.programId);
   const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("mint")], program.programId);
+  // The singleton config holding `maturity_blocks`, and the program-owned vault
+  // every mint now lands in.
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+  const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault")], program.programId);
 
   // The replay nullifier for the one fixture deposit. Derived from the claim's
   // (txid, vout) exactly as the program derives it — there is no list account
   // any more, so this address IS the replay record.
   const nullifier = nullifierPda(
+    program.programId,
+    displayToInternal(fixture.proof.txid),
+    fixture.proof.vout,
+  );
+  // The **staged mint** for the same deposit: `[b"mint", txid, vout]`. This is
+  // the vaulted item `release_mint` and `burn_staged` act on.
+  const staged = stagedMintPda(
     program.programId,
     displayToInternal(fixture.proof.txid),
     fixture.proof.vout,
@@ -466,6 +515,23 @@ describe("solbeam — verify a deposit against the window", () => {
     tx: Buffer.from(fixture.deposit_tx_raw, "hex"),
   });
 
+  /**
+   * The accounts `verify_deposit` now takes. It stages the mint and mints into
+   * the vault; there is no recipient token account on this path any more, so
+   * nothing is created here on the depositor's behalf.
+   */
+  const verifyAccounts = () => ({
+    lightClient, nullifier, staged, depositScript, config, mint, vault,
+    recipientOwner, submitter: provider.wallet.publicKey,
+  });
+
+  /** `release_mint` pays the staged item out to the recipient's ATA. */
+  const releaseAccounts = () => ({
+    lightClient, staged, mint, vault,
+    recipientTokenAccount: recipientAta, recipientOwner,
+    submitter: provider.wallet.publicKey,
+  });
+
   before(async () => {
     // Idempotent on purpose. Both describe blocks share one validator, and the
     // first block has already created these PDAs — so re-initialising would
@@ -475,7 +541,7 @@ describe("solbeam — verify a deposit against the window", () => {
       const cp = raws[0];
       await program.methods
         .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-        .accounts({ lightClient, programData, payer: provider.wallet.publicKey })
+        .accounts({ lightClient, config, programData, payer: provider.wallet.publicKey })
         .rpc();
       for (const raw of raws.slice(1)) {
         await program.methods.pushHeader(Array.from(raw))
@@ -485,7 +551,7 @@ describe("solbeam — verify a deposit against the window", () => {
     if (!(await provider.connection.getAccountInfo(mint))) {
       await program.methods
         .initializeToken()
-        .accounts({ mint, lightClient, payer: provider.wallet.publicKey })
+        .accounts({ mint, lightClient, vault, payer: provider.wallet.publicKey })
         .rpc();
     }
   });
@@ -541,11 +607,7 @@ describe("solbeam — verify a deposit against the window", () => {
   it("accepts the fixture's deposit and records a nullifier for it", async () => {
     await program.methods
       .verifyDeposit(proof())
-      .accounts({
-        lightClient, nullifier, depositScript, mint,
-        recipientTokenAccount: recipientAta, recipientOwner,
-        submitter: provider.wallet.publicKey,
-      })
+      .accounts(verifyAccounts())
       .rpc();
 
     // Assert on STATE rather than scraping logs. Scraping is fragile — the
@@ -563,27 +625,60 @@ describe("solbeam — verify a deposit against the window", () => {
     expect((await provider.connection.getAccountInfo(nullifier))!.owner.toBase58())
       .to.equal(program.programId.toBase58());
 
-    // And the tokens exist. Eight decimals, one base unit per satoshi, so the
-    // minted amount must equal the deposit exactly — no scaling anywhere.
-    // Read the amount straight out of the token account rather than through a
-    // helper. An SPL token account is mint(32) owner(32) amount(8), so the
-    // balance is a u64 at offset 64 — no library needed and no API to be
-    // missing.
-    const ataInfo = await provider.connection.getAccountInfo(recipientAta);
-    expect(ataInfo, "the recipient's token account should have been created")
+    // --- the staged item, which is what this instruction now creates ------------
+    // Before doc 31 this test asserted the tokens had landed in the depositor's
+    // ATA. That is no longer what `verify_deposit` does, so the assertion moved
+    // here: the item is staged, and the *vault* holds the minted tokens.
+    const item = await program.account.stagedMint.fetch(staged);
+    expect(item.recipient.toBase58()).to.equal(recipientOwner.toBase58());
+    expect(item.amount.toNumber()).to.equal(fixture.proof.amount);
+    expect(item.depositHeight.toNumber()).to.equal(fixture.proof.height);
+    // `deposit_hash` is the hash the client held at that height when the claim
+    // was verified — the block the proof was checked against.
+    const depositRaw = raws[
+      fixture.headers.findIndex((h: any) => h.height === fixture.proof.height)];
+    expect(Buffer.from(item.depositHash).toString("hex"))
+      .to.equal(doubleSha256(depositRaw).toString("hex"));
+    // The default maturity is 0, and this is the deposit that proves the
+    // pass-through: the value the parameter had when the deposit was verified is
+    // what is recorded, not the config's value at release time.
+    expect(item.maturityAtDeposit.toNumber()).to.equal(0);
+
+    // No recipient token account was created: nothing was minted to the
+    // depositor on this path.
+    expect(await provider.connection.getAccountInfo(recipientAta)).to.equal(null);
+
+    // Eight decimals, one base unit per satoshi, so the minted amount must equal
+    // the deposit exactly — no scaling anywhere. The vault is where it is, and
+    // the ATA balance helper reads the u64 at offset 64.
+    const vaultInfo = await provider.connection.getAccountInfo(vault);
+    expect(vaultInfo, "the vault should hold the minted tokens").to.not.equal(null);
+    expect(tokenAmount(vaultInfo!.data)).to.equal(fixture.proof.amount);
+
+    // --- and release_mint delivers it, permissionlessly ------------------------
+    await program.methods
+      .releaseMint(Array.from(displayToInternal(fixture.proof.txid)), fixture.proof.vout)
+      .accounts(releaseAccounts())
+      .rpc();
+
+    const delivered = await provider.connection.getAccountInfo(recipientAta);
+    expect(delivered, "release_mint should create and fund the recipient's ATA")
       .to.not.equal(null);
-    expect(Number(ataInfo!.data.readBigUInt64LE(64))).to.equal(fixture.proof.amount);
+    expect(tokenAmount(delivered!.data)).to.equal(fixture.proof.amount);
+    // The vault is empty again — this is the maturity-0 pass-through.
+    expect(tokenAmount((await provider.connection.getAccountInfo(vault))!.data)).to.equal(0);
+    // The staged item is closed: released exactly once.
+    expect(await provider.connection.getAccountInfo(staged)).to.equal(null);
+    // The replay record is NOT closed by the release. It must outlive the item
+    // or the deposit could be staged again.
+    expect(await provider.connection.getAccountInfo(nullifier)).to.not.equal(null);
   });
 
   it("refuses the same deposit twice", async () => {
     try {
       await program.methods
         .verifyDeposit(proof())
-        .accounts({
-        lightClient, nullifier, depositScript, mint,
-        recipientTokenAccount: recipientAta, recipientOwner,
-        submitter: provider.wallet.publicKey,
-      })
+        .accounts(verifyAccounts())
         .rpc();
       expect.fail("should have refused a replay");
     } catch (e: any) {
@@ -597,11 +692,7 @@ describe("solbeam — verify a deposit against the window", () => {
     try {
       await program.methods
         .verifyDeposit(bad)
-        .accounts({
-        lightClient, nullifier, depositScript, mint,
-        recipientTokenAccount: recipientAta, recipientOwner,
-        submitter: provider.wallet.publicKey,
-      })
+        .accounts(verifyAccounts())
         .rpc();
       expect.fail("should have refused a bad branch");
     } catch (e: any) {
@@ -621,11 +712,7 @@ describe("solbeam — verify a deposit against the window", () => {
     try {
       await program.methods
         .verifyDeposit(bad)
-        .accounts({
-        lightClient, nullifier, depositScript, mint,
-        recipientTokenAccount: recipientAta, recipientOwner,
-        submitter: provider.wallet.publicKey,
-      })
+        .accounts(verifyAccounts())
         .rpc();
       expect.fail("should have refused a substituted header");
     } catch (e: any) {
@@ -639,11 +726,7 @@ describe("solbeam — verify a deposit against the window", () => {
     try {
       await program.methods
         .verifyDeposit(bad)
-        .accounts({
-        lightClient, nullifier, depositScript, mint,
-        recipientTokenAccount: recipientAta, recipientOwner,
-        submitter: provider.wallet.publicKey,
-      })
+        .accounts(verifyAccounts())
         .rpc();
       expect.fail("should have refused an inflated amount");
     } catch (e: any) {
@@ -657,11 +740,7 @@ describe("solbeam — verify a deposit against the window", () => {
     try {
       await program.methods
         .verifyDeposit(bad)
-        .accounts({
-        lightClient, nullifier, depositScript, mint,
-        recipientTokenAccount: recipientAta, recipientOwner,
-        submitter: provider.wallet.publicKey,
-      })
+        .accounts(verifyAccounts())
         .rpc();
       expect.fail("should have refused a missing payload");
     } catch (e: any) {
@@ -693,6 +772,11 @@ describe("solbeam — a hostile advancer", () => {
   const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
     [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
 
+  // `initialize` now also creates the config; pass it rather than relying on
+  // Anchor deriving the PDA.
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+
   const tipHash = async (): Promise<Buffer> => {
     const lc = await program.account.lightClient.fetch(lightClient);
     return Buffer.from(lc.tipHash);
@@ -715,7 +799,7 @@ describe("solbeam — a hostile advancer", () => {
       const cp = raws[0];
       await program.methods
         .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-        .accounts({ lightClient, programData, payer: provider.wallet.publicKey })
+        .accounts({ lightClient, config, programData, payer: provider.wallet.publicKey })
         .rpc();
       for (const raw of raws.slice(1)) {
         await program.methods.pushHeader(Array.from(raw))
@@ -796,12 +880,16 @@ describe("solbeam — following a reorg", () => {
   const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
     [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
 
+  // `initialize` now also creates the config.
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+
   before(async () => {
     if (!(await provider.connection.getAccountInfo(lightClient))) {
       const cp = raws[0];
       await program.methods
         .initialize(new anchor.BN(fixture.checkpoint.height), Array.from(cp))
-        .accounts({ lightClient, programData, payer: provider.wallet.publicKey }).rpc();
+        .accounts({ lightClient, config, programData, payer: provider.wallet.publicKey }).rpc();
       for (const raw of raws.slice(1)) {
         await program.methods.pushHeader(Array.from(raw))
           .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
@@ -940,6 +1028,18 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
     displayToInternal(fixture.proof.txid),
     fixture.proof.vout,
   );
+  // The staged item and the vault: the vault already holds this deposit's tokens
+  // (the first describe released them, but the item itself was closed there, so
+  // this attempt is refused at the nullifier before any staged account exists).
+  const staged = stagedMintPda(
+    program.programId,
+    displayToInternal(fixture.proof.txid),
+    fixture.proof.vout,
+  );
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+  const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault")], program.programId);
   const recipientOwner = new anchor.web3.PublicKey(
     Buffer.from(fixture.proof.recipient, "hex"));
   const TOKEN_PROGRAM = new anchor.web3.PublicKey(
@@ -979,9 +1079,8 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
   });
 
   const accounts = () => ({
-    lightClient, nullifier, depositScript, mint,
-    recipientTokenAccount: recipientAta, recipientOwner,
-    submitter: provider.wallet.publicKey,
+    lightClient, nullifier, staged, depositScript, config, mint, vault,
+    recipientOwner, submitter: provider.wallet.publicKey,
   });
 
   it("refuses the same (txid, vout) re-included at a different height", async () => {
@@ -1111,6 +1210,14 @@ describe("solbeam — pruning a nullifier (P5/W1)", () => {
   const txidInternal = displayToInternal(fixture.proof.txid);
   const nullifier = nullifierPda(
     program.programId, txidInternal, fixture.proof.vout);
+  // `verify_deposit` now needs these even for a claim it refuses early: the
+  // staged item, the config and the vault.
+  const staged = stagedMintPda(
+    program.programId, txidInternal, fixture.proof.vout);
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+  const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault")], program.programId);
 
   const recipientOwner = new anchor.web3.PublicKey(
     Buffer.from(fixture.proof.recipient, "hex"));
@@ -1199,9 +1306,8 @@ describe("solbeam — pruning a nullifier (P5/W1)", () => {
         header: Array.from(rawAt(fixture.proof.height)),
         tx: Buffer.from(fixture.deposit_tx_raw, "hex"),
       }).accounts({
-        lightClient, nullifier, depositScript, mint,
-        recipientTokenAccount: recipientAta, recipientOwner,
-        submitter: provider.wallet.publicKey,
+        lightClient, nullifier, staged, depositScript, config, mint, vault,
+        recipientOwner, submitter: provider.wallet.publicKey,
       }).rpc();
       expect.fail("a pruned deposit must not be mintable again");
     } catch (e: any) {
@@ -1833,7 +1939,7 @@ describe("solbeam — the authority timelock (F4)", () => {
 
   it("refuses an execute before the timelock, then applies it after", async () => {
     const effective = (await provider.connection.getSlot("processed"))
-      + TIMELOCK_SLOTS + 12;
+      + TIMELOCK_SLOTS + 40;
     await proposeChange(gov, { pause: { paused: true } }, effective);
 
     // The pending change is visible, with who proposed it and when it lands —
@@ -1873,7 +1979,7 @@ describe("solbeam — the authority timelock (F4)", () => {
 
   it("can be cancelled, and a cancelled change never takes effect", async () => {
     const effective = (await provider.connection.getSlot("processed"))
-      + TIMELOCK_SLOTS + 12;
+      + TIMELOCK_SLOTS + 40;
     await proposeChange(gov, { pause: { paused: false } }, effective);
 
     await program.methods.cancelAuthorityChange()
@@ -1896,10 +2002,408 @@ describe("solbeam — the authority timelock (F4)", () => {
 
   it("applies an unpause through the same path", async () => {
     const effective = (await provider.connection.getSlot("processed"))
-      + TIMELOCK_SLOTS + 12;
+      + TIMELOCK_SLOTS + 40;
     await proposeChange(gov, { pause: { paused: false } }, effective);
     await waitForSlot(provider.connection, effective);
     await executeChange(gov);
     expect(await isPaused()).to.equal(false);
+  });
+});
+
+/**
+ * The vault at **non-zero** maturity, and the burn path.
+ *
+ * This is the suite doc 31 §5 exists for. At the default `maturity_blocks = 0`
+ * the release gate is satisfied the moment the deposit has its twelve
+ * confirmations, so `burn_staged`'s *maturity* half is vacuous; the parameter is
+ * a parameter precisely so the burn can be **proven by test rather than
+ * asserted**.
+ *
+ * The two deposits here are **synthetic**, not the fixture's: the fixture's one
+ * `(txid, vout)` was consumed and released by the second describe block, and its
+ * nullifier is the replay record, so it can never be staged twice. Building the
+ * transactions is straightforward because a one-transaction block's Merkle root
+ * *is* that transaction's id — so a claim has an empty branch, which the program
+ * folds to the root it reads out of the header.
+ *
+ * `MATURITY = 15` rather than something smaller is deliberate. At 12 or less the
+ * maturity gate would already be satisfied by the time a deposit had
+ * `MIN_CONFIRMATIONS`, so `NotMatured` could never be reached and the condition
+ * would be untested. At 15 it binds for three blocks after the twelfth
+ * confirmation, which is what the negative test below exercises.
+ *
+ * It runs last, re-anchors the client, and leaves `maturity_blocks` at 30: the
+ * deposits are staged at 15 and the config is then raised, so the suite also
+ * proves the recorded `maturity_at_deposit` is what the release and the burn use.
+ */
+describe("solbeam — the vault at non-zero maturity (release and burn)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const rawAt = (height: number): Buffer => Buffer.from(
+    (fixture.headers.find((h: any) => h.height === height)
+      ?? fixture.fork.headers.find((h: any) => h.height === height))!.raw, "hex");
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("mint")], program.programId);
+  const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault")], program.programId);
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+  const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("deposit_script")], program.programId);
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
+
+  const TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+  const ASSOCIATED_TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+
+  const DEPOSIT_SCRIPT = Buffer.from(fixture.deposit_script, "hex");
+  const MATURITY = 15;
+  const AMOUNT_A = 5_000_000;
+  const AMOUNT_B = 7_000_000;
+
+  // Two recipients, distinct from the fixture's, so the ATAs are clean.
+  const ownerA = anchor.web3.Keypair.generate().publicKey;
+  const ownerB = anchor.web3.Keypair.generate().publicKey;
+  const ataOf = (owner: anchor.web3.PublicKey): anchor.web3.PublicKey =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+      ASSOCIATED_TOKEN_PROGRAM)[0];
+  const ataA = ataOf(ownerA);
+  const ataB = ataOf(ownerB);
+
+  const u32 = (n: number): Buffer => {
+    const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b;
+  };
+  const u64 = (n: number): Buffer => {
+    const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b;
+  };
+
+  /**
+   * A legacy, one-input, two-output transaction whose output 0 pays the
+   * bridge's deposit script and whose output 1 is the `OP_RETURN` committing to
+   * the recipient — the two things `verify_deposit` actually checks.
+   */
+  const depositTx = (recipient: Buffer, amount: number, salt: number): Buffer => {
+    const opReturn = Buffer.concat([Buffer.from([0x6a, 0x20]), recipient]);
+    return Buffer.concat([
+      u32(1),                              // version
+      Buffer.from([1]),                    // vin count
+      Buffer.alloc(32, salt),              // prev txid
+      u32(salt),                           // prev vout
+      Buffer.from([0]),                    // scriptSig length
+      u32(0xffffffff),                     // sequence
+      Buffer.from([2]),                    // vout count
+      u64(amount),
+      Buffer.from([DEPOSIT_SCRIPT.length]), DEPOSIT_SCRIPT,
+      u64(0),
+      Buffer.from([opReturn.length]), opReturn,
+      u32(0),                              // locktime
+    ]);
+  };
+
+  /** A regtest block whose only transaction is `txid` (so the root is the id). */
+  const blockWith = (txid: Buffer, prev: Buffer, salt: number): Buffer => {
+    const header = Buffer.alloc(80);
+    header.writeUInt32LE(0x20000000, 0);
+    doubleSha256(prev).copy(header, 4);
+    txid.copy(header, 36);
+    header.writeUInt32LE(1_800_000_000 + salt, 68);
+    header.writeUInt32LE(REGTEST_BITS, 72);
+    return mineRegtest(header);
+  };
+
+  const push = async (raw: Buffer) => {
+    await program.methods.pushHeader(Array.from(raw))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+  };
+
+  const fundedSubmitter = async (): Promise<anchor.web3.Keypair> => {
+    const key = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      key.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    return key;
+  };
+
+  const txA = depositTx(ownerA.toBuffer(), AMOUNT_A, 0x21);
+  const txB = depositTx(ownerB.toBuffer(), AMOUNT_B, 0x22);
+  const txidA = doubleSha256(txA);
+  const txidB = doubleSha256(txB);
+  const nullifierA = nullifierPda(program.programId, txidA, 0);
+  const nullifierB = nullifierPda(program.programId, txidB, 0);
+  const stagedA = stagedMintPda(program.programId, txidA, 0);
+  const stagedB = stagedMintPda(program.programId, txidB, 0);
+
+  let blockA: Buffer; // height 127
+  let blockB: Buffer; // height 128
+  /** The raw header of the current tip, carried across the ordered tests. */
+  let tipRaw: Buffer;
+  /**
+   * `solBSV` supply before this suite mints anything. The fixture deposit was
+   * minted and released by the second describe block, so the supply is not zero
+   * here and the burn assertion below is a delta, not an absolute.
+   */
+  let supplyBefore: number;
+
+  const claimFor = (
+    tx: Buffer, height: number, header: Buffer, amount: number,
+    recipient: anchor.web3.PublicKey,
+  ) => ({
+    height: new anchor.BN(height),
+    txid: Array.from(doubleSha256(tx)),
+    vout: 0,
+    amount: new anchor.BN(amount),
+    recipient: Array.from(recipient.toBuffer()),
+    index: 0,
+    branch: [] as number[][],
+    header: Array.from(header),
+    tx,
+  });
+
+  const verifyAccounts = (
+    nullifier: anchor.web3.PublicKey,
+    staged: anchor.web3.PublicKey,
+    recipient: anchor.web3.PublicKey,
+  ) => ({
+    lightClient, nullifier, staged, depositScript, config, mint, vault,
+    recipientOwner: recipient, submitter: provider.wallet.publicKey,
+  });
+
+  const releaseAccounts = (
+    staged: anchor.web3.PublicKey,
+    recipient: anchor.web3.PublicKey,
+    ata: anchor.web3.PublicKey,
+  ) => ({
+    lightClient, staged, mint, vault,
+    recipientTokenAccount: ata, recipientOwner: recipient,
+    submitter: provider.wallet.publicKey,
+  });
+
+  const burnAccounts = (staged: anchor.web3.PublicKey) => ({
+    lightClient, staged, mint, vault, submitter: provider.wallet.publicKey,
+  });
+
+  const setMaturity = async (blocks: number) => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 40;
+    await proposeChange(
+      gov, { setMaturity: { blocks: new anchor.BN(blocks) } }, effective);
+    await waitForSlot(provider.connection, effective);
+    await executeChange(gov);
+  };
+
+  before(async () => {
+    // The timelock describe left the client unpaused on a mainnet chain.
+    // Re-anchor to regtest height 115 and push 116, so window_start is 116 and
+    // the fabricated deposits below can hang off it.
+    await timelockedCheckpoint(gov, 115, rawAt(115));
+    await push(rawAt(116));
+
+    // Raise the maturity **through the existing timelocked path**. No new
+    // authority mechanism: the same propose/execute the checkpoint uses.
+    await setMaturity(MATURITY);
+    expect((await program.account.config.fetch(config)).maturityBlocks.toNumber())
+      .to.equal(MATURITY);
+
+    // Filler 117..126, then the two deposit blocks at 127 and 128.
+    let parent = rawAt(116);
+    for (let h = 117; h <= 126; h++) {
+      parent = blockWith(Buffer.alloc(32, h), parent, h);
+      await push(parent);
+    }
+    blockA = blockWith(txidA, parent, 1);
+    await push(blockA);
+    blockB = blockWith(txidB, blockA, 2);
+    await push(blockB);
+
+    // Bury both past MIN_CONFIRMATIONS. 129..139 is eleven more blocks, so the
+    // tip is 139: A has 13 confirmations and B has 12.
+    parent = blockB;
+    for (let h = 129; h <= 139; h++) {
+      parent = forkFrom(rawAt(h), parent, h);
+      await push(parent);
+    }
+    tipRaw = parent;
+
+    supplyBefore = Number(
+      (await provider.connection.getAccountInfo(mint))!.data.readBigUInt64LE(36));
+
+    for (const [nul, stg, tx, height, header, owner, amount] of [
+      [nullifierA, stagedA, txA, 127, blockA, ownerA, AMOUNT_A],
+      [nullifierB, stagedB, txB, 128, blockB, ownerB, AMOUNT_B],
+    ] as [anchor.web3.PublicKey, anchor.web3.PublicKey, Buffer, number, Buffer,
+          anchor.web3.PublicKey, number][]) {
+      await program.methods
+        .verifyDeposit(claimFor(tx, height, header, amount, owner))
+        .accounts(verifyAccounts(nul, stg, owner))
+        .rpc();
+    }
+  });
+
+  it("stages both deposits, with the maturity that applied recorded on each", async () => {
+    const a = await program.account.stagedMint.fetch(stagedA);
+    const b = await program.account.stagedMint.fetch(stagedB);
+
+    expect(a.recipient.toBase58()).to.equal(ownerA.toBase58());
+    expect(b.recipient.toBase58()).to.equal(ownerB.toBase58());
+    expect(a.amount.toNumber()).to.equal(AMOUNT_A);
+    expect(b.amount.toNumber()).to.equal(AMOUNT_B);
+    expect(a.depositHeight.toNumber()).to.equal(127);
+    expect(b.depositHeight.toNumber()).to.equal(128);
+    expect(Buffer.from(a.depositHash).toString("hex"))
+      .to.equal(doubleSha256(blockA).toString("hex"));
+    expect(Buffer.from(b.depositHash).toString("hex"))
+      .to.equal(doubleSha256(blockB).toString("hex"));
+    // Read from `Config` at verify time, not from a constant and not from the
+    // config later: this is the field that makes a later raise harmless.
+    expect(a.maturityAtDeposit.toNumber()).to.equal(MATURITY);
+    expect(b.maturityAtDeposit.toNumber()).to.equal(MATURITY);
+
+    // The vault holds both.
+    expect(tokenAmount((await provider.connection.getAccountInfo(vault))!.data))
+      .to.equal(AMOUNT_A + AMOUNT_B);
+  });
+
+  it("refuses a release before the recorded maturity, and allows it after", async () => {
+    // Tip 139, maturity 15: A matures at 142. The condition is live, not
+    // vacuously satisfied by the twelve confirmations.
+    try {
+      await program.methods.releaseMint(Array.from(txidA), 0)
+        .accounts(releaseAccounts(stagedA, ownerA, ataA)).rpc();
+      expect.fail("must not release before deposit_height + maturity");
+    } catch (e: any) {
+      expect(String(e)).to.contain("NotMatured");
+    }
+    expect(await provider.connection.getAccountInfo(ataA)).to.equal(null);
+
+    // **A later raise must not trap funds already in flight.** Both deposits are
+    // already staged with `maturity_at_deposit = 15`, so raise the config to 30
+    // through the same timelocked path and then release A at 142 — which is
+    // 127 + 15, and would be 157 under the *current* config. If the release used
+    // the config rather than the item's recorded maturity, this would fail
+    // NotMatured. The burn below lands on the same field the same way.
+    await setMaturity(MATURITY * 2);
+    expect((await program.account.config.fetch(config)).maturityBlocks.toNumber())
+      .to.equal(MATURITY * 2);
+    expect((await program.account.stagedMint.fetch(stagedA)).maturityAtDeposit.toNumber())
+      .to.equal(MATURITY);
+    expect((await program.account.stagedMint.fetch(stagedB)).maturityAtDeposit.toNumber())
+      .to.equal(MATURITY);
+
+    let parent = tipRaw;
+    for (let h = 140; h <= 142; h++) {
+      parent = forkFrom(rawAt(h), parent, h);
+      await push(parent);
+    }
+    tipRaw = parent;
+
+    // 142 == 127 + 15: A's own maturity has elapsed, though the config now says
+    // 30. The stored field is what is used.
+    await program.methods.releaseMint(Array.from(txidA), 0)
+      .accounts(releaseAccounts(stagedA, ownerA, ataA)).rpc();
+
+    expect(tokenAmount((await provider.connection.getAccountInfo(ataA))!.data))
+      .to.equal(AMOUNT_A);
+    expect(tokenAmount((await provider.connection.getAccountInfo(vault))!.data))
+      .to.equal(AMOUNT_B);
+    // Released exactly once.
+    expect(await provider.connection.getAccountInfo(stagedA)).to.equal(null);
+    // And B, at 128 + 15 = 143, is still NotMatured at 142.
+    try {
+      await program.methods.releaseMint(Array.from(txidB), 0)
+        .accounts(releaseAccounts(stagedB, ownerB, ataB)).rpc();
+      expect.fail("B must not release before its own maturity");
+    } catch (e: any) {
+      expect(String(e)).to.contain("NotMatured");
+    }
+  });
+
+  it("burns B after a followed reorg, and refuses to release it", async () => {
+    // 143 == 128 + 15: B is matured. Nothing has moved against it yet, so the
+    // burn must be refused — this is the "no transient fork burns a good mint"
+    // half of the predicate.
+    let parent = forkFrom(rawAt(143), tipRaw, 143);
+    await push(parent);
+    tipRaw = parent;
+    expect((await program.account.lightClient.fetch(lightClient)).tipHeight.toNumber())
+      .to.equal(143);
+
+    try {
+      await program.methods.burnStaged(Array.from(txidB), 0)
+        .accounts(burnAccounts(stagedB)).rpc();
+      expect.fail("must not burn while the stored hash still matches");
+    } catch (e: any) {
+      expect(String(e)).to.contain("DepositHashUnchanged");
+    }
+
+    // Now the reorg. The incumbent runs 116..143 (28 headers from the re-anchor
+    // baseline); a branch of 28 headers off 116 carries strictly more work, so
+    // it commits and replaces the block at 128.
+    const key = await fundedSubmitter();
+    const [staging] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("staging"), key.publicKey.toBuffer()], program.programId);
+    await program.methods.initStaging(new anchor.BN(116))
+      .accounts({ lightClient, staging, submitter: key.publicKey,
+                  systemProgram: anchor.web3.SystemProgram.programId })
+      .signers([key]).rpc();
+
+    const branch: Buffer[] = [];
+    let branchParent = rawAt(116);
+    for (let h = 117; h <= 144; h++) {
+      branchParent = forkFrom(rawAt(h), branchParent, h);
+      branch.push(branchParent);
+    }
+    expect(doubleSha256(branch[128 - 117]).toString("hex"))
+      .to.not.equal(doubleSha256(blockB).toString("hex"));
+
+    // 11 headers per transaction, not 12: the staging keypair signs as well as
+    // the provider fee payer, so the transaction carries two signatures and
+    // 12 x 80 does not fit in 1232 bytes. (The program's own limit is 12.)
+    for (let i = 0; i < branch.length; i += 11) {
+      await program.methods.pushForkHeader(Buffer.concat(branch.slice(i, i + 11)))
+        .accounts({ lightClient, staging, submitter: key.publicKey })
+        .signers([key]).rpc();
+    }
+    await program.methods.commitFork()
+      .accounts({ lightClient, staging, submitter: key.publicKey })
+      .signers([key]).rpc();
+
+    const after = await program.account.lightClient.fetch(lightClient);
+    expect(after.tipHeight.toNumber()).to.equal(144);
+    expect(Buffer.from(after.tipHash).toString("hex"))
+      .to.equal(doubleSha256(branch[branch.length - 1]).toString("hex"));
+
+    // The stored hash at 128 is now the branch's block. Release must refuse —
+    // this is the condition that makes `burn_staged` the correct answer rather
+    // than a convenience.
+    try {
+      await program.methods.releaseMint(Array.from(txidB), 0)
+        .accounts(releaseAccounts(stagedB, ownerB, ataB)).rpc();
+      expect.fail("must not release a reorged deposit");
+    } catch (e: any) {
+      expect(String(e)).to.contain("DepositHashChanged");
+    }
+
+    // And the burn succeeds. Anyone may call it; the item's rent is the reward.
+    await program.methods.burnStaged(Array.from(txidB), 0)
+      .accounts(burnAccounts(stagedB)).rpc();
+
+    expect(await provider.connection.getAccountInfo(stagedB)).to.equal(null);
+    expect(tokenAmount((await provider.connection.getAccountInfo(vault))!.data)).to.equal(0);
+    expect(await provider.connection.getAccountInfo(ataB)).to.equal(null);
+    // The supply is exactly what was released to A: B's mint no longer exists.
+    // A `Mint` account is mint_authority_option(4) + authority(32) + supply(8),
+    // so the supply is a u64 at offset 36.
+    const mintInfo = await provider.connection.getAccountInfo(mint);
+    expect(Number(mintInfo!.data.readBigUInt64LE(36)))
+      .to.equal(supplyBefore + AMOUNT_A);
   });
 });

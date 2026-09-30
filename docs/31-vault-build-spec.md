@@ -20,13 +20,24 @@ trusted the shard's report rather than verifying the chain.
 
 ### The maturity-0 consequence, stated up front
 
-**At maturity 0 there is no window, so the burn path cannot fire.** Tokens are released to the user's
-wallet the moment they are minted, and the token has **no freeze authority**, so a later reorg has
+**At maturity 0 the vault is a pass-through.** Tokens are minted into the vault and become releasable
+in the same instant, and the token has **no freeze authority** — so once released, a later reorg has
 nothing to reverse.
 
-**So at maturity 0 the vault is a pass-through and "reorg-reversible" is a property of the mechanism,
-not of the running system.** What protects a deposit today is `MIN_CONFIRMATIONS = 12` — roughly two
-hours. That is **prevention, not reversal.**
+**But "the burn cannot fire" would be too strong, and an earlier revision of this document said
+exactly that.** At maturity 0 the burn predicate is *satisfied immediately* rather than *unreachable*:
+`burn_staged` requires the hash to differ **and** the height to have matured, and with maturity 0 the
+second condition is always met. So it is a **race** — release and burn are both permitted from the
+moment of staging, and in practice release wins, because the recipient wants their tokens and a reorg
+is the unusual case.
+
+**The honest statement is therefore narrower than it first appears:** maturity 0 removes the *window*
+in which the reversal is comfortable, not the reversal itself. Someone who sees a reorg and calls
+`burn_staged` before anyone releases **still burns the tokens**. The window exists so that the
+reversal is not a race.
+
+**What protects a deposit today is `MIN_CONFIRMATIONS = 12`** — roughly two hours, prevention rather
+than reversal. And the reversal remains **available, tested, and racy** rather than disabled.
 
 **This is a deliberate PoC setting**, not an oversight, and it is stated here, in the summary and on
 the status page rather than left to be discovered.
@@ -121,7 +132,26 @@ Not a constant, for four reasons:
 | **The bounty for `burn_staged`** | Suggested, not sized. `fee.bounty_share` is `open` |
 | **N5 — the reported spent-outpoint record** | **Decided:** the federation reports, and the program checks mints against it. **Not built.** The permissionless alternative was **considered and rejected**: making the record writable by anyone turns mint availability into an attack surface, not just mint correctness |
 
-## 7. The honesty requirement
+## 7. What the tests do NOT cover
+
+**Recorded because the alternative is a document claiming more than it verified** — which is this
+project's most repeated failure.
+
+| | |
+|---|---|
+| **`StaleClient`** | **Cannot be exercised on a local validator.** The 54,000-slot bound is unreachable in a test run of minutes. The condition is implemented and **untested** |
+| **`AlreadyStaged`** | Untested — a replay is refused earlier, by `AlreadyMinted`, so the second guard never fires on its own |
+| **`WrongStagedMint`** | Untested |
+| **`DepositHeightNotInWindow` on release and burn** | Untested |
+| **The burn bounty** | Not built, and not sized. `fee.bounty_share` is `open` |
+| **`burn_staged` freshness** | **No staleness check**, by design — doc 31 §3 lists two conditions for the burn and freshness is not one. Burning is the safe direction, so an old view is less dangerous here than on release, but the asymmetry is deliberate and worth knowing |
+
+**`burn_staged` IS exercised**, at a non-zero maturity, with a followed reorg: `NotMatured` is
+reachable, `DepositHashUnchanged` flips to `DepositHashChanged`, and the burn zeroes the vault with the
+supply delta asserted. And a later maturity raise leaves in-flight staged items at the value they were
+staged with — **proven, not merely asserted.**
+
+## 8. The honesty requirement
 
 **Every document and the status page must carry the maturity-0 consequence.** The vault is built; the
 protective window is 0; the twelve-confirmation delay is what currently protects a deposit; and the

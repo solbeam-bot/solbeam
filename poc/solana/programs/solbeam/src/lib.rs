@@ -33,7 +33,7 @@ use anchor_lang::solana_program::bpf_loader_upgradeable;
 // arguments, so it cannot be created by an Anchor `init` constraint).
 use anchor_lang::Discriminator;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
+use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount, Transfer};
 // Solana 3.x moved hashing out of `solana_program` entirely — there is no
 // `solana_program::hash` — and anchor_lang re-exports no replacement. This
 // crate is already in the tree transitively; on the SBF target it calls the
@@ -111,6 +111,42 @@ pub const SEED_RECORDS: usize = difficulty::LOOKBACK as usize;
 /// roughly two hours on BSV. The test matrix compresses time, not depth, so this
 /// stays a real number.
 pub const MIN_CONFIRMATIONS: u64 = 12;
+
+/// How old the client's view of the chain may be before the vault refuses to act,
+/// in Solana slots. **54,000 is about six hours.**
+///
+/// This is doc 31's `lc.max_staleness_slots`, and it is the freshness half of the
+/// release check: a client whose last accepted header is older than this is a
+/// client that may not have seen the reorg yet, so releasing against it would
+/// hand out tokens for a deposit that no longer exists. It is a multiple of BSV
+/// block time on purpose — roughly 1,500 Solana slots per BSV block — so anything
+/// under that is meaningless.
+///
+/// The clock is [`LightClient::last_push_slot`], which is `Clock::slot` at the
+/// last accepted header. It cannot be back-dated by the submitter because it
+/// comes from the sysvar.
+pub const MAX_STALENESS_SLOTS: u64 = 54_000;
+
+/// Seed prefix of the **staged mint** PDA: `[b"mint", txid, vout]`.
+///
+/// The same bytes as the SPL mint's `[b"mint"]` seed deliberately — the two are
+/// different PDAs because the seed lists differ in length, and doc 31 specifies
+/// this prefix. The staged item is keyed on the *deposit's* identity, exactly as
+/// the nullifier is, so a reorg that re-includes the transaction at another
+/// height hits the same staged item rather than a new one.
+pub const STAGED_MINT_SEED: &[u8] = b"mint";
+
+/// Seed of the program-owned **vault** token account: `[b"vault"]`.
+///
+/// One shared token account, and it is the deliberate exception to doc 21's
+/// "no shared token account" rule: doc 31 makes the vault the whole mechanism.
+/// Its authority is the light client PDA, so only this program can move or burn
+/// what is in it.
+pub const VAULT_SEED: &[u8] = b"vault";
+
+/// Seed of the singleton **config** PDA: `[b"config"]`, holding
+/// `maturity_blocks`.
+pub const CONFIG_SEED: &[u8] = b"config";
 
 /// `solBSV` is a classic SPL token with eight decimals, matching BSV's own
 /// satoshi precision. One satoshi is one base unit, so no conversion is ever
@@ -293,6 +329,15 @@ pub mod solbeam {
         // the only way to keep them agreeing.
         lc.anchor_checkpoint(checkpoint_height, &header)?;
         lc.last_push_slot = Clock::get()?.slot;
+
+        // The bridge's one tunable parameter. **Default 0**, which is doc 31's
+        // deliberate PoC setting: at 0 the vault is a pass-through and the
+        // protective window is absent. The mechanism is present and the value is
+        // raisable through the timelocked authority path; see
+        // `AuthorityChange::SetMaturity`.
+        let config = &mut ctx.accounts.config;
+        config.maturity_blocks = 0;
+        config.bump = ctx.bumps.config;
 
         msg!(
             "SOLBEAM light client initialised at height {} tip {} window {} records ({} h), \
@@ -905,10 +950,19 @@ pub mod solbeam {
     /// mint-side gate, and it is not the same thing as spentness. See A2/N5 and
     /// decision P5.
     ///
-    /// The token mint is not wired up yet: this records the claim and emits the
-    /// amount and recipient. Adding the SPL CPI is the next increment, and
-    /// keeping it separate means a failure here is never ambiguous about which
-    /// half broke.
+    /// **What it does with a verified claim changed in doc 31.** It used to mint
+    /// straight to the depositor. It now **stages** the mint — creating a
+    /// [`StagedMint`] keyed on `(txid, vout)` that records the recipient, the
+    /// amount, the deposit's height, the hash of the block it was proven
+    /// against, and **the maturity that applied at this moment** — and mints the
+    /// `solBSV` into the program-owned **vault** token account rather than to the
+    /// recipient.
+    ///
+    /// `maturity_at_deposit` is load-bearing, not bookkeeping: a later governance
+    /// raise of `Config::maturity_blocks` must not retroactively trap a deposit
+    /// that was verified under a shorter window. Reading it once, here, is what
+    /// makes the parameter a policy for *future* deposits rather than a lever on
+    /// funds already in flight.
     pub fn verify_deposit(ctx: Context<VerifyDeposit>, claim: DepositClaim) -> Result<()> {
         let lc = &ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
@@ -999,16 +1053,40 @@ pub mod solbeam {
             claim.height,
         )?;
 
-        // 8. The recipient named in the OP_RETURN is the account that receives
-        //    the tokens. This is the binding between the BSV payload and the
-        //    Solana destination, so it is checked rather than assumed.
+        // 8. The recipient named in the OP_RETURN is the account the staged mint
+        //    will be released to. This is the binding between the BSV payload and
+        //    the Solana destination, so it is checked rather than assumed. No
+        //    token account is created here any more: nothing is minted to the
+        //    recipient on this path.
         require!(
             ctx.accounts.recipient_owner.key().to_bytes() == claim.recipient,
             SolbeamError::RecipientMismatch
         );
 
-        // 9. Mint. The authority is this program's own PDA, so the program
-        //    signs for it — no operator key can mint.
+        // 9. Stage the mint. The item is a PDA on `(txid, vout)` — the deposit's
+        //    identity, never its height — and it records the maturity read from
+        //    `Config` **now**, so a later raise cannot trap this deposit. Created
+        //    by hand for the same reason the nullifier is: the seeds come from
+        //    instruction arguments, and the existence check must produce
+        //    `AlreadyStaged` rather than a system-program error.
+        create_staged_mint(
+            &ctx.accounts.staged.to_account_info(),
+            &ctx.accounts.submitter.to_account_info(),
+            ctx.program_id,
+            claim.txid,
+            claim.vout,
+            ctx.accounts.recipient_owner.key(),
+            claim.amount,
+            claim.height,
+            record.hash,
+            ctx.accounts.config.maturity_blocks,
+        )?;
+
+        // 10. Mint into the VAULT, not to the recipient. The authority is this
+        //     program's own PDA, so the program signs for it — no operator key
+        //     can mint. The tokens leave the vault only through `release_mint`
+        //     (to the recipient, once matured and still canonical) or are burned
+        //     by `burn_staged` (once the chain has moved against the deposit).
         let bump = ctx.accounts.light_client.bump;
         let seeds: &[&[u8]] = &[b"light_client", &[bump]];
         token::mint_to(
@@ -1016,7 +1094,7 @@ pub mod solbeam {
                 ctx.accounts.token_program.key(),
                 MintTo {
                     mint: ctx.accounts.mint.to_account_info(),
-                    to: ctx.accounts.recipient_token_account.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
                     authority: ctx.accounts.light_client.to_account_info(),
                 },
             )
@@ -1024,13 +1102,154 @@ pub mod solbeam {
             claim.amount,
         )?;
 
-        emit!(DepositMinted {
+        emit!(DepositStaged {
             txid: claim.txid,
             vout: claim.vout,
             amount: claim.amount,
             recipient: claim.recipient,
             height: claim.height,
-            confirmations,
+            maturity_at_deposit: ctx.accounts.config.maturity_blocks,
+        });
+        Ok(())
+    }
+
+    /// Release a matured, still-canonical staged mint to its recipient.
+    /// **Permissionless** — anyone may call it, which is what makes the exit
+    /// real: the recipient does not depend on a relayer to hand them their own
+    /// tokens.
+    ///
+    /// All four conditions are required, and doc 31 §4 says why each alone is not
+    /// enough:
+    ///
+    /// * **the client is fresh** — the last accepted header is within
+    ///   [`MAX_STALENESS_SLOTS`]. Staleness alone would release against a view of
+    ///   the chain that has not yet seen the reorg;
+    /// * **the item has matured** — `tip_height >= deposit_height +
+    ///   maturity_at_deposit`, using the maturity recorded when the deposit was
+    ///   verified, not the current config;
+    /// * **the client still holds the height** — it has not left the window, so
+    ///   the hash can still be checked at all;
+    /// * **the stored hash still equals the deposit's** — depth alone would
+    ///   release even if the client's record of that height had changed.
+    pub fn release_mint(ctx: Context<ReleaseMint>, txid: [u8; 32], vout: u32) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        let staged = &ctx.accounts.staged;
+
+        let now = Clock::get()?.slot;
+        require!(
+            now.saturating_sub(lc.last_push_slot) <= MAX_STALENESS_SLOTS,
+            SolbeamError::StaleClient
+        );
+
+        let mature_at = staged
+            .deposit_height
+            .checked_add(staged.maturity_at_deposit)
+            .ok_or(SolbeamError::Overflow)?;
+        require!(lc.tip_height >= mature_at, SolbeamError::NotMatured);
+
+        let current = lc
+            .hash_at(staged.deposit_height)
+            .ok_or(SolbeamError::DepositHeightNotInWindow)?;
+        require!(
+            current == staged.deposit_hash,
+            SolbeamError::DepositHashChanged
+        );
+
+        // The ATA is derived from `recipient_owner`, so a caller that supplied a
+        // different owner would send the tokens to the wrong place. The stored
+        // recipient is what the OP_RETURN committed to; this is what pins the
+        // destination to it.
+        require!(
+            ctx.accounts.recipient_owner.key() == staged.recipient,
+            SolbeamError::RecipientMismatch
+        );
+
+        let bump = lc.bump;
+        let seeds: &[&[u8]] = &[b"light_client", &[bump]];
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.recipient_token_account.to_account_info(),
+                    authority: ctx.accounts.light_client.to_account_info(),
+                },
+            )
+            .with_signer(&[seeds]),
+            staged.amount,
+        )?;
+
+        emit!(MintReleased {
+            txid,
+            vout,
+            recipient: staged.recipient,
+            amount: staged.amount,
+            height: staged.deposit_height,
+        });
+        Ok(())
+    }
+
+    /// Burn a staged mint whose deposit the chain has moved against.
+    /// **Permissionless**: anyone may call it, and the rent of the closed item is
+    /// the reward for doing so.
+    ///
+    /// The predicate is the mirror of [`release_mint`] and is deliberately
+    /// narrower than doc 21's draft:
+    ///
+    /// * **the stored hash at `deposit_height` DIFFERS from the deposit's** — the
+    ///   client has followed a reorg and no longer holds the block the deposit was
+    ///   proven against. Burning is the correct answer when the BSV is gone: the
+    ///   tokens must not exist;
+    /// * **the item has matured** — `tip_height >= deposit_height +
+    ///   maturity_at_deposit`, so a transient fork cannot burn a good mint.
+    ///
+    /// It does **not** require freshness (doc 31 §3 lists only the two
+    /// conditions). That is the safe direction: a stale client can only be wrong
+    /// about which block is canonical, and a burn destroys supply rather than
+    /// creating it.
+    ///
+    /// There is no bounty here. Doc 31 §3 suggests one and §6 records it as
+    /// **suggested, not sized** with `fee.bounty_share` open; inventing a number
+    /// would be adding a parameter the specification deliberately leaves unset.
+    /// The closer keeps the item's rent.
+    pub fn burn_staged(ctx: Context<BurnStaged>, txid: [u8; 32], vout: u32) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        let staged = &ctx.accounts.staged;
+
+        let mature_at = staged
+            .deposit_height
+            .checked_add(staged.maturity_at_deposit)
+            .ok_or(SolbeamError::Overflow)?;
+        require!(lc.tip_height >= mature_at, SolbeamError::NotMatured);
+
+        let current = lc
+            .hash_at(staged.deposit_height)
+            .ok_or(SolbeamError::DepositHeightNotInWindow)?;
+        require!(
+            current != staged.deposit_hash,
+            SolbeamError::DepositHashUnchanged
+        );
+
+        let bump = lc.bump;
+        let seeds: &[&[u8]] = &[b"light_client", &[bump]];
+        token::burn(
+            CpiContext::new(
+                ctx.accounts.token_program.key(),
+                Burn {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    from: ctx.accounts.vault.to_account_info(),
+                    authority: ctx.accounts.light_client.to_account_info(),
+                },
+            )
+            .with_signer(&[seeds]),
+            staged.amount,
+        )?;
+
+        emit!(StagedMintBurned {
+            txid,
+            vout,
+            amount: staged.amount,
+            height: staged.deposit_height,
         });
         Ok(())
     }
@@ -1124,6 +1343,18 @@ pub mod solbeam {
             AuthorityChange::Pause { paused } => {
                 ctx.accounts.light_client.paused = *paused;
                 msg!("SOLBEAM paused set to {}", paused);
+            }
+            // The vault's maturity, through the same timelocked path as the
+            // checkpoint and the pause. **No second authority mechanism**: this
+            // is a variant of the existing enum, proposed by
+            // `propose_authority_change` and applied here.
+            //
+            // Raising it applies to *future* deposits only. A deposit already
+            // verified carries its own `maturity_at_deposit`, so a governance
+            // raise can never reach back and freeze funds in flight (doc 31 §2).
+            AuthorityChange::SetMaturity { blocks } => {
+                ctx.accounts.config.maturity_blocks = *blocks;
+                msg!("SOLBEAM maturity_blocks set to {}", blocks);
             }
         }
 
@@ -1722,6 +1953,16 @@ pub struct Initialize<'info> {
         bump
     )]
     pub light_client: Account<'info, LightClient>,
+    /// The singleton config. Created here so it always exists, with
+    /// `maturity_blocks = 0` — the PoC default doc 31 decides on.
+    #[account(
+        init,
+        payer = payer,
+        space = Config::SPACE,
+        seeds = [CONFIG_SEED],
+        bump
+    )]
+    pub config: Account<'info, Config>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1868,6 +2109,12 @@ pub struct ExecuteAuthorityChange<'info> {
         has_one = authority @ SolbeamError::Unauthorized,
     )]
     pub light_client: Account<'info, LightClient>,
+    /// The bridge config, written when the pending change is
+    /// [`AuthorityChange::SetMaturity`]. Required on every execute so the
+    /// instruction has one shape; unchanged for the checkpoint and pause
+    /// variants.
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
     #[account(
         mut,
         seeds = [b"pending_authority_change"],
@@ -2091,6 +2338,92 @@ fn create_nullifier<'info>(
     Ok(())
 }
 
+// -- the staged mint --------------------------------------------------------
+
+/// Create the staged mint for a verified deposit, refusing a second one for the
+/// same `(txid, vout)`.
+///
+/// Built by hand for exactly the reasons [`create_nullifier`] is: the seeds are
+/// two instruction arguments, so the address cannot be an Anchor `seeds`
+/// constraint, and a deposit that has already been staged must fail with
+/// `AlreadyStaged` rather than with a system-program error about an
+/// already-allocated account. `transfer` + `allocate` + `assign` rather than
+/// `create_account` for the same denial-of-service reason: a lamport sent to this
+/// public PDA must not be able to block the deposit from ever being staged.
+///
+/// The layout written here is `StagedMint`'s own, and
+/// `vault_layout_tests::staged_mint_manual_layout_matches_borsh` compares it
+/// against a real `AnchorSerialize`, so a field reorder breaks a test instead of
+/// silently corrupting every staged item.
+#[allow(clippy::too_many_arguments)]
+fn create_staged_mint<'info>(
+    staged: &AccountInfo<'info>,
+    submitter: &AccountInfo<'info>,
+    program_id: &Pubkey,
+    txid: [u8; 32],
+    vout: u32,
+    recipient: Pubkey,
+    amount: u64,
+    deposit_height: u64,
+    deposit_hash: [u8; 32],
+    maturity_at_deposit: u64,
+) -> Result<()> {
+    let vout_bytes = vout.to_le_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[STAGED_MINT_SEED, txid.as_ref(), &vout_bytes],
+        program_id,
+    );
+    require!(staged.key() == expected, SolbeamError::WrongStagedMint);
+    require!(staged.data_is_empty(), SolbeamError::AlreadyStaged);
+
+    let seeds: &[&[u8]] = &[STAGED_MINT_SEED, txid.as_ref(), &vout_bytes, &[bump]];
+    let rent = Rent::get()?.minimum_balance(StagedMint::SPACE);
+    let existing = staged.lamports();
+    if existing < rent {
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                anchor_lang::system_program::ID,
+                anchor_lang::system_program::Transfer {
+                    from: submitter.clone(),
+                    to: staged.clone(),
+                },
+            ),
+            rent - existing,
+        )?;
+    }
+
+    anchor_lang::system_program::allocate(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Allocate {
+                account_to_allocate: staged.clone(),
+            },
+            &[seeds],
+        ),
+        StagedMint::SPACE as u64,
+    )?;
+    anchor_lang::system_program::assign(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Assign {
+                account_to_assign: staged.clone(),
+            },
+            &[seeds],
+        ),
+        program_id,
+    )?;
+
+    let mut data = staged.try_borrow_mut_data()?;
+    data[..8].copy_from_slice(StagedMint::DISCRIMINATOR);
+    data[8..40].copy_from_slice(&recipient.to_bytes());
+    data[40..48].copy_from_slice(&amount.to_le_bytes());
+    data[48..56].copy_from_slice(&deposit_height.to_le_bytes());
+    data[56..88].copy_from_slice(&deposit_hash);
+    data[88..96].copy_from_slice(&maturity_at_deposit.to_le_bytes());
+    data[96] = bump;
+    Ok(())
+}
+
 // -- small helpers ----------------------------------------------------------
 
 fn read32(buf: &[u8], at: usize) -> [u8; 32] {
@@ -2174,6 +2507,66 @@ impl DepositNullifier {
     pub const SPACE: usize = 8 + 8 + 1; // 17 bytes: discriminator + height + bump
 }
 
+/// One verified deposit whose mint is **held in the vault** rather than paid
+/// straight to the recipient. Doc 31's `StagedMint`.
+///
+/// The account is keyed on `(txid, vout)` — the deposit's identity, never its
+/// height — and holds everything the release and the burn need to decide, with
+/// no dependence on a relayer or on a caller's claim:
+///
+/// * `recipient` is the Solana key the deposit's `OP_RETURN` committed to;
+/// * `amount` is the satoshi value the output carried;
+/// * `deposit_height` and `deposit_hash` are the block the proof was checked
+///   against, so a later reorg is detectable from the light client's own window;
+/// * `maturity_at_deposit` is **the maturity read from [`Config`] at the moment
+///   this deposit was verified**. It is load-bearing: a governance raise applies
+///   to future deposits and cannot retroactively trap this one in flight.
+///
+/// `release_mint` and `burn_staged` are the only two exits, and they are
+/// mutually exclusive on `deposit_hash` still matching or not. Both close this
+/// account, returning its rent to the caller. The [`DepositNullifier`] is
+/// deliberately **not** closed by either: it is the replay record and must
+/// outlive the item.
+#[account]
+pub struct StagedMint {
+    pub recipient: Pubkey,
+    pub amount: u64,
+    pub deposit_height: u64,
+    pub deposit_hash: [u8; 32],
+    pub maturity_at_deposit: u64,
+    pub bump: u8,
+}
+
+impl StagedMint {
+    /// 8 discriminator + 32 recipient + 8 amount + 8 height + 32 hash + 8
+    /// maturity + 1 bump = 97 bytes. `create_staged_mint` writes this layout by
+    /// hand, and `vault_layout_tests::staged_mint_manual_layout_matches_borsh`
+    /// asserts the two agree.
+    pub const SPACE: usize = 8 + 32 + 8 + 8 + 32 + 8 + 1;
+}
+
+/// The bridge's tunable policy: **only `maturity_blocks`, and only through the
+/// timelocked authority path.**
+///
+/// A singleton PDA (`[b"config"]`), so there is exactly one and no seed the
+/// caller can vary. It is created with `maturity_blocks = 0` — doc 31's decided
+/// PoC setting — and written only by `execute_authority_change` on an
+/// [`AuthorityChange::SetMaturity`]. No instruction writes it directly, which is
+/// what keeps "no second authority mechanism" true.
+#[account]
+pub struct Config {
+    /// How deep a deposit's block must be before its staged mint may release,
+    /// **in BSV blocks**. 0 means no window at all: the vault is a pass-through
+    /// and the protective window is absent.
+    pub maturity_blocks: u64,
+    pub bump: u8,
+}
+
+impl Config {
+    /// 8 discriminator + 8 maturity + 1 bump = 17 bytes.
+    pub const SPACE: usize = 8 + 8 + 1;
+}
+
 /// The one change awaiting its timelock, and who proposed it.
 ///
 /// A singleton: the PDA seed is fixed (`[b"pending_authority_change"]`), so only
@@ -2207,6 +2600,11 @@ pub enum AuthorityChange {
     Checkpoint { height: u64, header: [u8; HEADER_LEN] },
     /// Pause or unpause header advancement and therefore minting.
     Pause { paused: bool },
+    /// Set the vault's maturity, in BSV blocks. Applied to future deposits only:
+    /// each [`StagedMint`] carries the `maturity_at_deposit` that applied when it
+    /// was verified, so raising this cannot reach back and freeze a deposit
+    /// already in flight.
+    SetMaturity { blocks: u64 },
 }
 
 /// The bridge's deposit script, passed in so the check is against the account
@@ -2259,6 +2657,22 @@ pub struct InitializeToken<'info> {
     pub mint: Account<'info, Mint>,
     #[account(seeds = [b"light_client"], bump = light_client.bump)]
     pub light_client: Account<'info, LightClient>,
+    /// The program-owned vault: the one token account every mint lands in, and
+    /// the one `release_mint` pays out of and `burn_staged` burns from.
+    ///
+    /// A PDA of this program (`[b"vault"]`) whose **authority is the light
+    /// client PDA**, so only this program can move what is in it and no operator
+    /// key holds it. Created here, with the mint, because the vault is not
+    /// meaningful without one.
+    #[account(
+        init,
+        payer = payer,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = mint,
+        token::authority = light_client,
+    )]
+    pub vault: Account<'info, TokenAccount>,
     #[account(mut)]
     pub payer: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -2287,8 +2701,21 @@ pub struct VerifyDeposit<'info> {
     /// read from it.
     #[account(mut)]
     pub nullifier: UncheckedAccount<'info>,
+    /// The staged mint for this deposit, one PDA per `(txid, vout)`. Same
+    /// situation as the nullifier: the seeds come from the `claim` argument, so
+    /// the address is re-derived and checked inside [`create_staged_mint`]
+    /// before anything is created.
+    /// CHECK: address re-derived from `(claim.txid, claim.vout)` and compared
+    /// against `STAGED_MINT_SEED` in `create_staged_mint`; only `data_is_empty`
+    /// is read from it.
+    #[account(mut)]
+    pub staged: UncheckedAccount<'info>,
     #[account(seeds = [b"deposit_script"], bump = deposit_script.bump)]
     pub deposit_script: Account<'info, DepositScript>,
+    /// The maturity that applies to this deposit, read once and copied onto the
+    /// staged item. See the instruction body.
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
     /// Pinned to the program's own mint PDA. Without this the caller supplies any
     /// `Mint` whose authority happens to be this program's light-client PDA —
     /// which anyone can create, since `InitializeMint` needs no authority
@@ -2296,8 +2723,46 @@ pub struct VerifyDeposit<'info> {
     /// counterfeit mint, stranding the real deposit permanently.
     #[account(mut, seeds = [b"mint"], bump)]
     pub mint: Account<'info, Mint>,
+    /// The program-owned vault the minted tokens land in. Pinned to the vault PDA
+    /// so a caller cannot direct the mint at an account of its own.
+    #[account(mut, seeds = [VAULT_SEED], bump)]
+    pub vault: Account<'info, TokenAccount>,
+    /// CHECK: its key is checked against the OP_RETURN payload, and it becomes
+    /// the `recipient` recorded on the staged mint — which `release_mint` later
+    /// pays. It is never read or written here.
+    pub recipient_owner: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Release one matured, still-canonical staged mint.
+///
+/// The seeds are `(txid, vout)` — the deposit's identity, which the `StagedMint`
+/// itself does not store, because the item is *keyed* on it — so they are bound
+/// with `#[instruction(...)]` exactly as [`PruneNullifier`] does. `close =
+/// submitter` returns the item's rent to whoever performed the release.
+#[derive(Accounts)]
+#[instruction(txid: [u8; 32], vout: u32)]
+pub struct ReleaseMint<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(
+        mut,
+        seeds = [STAGED_MINT_SEED, txid.as_ref(), &vout.to_le_bytes()],
+        bump = staged.bump,
+        close = submitter,
+    )]
+    pub staged: Account<'info, StagedMint>,
+    #[account(mut, seeds = [b"mint"], bump)]
+    pub mint: Account<'info, Mint>,
+    #[account(mut, seeds = [VAULT_SEED], bump)]
+    pub vault: Account<'info, TokenAccount>,
     /// Created on the recipient's behalf if they have never held solBSV, so a
-    /// first-time user needs no SOL to receive.
+    /// first-time user needs no SOL to receive. This is why release is
+    /// permissionless *and* costs the caller nothing but fees: the caller pays
+    /// the ATA's rent if it does not exist.
     #[account(
         init_if_needed,
         payer = submitter,
@@ -2305,9 +2770,8 @@ pub struct VerifyDeposit<'info> {
         associated_token::authority = recipient_owner,
     )]
     pub recipient_token_account: Account<'info, TokenAccount>,
-    /// CHECK: the ATA address is derived from this account, and its key is
-    /// checked against the OP_RETURN payload before anything is minted. It is
-    /// never read or written.
+    /// CHECK: the ATA above is derived from this account, and its key is checked
+    /// against the staged item's stored `recipient` before anything moves.
     pub recipient_owner: UncheckedAccount<'info>,
     #[account(mut)]
     pub submitter: Signer<'info>,
@@ -2316,20 +2780,71 @@ pub struct VerifyDeposit<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Burn one staged mint whose deposit the chain has moved against.
+///
+/// Same seed situation as [`ReleaseMint`]. No associated token account is
+/// involved: burning from the vault needs the mint, the vault and the vault's
+/// authority only.
+#[derive(Accounts)]
+#[instruction(txid: [u8; 32], vout: u32)]
+pub struct BurnStaged<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(
+        mut,
+        seeds = [STAGED_MINT_SEED, txid.as_ref(), &vout.to_le_bytes()],
+        bump = staged.bump,
+        close = submitter,
+    )]
+    pub staged: Account<'info, StagedMint>,
+    #[account(mut, seeds = [b"mint"], bump)]
+    pub mint: Account<'info, Mint>,
+    #[account(mut, seeds = [VAULT_SEED], bump)]
+    pub vault: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
 #[event]
 pub struct ChainReorganised {
     pub from_height: u64,
     pub new_tip_height: u64,
 }
 
+/// A deposit has been verified and its mint **staged into the vault**.
+///
+/// `maturity_at_deposit` is emitted because it is the policy that applied when
+/// the deposit was verified, and it is what `release_mint` will use — not the
+/// config value at release time.
 #[event]
-pub struct DepositMinted {
+pub struct DepositStaged {
     pub txid: [u8; 32],
     pub vout: u32,
     pub amount: u64,
     pub recipient: [u8; 32],
     pub height: u64,
-    pub confirmations: u64,
+    pub maturity_at_deposit: u64,
+}
+
+/// A staged mint has been released out of the vault to its recipient.
+#[event]
+pub struct MintReleased {
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub recipient: Pubkey,
+    pub amount: u64,
+    pub height: u64,
+}
+
+/// A staged mint has been burned out of the vault, because the chain moved
+/// against the deposit it was proven from.
+#[event]
+pub struct StagedMintBurned {
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub amount: u64,
+    pub height: u64,
 }
 
 /// A timelocked authority change has been recorded and is now visible until it
@@ -2597,6 +3112,20 @@ pub enum SolbeamError {
     ForkPointTooOld,
     #[msg("the light client account data is not a well-formed LightClient")]
     MalformedClientData,
+    #[msg("the staged-mint account is not the PDA this (txid, vout) derives")]
+    WrongStagedMint,
+    #[msg("this deposit has already been staged")]
+    AlreadyStaged,
+    #[msg("the light client's view of the chain is older than max_staleness_slots")]
+    StaleClient,
+    #[msg("the deposit has not reached the maturity recorded when it was verified")]
+    NotMatured,
+    #[msg("the deposit's block has left the header window, so its hash can no longer be checked")]
+    DepositHeightNotInWindow,
+    #[msg("the client's stored hash at the deposit's height has changed — the deposit was reorged")]
+    DepositHashChanged,
+    #[msg("the client's stored hash at the deposit's height is unchanged — there is nothing to burn")]
+    DepositHashUnchanged,
 }
 
 #[cfg(test)]
@@ -2650,5 +3179,65 @@ mod script_shape_tests {
         let mut bad_p = p2pkh();
         bad_p[2] = 0x15;
         assert!(!is_acceptable_deposit_script(&bad_p));
+    }
+}
+
+/// The hand-written layouts the vault creates by hand.
+///
+/// `create_staged_mint` writes `StagedMint` field for field rather than through
+/// Borsh, because the account is built by `allocate`/`assign` (its seeds are
+/// instruction arguments, so it cannot be an Anchor `init`). That is exactly the
+/// kind of code where a field reorder compiles and then reads the wrong bytes on
+/// chain, so the two representations are compared directly here.
+#[cfg(test)]
+mod vault_layout_tests {
+    use super::*;
+
+    #[test]
+    fn staged_mint_manual_layout_matches_borsh() {
+        let m = StagedMint {
+            recipient: Pubkey::new_from_array([7u8; 32]),
+            amount: 0x0000_0001_2345_6789,
+            deposit_height: 968_376,
+            deposit_hash: [0xab; 32],
+            maturity_at_deposit: 144,
+            bump: 251,
+        };
+
+        let mut borsh = Vec::new();
+        borsh.extend_from_slice(StagedMint::DISCRIMINATOR);
+        AnchorSerialize::serialize(&m, &mut borsh).unwrap();
+        assert_eq!(borsh.len(), StagedMint::SPACE);
+
+        // The byte writes `create_staged_mint` performs, at the offsets it uses.
+        let mut manual = vec![0u8; StagedMint::SPACE];
+        manual[..8].copy_from_slice(StagedMint::DISCRIMINATOR);
+        manual[8..40].copy_from_slice(&m.recipient.to_bytes());
+        manual[40..48].copy_from_slice(&m.amount.to_le_bytes());
+        manual[48..56].copy_from_slice(&m.deposit_height.to_le_bytes());
+        manual[56..88].copy_from_slice(&m.deposit_hash);
+        manual[88..96].copy_from_slice(&m.maturity_at_deposit.to_le_bytes());
+        manual[96] = m.bump;
+
+        assert_eq!(manual, borsh, "you must update create_staged_mint");
+    }
+
+    /// `Config` is small enough to check the same way, and the maturity it
+    /// carries is read on the mint path before any token moves.
+    #[test]
+    fn config_layout_is_maturity_then_bump() {
+        let c = Config {
+            maturity_blocks: 1_234_567,
+            bump: 254,
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(Config::DISCRIMINATOR);
+        AnchorSerialize::serialize(&c, &mut data).unwrap();
+        assert_eq!(data.len(), Config::SPACE);
+        assert_eq!(
+            u64::from_le_bytes(data[8..16].try_into().unwrap()),
+            c.maturity_blocks
+        );
+        assert_eq!(data[16], c.bump);
     }
 }
