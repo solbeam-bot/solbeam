@@ -269,9 +269,11 @@ notices.
 stores, and the vault is specified to compare its own record and burn. **That is the addition, and
 it is why the light client and the vault exist.**
 
-**And the vault is unbuilt.** There is no `release_mint` and no `burn_staged` in the program; today
-`verify_deposit` mints straight to the depositor. The light client — the half that *detects* a
-reorg — is built and verified. The half that *reverses* one is a specification.
+**And the vault is now built** — `release_mint` and `burn_staged` exist and are permissionless, and
+the burn is exercised by test. **But the protective window ships at 0**: maturity is a stored
+parameter and the PoC sets it to zero, so the reversal is *available and racy* rather than automatic.
+The half that *detects* a reorg is built and verified; the half that *reverses* one is built, and its
+safety window is off by parameter.
 
 ### What that buys, and what it costs
 

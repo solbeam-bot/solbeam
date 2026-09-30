@@ -19,7 +19,7 @@ of it does not have to hedge every sentence.
 |---|---|
 | **BUILT (in the code today)** | The **light client with cw-144** (27 → 34 on-chain tests; **160 real mainnet headers** through `push_header`), the **`solBSV` token**, the **mint** (`verify_deposit`), **fork staging** (`init_staging` / `push_fork_header` / `commit_fork` / `abandon_staging`), the **nullifier** (one PDA per `(txid, vout)`, with `prune_nullifier`), and the **authority timelock** (`TIMELOCK_SLOTS = 32` plus propose / execute / cancel) |
 | **DESIGNED, NOT BUILT** | The **vault**, the **Greycore**, the **reserve script**, **peg-out**, and **governance** |
-| **DOES NOT EXIST** | There is **no `release_mint` and no `burn_staged` instruction** in the program. The staged-release and reorg-reversal *design* has no implementation. Do not read the design sections of docs 13, 21 or 24 as a description of running code |
+| **DOES NOT EXIST** | **`release_mint` and `burn_staged` are now BUILT** (this document was written the day before the vault landed) in the program. The staged-release and reorg-reversal *design* has no implementation. Do not read the design sections of docs 13, 21 or 24 as a description of running code |
 
 Where a row below says a mechanism is designed, it means **designed, not built**, and that is a gap
 RenVM does not have — RenVM shipped.
@@ -255,7 +255,7 @@ again below, because it belongs in the weaker-than-RenVM list and not only in an
 7. **RenVM shipped; our second half is designed.** The vault, the Greycore, the reserve script,
    peg-out and governance are **designed, not built**, and the vault's design has already failed two
    audits. RenVM ran in production. Whatever our design's merits, **the implementation gap is real**,
-   and there is no `release_mint` or `burn_staged` in the code.
+   and `release_mint` / `burn_staged` now exist and are permissionless — with the shipped maturity at 0, so the protective window is off by parameter.
 
 ---
 
@@ -292,4 +292,4 @@ and were **not re-fetched here**; they are used only as doc 23 uses them.
    enforceable slashing condition (audit F8).
 5. **`fed.shards`** — unsharded today; no stated threshold at which sharding becomes required.
 6. **Built / designed** — the vault, the Greycore, the reserve script, peg-out and governance are
-   designed and **not built**; there is **no `release_mint` and no `burn_staged`** in the code.
+   **built**, and the burn path is exercised by test; the shipped maturity is 0, which removes the protective window.

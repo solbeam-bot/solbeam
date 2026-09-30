@@ -20,7 +20,7 @@ depositor's token account and charges no fee.
 
 ## The flows
 
-**As designed** — the vault and everything downstream of it are not built. Both directions have
+**The vault is built**; everything downstream of it — the federation, the reserve script, peg-out — is not. And the vault's protective window ships at 0, so the reversal is available and racy rather than automatic. Both directions have
 the same shape: **enter the program's vault, then leave it either to the counterparty or back to
 the sender.** No failure path mints; every one returns.
 
