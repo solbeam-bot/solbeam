@@ -30,3 +30,4 @@
 * [28. State of the project — a summary for review](28-state-of-the-project.md) — **start here**
 * [29. Miner-attested hashrate, and the latency question](29-miner-attestations-and-latency.md)
 * [30. BLS, Alpenglow, and what could be proven back the other way](30-bls-and-solana-consensus.md)
+* [31. The vault — build spec](31-vault-build-spec.md)
