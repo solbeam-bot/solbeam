@@ -5,8 +5,8 @@ a **description**, with a status marker. The intent is that this becomes a confi
 on-chain program and the node software read, so a specification can be correct while the numbers are
 still provisional.
 
-> **Almost all of this is a specification, not shipped behaviour.** The built set is 16 instructions
-> and 37 passing / 0 failing. The only parameters actually settable in the built program are
+> **Almost all of this is a specification, not shipped behaviour.** The built set is 17 instructions
+> and 45 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, shipped at **0**) and the authority timelock
 > (`TIMELOCK_SLOTS = 32`, a constant). **`FLOOR` is not a parameter in code** — it is the constant
 > `MIN_CONFIRMATIONS = 12`. Nothing else here is settable at runtime.
@@ -49,7 +49,7 @@ document says X"* and *"the program can be set to X"* are different claims.
 > normally wins. **What protects a deposit today is `MIN_CONFIRMATIONS = 12` — prevention, not
 > reversal.**
 >
-> Everything else marked `designed` above is a specification, and **16 instructions exist**, not 56
+> Everything else marked `designed` above is a specification, and **17 instructions exist**, not 56
 > parameters.
 
 **A machine-readable copy is at [`parameters.csv`](parameters.csv)**, regenerated from this table.

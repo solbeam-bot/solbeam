@@ -25,8 +25,8 @@ account of it.
 
 > **Built or designed?** Built: the **light client** with cw-144 and Merkle inclusion, the **`solBSV`
 > token**, the **mint** (`verify_deposit`), **fork staging**, the **nullifier**, the **timelocked
-> authority**, and the **vault** (`release_mint`, `burn_staged`, `set_maturity`) — **16 instructions,
-> 37 passing / 0 failing**. **Designed and not built: the federation, the Greycore, peg-out and
+> authority**, and the **vault** (`release_mint`, `burn_staged`, `set_maturity`) — **17 instructions,
+> 45 passing / 0 failing**. **Designed and not built: the federation, the Greycore, peg-out and
 > governance.** The vault's protective window ships at 0, so the reversal is available and racy
 > rather than automatic (§4). See [08. Status and roadmap](08-status-and-roadmap.md) for the full
 > built/designed line.
