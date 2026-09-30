@@ -53,9 +53,11 @@ described an operator-less design. The honest division is:
 - **The reserve is trusted, and bounded.** The BSV sits under a **2-of-2 `OP_CHECKMULTISIG`** — the
   federation's **threshold ECDSA** gateway key (never assembled in one place) **and** the
   **Greycore**'s key. **Both must sign**, so neither the gateway majority nor the Greycore can move
-  funds alone, and the Greycore polices every reserve spend. What protects a holder is a **bond
-  anyone can seize by proving misbehaviour on-chain** — the program seizes the `solBSV` side, the
-  members seize the BSV side collectively — not the absence of trust.
+  funds alone, and the Greycore polices every reserve spend. What protects a holder is a
+  **two-sided bond held under the collective key** — the program seizes the `solBSV` side
+  automatically, and the members seize the BSV side by signing. **That seizure is a collective
+  action by the majority, and the duty to perform it is social rather than on-chain.** No bond
+  prevents a majority from taking the reserve, and none is claimed to.
 
 That leaves **one trust assumption: a threshold of federation members, together with the Greycore,
 do not collude.** It is not eliminated. It is bounded by the **Greycore co-signature**, by two-sided
@@ -73,7 +75,7 @@ concept, and it says so.
 |---|---|
 | **The deposit is verified; the backing is reported** | The program verifies BSV proof of work and Merkle inclusion itself. **The program verifies deposits; the federation reports backing** — it reports spent deposit outpoints, because Solana cannot read the BSV UTXO set |
 | **Reversal is trustless** | The program compares its own stored header hashes. A reorg is a fact about headers, not a report from anyone. **The mechanism is built; its protective window ships at 0 (see 08)** |
-| **The reserve is trusted, and bounded** | The BSV sits under a **2-of-2 `OP_CHECKMULTISIG`** — the federation's threshold ECDSA gateway key **and** the Greycore's, both required — so no gateway majority and no Greycore can move it alone. What protects a holder is a **bond anyone can seize by proving misbehaviour on-chain** |
+| **The reserve is trusted, and bounded** | The BSV sits under a **2-of-2 `OP_CHECKMULTISIG`** — the federation's threshold ECDSA gateway key **and** the Greycore's, both required — so no gateway majority and no Greycore can move it alone. What protects a holder is a **two-sided bond under the collective key** — the program seizes the `solBSV` side automatically; the members seize the BSV side by signing, which is a **collective action by the majority and a social duty, not an on-chain guarantee** |
 | **There is a federation** | Bonded members, **admitted by the Greycore**. They are paid to carry the risk; the bonds are the float, held under the collective key, not each member's own |
 | **There is governance** | 85% of pledged coins, 30 days, signalled live. It holds the upgrade authority — see *the floor is the exit* below |
 | **No price oracle** | No external price or data feed gates anything. Minting is gated by a verified proof plus a coverage floor; peg-outs by the gateway threshold key and the **Greycore co-signature** |
