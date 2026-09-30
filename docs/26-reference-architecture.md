@@ -266,8 +266,12 @@ mint — the bond and the challenge are the only recourse, **after** the fact an
 notices.
 
 **Ours notices on-chain and reverses it.** A reorg is a fact about the headers the program already
-stores; `burn_staged` compares its own record and burns. **That is the addition, and it is why the
-light client and the vault exist.**
+stores, and the vault is specified to compare its own record and burn. **That is the addition, and
+it is why the light client and the vault exist.**
+
+**And the vault is unbuilt.** There is no `release_mint` and no `burn_staged` in the program; today
+`verify_deposit` mints straight to the depositor. The light client — the half that *detects* a
+reorg — is built and verified. The half that *reverses* one is a specification.
 
 ### What that buys, and what it costs
 

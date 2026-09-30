@@ -64,7 +64,9 @@ The 72-header reorg test passes only because regtest's `no_retargeting` makes th
 
 > **Fixed since.** The F1/F2/F3 fix computes each branch header's target from the **branch's own**
 > records and drives a **real mainnet branch through `push_fork_header`**, so a stored hash can now
-> change and `burn_staged` is reachable. Verified by the 27-test suite, 0 failing.
+> change, which makes `burn_staged` **implementable**. **It is NOT implemented** — there is no such
+> instruction in `lib.rs`, and no test can verify a function that does not exist. An earlier
+> revision of this line said "reachable. Verified by the 27-test suite", which was false.
 
 ### F4 — The mint gate is a single instant key
 
