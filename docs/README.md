@@ -32,6 +32,7 @@ built-versus-designed line, what we would attack, and the roadmap.
 | [08. Status and roadmap](08-status-and-roadmap.md) | **The reviewer entry point.** Built vs designed, what we would attack, what ships when |
 | [09. Costs](09-costs.md) | What it costs to run, and who pays |
 | [10. Audit history](10-audit-history.md) | How the design got here, and the honest record of what was wrong |
+| [11. Peg-out — spec and default parameters](11-peg-out-spec.md) | The redemption half: the flow, the `po.*` defaults, and what it does not solve |
 
 ---
 
@@ -42,7 +43,7 @@ The distinction the rest of this set is careful about:
 - **Built** — the light client with `cw-144`, the `solBSV` token, the mint (`verify_deposit`), fork
   staging, the nullifier, the timelocked authority, and **the vault** (`release_mint`,
   `burn_staged`, `set_maturity`). **17 instructions, 45 passing / 0 failing.**
-- **Designed, not built** — the **federation**, the **Greycore**, **peg-out**, and **governance**.
+- **Designed, not built** — the **federation**, the **Greycore**, **peg-out** ([spec](11-peg-out-spec.md), with defaults now fixed), and **governance**.
   The reserve script's *shape* is accepted by the code; the threshold key and second quorum that
   would fill it are not.
 - **Trusted** — the checkpoint, the reserve, and the federation's spent-outpoint report; all
