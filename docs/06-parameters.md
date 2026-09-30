@@ -25,6 +25,37 @@ still provisional.
 
 ---
 
+## The sheet — where every value actually lives
+
+**This is the distinction that matters, and the one we have repeatedly blurred:** *"the parameters
+document says X"* and *"the program can be set to X"* are different claims.
+
+| Class | Meaning | Count |
+|---|---|---|
+| **`built-mutable`** | In the program, in an account, changeable at runtime through the timelocked authority | **1** |
+| **`built-shape`** | The shape is enforced by the built program; the keys behind it are not | **1** |
+| **`built-frozen`** | In the program as a constant. Changing it needs a **redeploy** | **15** |
+| **`measured`** | A fact about BSV, Solana or the toolchain, not a choice | — |
+| **`derived`** | Computed from others; changing it directly is a bug | — |
+| **`designed`** | Decided, and **not in the program** | — |
+| **`open`** | **No value yet.** This is work to do, not a decision deferred | — |
+| **`superseded`** | Recorded for history only | — |
+
+> ### The single most important row
+>
+> **`v.maturity_blocks` is the only parameter the built program can change at runtime.** It ships at
+> **0**, which removes the protective window: the vault is a pass-through, the burn predicate is
+> satisfied instantly rather than being unreachable, and release and burn are a **race** that release
+> normally wins. **What protects a deposit today is `MIN_CONFIRMATIONS = 12` — prevention, not
+> reversal.**
+>
+> Everything else marked `designed` above is a specification, and **16 instructions exist**, not 56
+> parameters.
+
+**A machine-readable copy is at [`parameters.csv`](parameters.csv)**, regenerated from this table.
+
+---
+
 ## Light client
 
 | ID | Name | Value | Description |
@@ -42,7 +73,7 @@ still provisional.
 | `lc.max_account_create` | Solana account cap | **10,240 bytes** `mea` | A Solana limit, not a choice |
 | `lc.cluster_id` | Deployment identifier | **open** | Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** — the code checks only that the recipient's 32 bytes appear in the `OP_RETURN` |
 | `lc.pow_limit_bits` | Maximum target | **open** | Regtest uses `0x207fffff`; mainnet must be set |
-| `lc.max_staleness_slots` | Freshness bound | **54,000 slots (~6 h)** `dec` | How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator** |
+| `lc.max_staleness_slots` | Freshness bound | **54,000 slots (~6 h)** `built` | How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator** |
 
 ## Vault
 
@@ -83,7 +114,7 @@ still provisional.
 | `gov.delay_min` | Minimum delay (**floor**) | **open** (7 days proposed) | **F7.** Both readings are defensible and the choice is open: *with a floor*, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; *without*, the exit window is whatever the current majority allows. A judgement about trust, **not a correctness question** |
 | `gov.signal` | Signal from proposal | **true** `dec` | Live from the moment it is raised |
 | `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. Nothing is immutable, so the exit window, not the rule, is the protection |
-| `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `dec` | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. **Not built** |
+| `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `designed` — in code it is the **upgrade authority**, one key, timelocked | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. **Not built** |
 | `gov.authority_timelock` | Authority timelock | **32 slots** `built` | `TIMELOCK_SLOTS`, a PoC value. Applied to `propose_authority_change` / `execute_authority_change` / `cancel_authority_change`. Must be long enough to exit |
 | `gov.pause_threshold` | Pause threshold | **>50%** `ph` | Lower than a governance change, because the power is bounded |
 | `gov.pause_duration` | Pause auto-lift | **open** | Days before a pause lapses unless renewed |
