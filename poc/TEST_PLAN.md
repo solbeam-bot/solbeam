@@ -44,10 +44,11 @@ deployment if nobody checks. Two things follow:
 
 ### 0.2 Designed, and NOT built
 
-Everything below is specified in [`docs/13-summary.md`](../docs/13-summary.md) and
-[`docs/14-decisions.md`](../docs/14-decisions.md), and does not exist in code. **The shipped
-program mints straight to the depositor's token account**, so nothing is staged and the vault is
-a specification rather than a property.
+Everything below is specified in [`docs/02-how-it-works.md`](../docs/02-how-it-works.md) and
+[`docs/07-decisions.md`](../docs/07-decisions.md), and does not exist in code. **The vault itself is
+built** (`release_mint`, `burn_staged`, `set_maturity`), but its protective window ships at **0**, so
+the reversal is a race rather than a window. Everything downstream — the federation, the Greycore,
+governance and peg-out — is still a specification rather than a property.
 
 - The **vault** and both gates — maturity, release, burn
 - The **order book**, staking, bonds, `owed_R`, relayer consent, `k`
@@ -72,7 +73,7 @@ posture, not a seeded-book special case.
 | **A9/A10/A14** | No `MIN_PEG_IN`, no aggregate cap, committed depth unparsed | Unimplemented |
 
 Full findings, including which are inherent and which merely unbuilt, are in
-[`docs/15-audit-2.md`](../docs/15-audit-2.md).
+[`docs/10-audit-history.md`](../docs/10-audit-history.md).
 
 ### 0.4 Next, in order
 
@@ -643,4 +644,4 @@ The attack-cost work (5b) is the genuinely novel part, and it is also where the 
 
 ---
 
-Next: [PoC plan](README.md) · [Phase 5 monitoring](PHASE5_MONITORING.md) · [Adversary playbook](ADVERSARY_PLAYBOOK.md) · [Trust model](../docs/04-trust-model.md)
+Next: [PoC plan](README.md) · [Phase 5 monitoring](PHASE5_MONITORING.md) · [Adversary playbook](ADVERSARY_PLAYBOOK.md) · [Trust model](../docs/05-trust-model.md)

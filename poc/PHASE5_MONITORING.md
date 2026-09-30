@@ -163,7 +163,7 @@ bridge accounts ─┘                                                    │
 3. **Rentable hashpower is advertised availability, not a ceiling.** It fluctuates, and it can be accumulated quietly over time. The feasibility gate is a live measurement, not a proof.
 4. **Do not model the attacker as rational.** The page shows absolute numbers and computes no "safety" score, because an attacker may be short the asset, may want to destroy confidence, or may not be optimising at all.
 5. **No per-user data, ever.** No deposit addresses, no wallet links, nothing that de-anonymises a holder. Aggregate only.
-6. Nothing on the page may imply the peg is safer than [`docs/04-trust-model.md`](../docs/04-trust-model.md) says it is. Minting is trustless; redemption is trust-minimised.
+6. Nothing on the page may imply the peg is safer than [`docs/05-trust-model.md`](../docs/05-trust-model.md) says it is. Minting is trustless; redemption is trust-minimised.
 
 ---
 
@@ -180,4 +180,4 @@ bridge accounts ─┘                                                    │
 
 ---
 
-Next: [Test plan](TEST_PLAN.md) · [Adversary playbook](ADVERSARY_PLAYBOOK.md) · [Trust model](../docs/04-trust-model.md)
+Next: [Test plan](TEST_PLAN.md) · [Adversary playbook](ADVERSARY_PLAYBOOK.md) · [Trust model](../docs/05-trust-model.md)

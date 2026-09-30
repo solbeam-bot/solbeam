@@ -98,7 +98,7 @@ This is where the trust model actually gets tested, and where the interesting fi
 | Play | What you try | Expected |
 |---|---|---|
 | `rogue-earmarked` | Take the float while a redemption you accepted is outstanding | The deadline **returns the escrow to the holder**; supply is unchanged, and the bond is **not** additionally transferred to a holder already made whole. The bond answers the deliberate theft — it does not top up a failed redemption. **Self-reporting** — no watcher needed. No failure path mints |
-| `rogue-naked` | Spend reserve BSV with no redemption authorising it | **Provable on-chain**: the spending tx is submitted with a Merkle branch, and its outputs match no recorded payout. The bond is seized; the holder is made whole. *(Federation model — see [`23-federation.md`](../docs/23-federation.md))* |
+| `rogue-naked` | Spend reserve BSV with no redemption authorising it | **Provable on-chain**: the spending tx is submitted with a Merkle branch, and its outputs match no recorded payout. The bond is seized; the holder is made whole. *(Federation model — see [`03-the-federation.md`](../docs/03-the-federation.md))* |
 | `rogue-vanish` | Accept a job, then disappear | The escrow is **returned to the holder**; supply is unchanged; the bond is **not** additionally transferred. The bond makes deliberate abandonment punishable — it is not compensation for a failed redemption |
 | `rogue-underpay` | Pay less than owed | Proof cannot match; the deadline returns the escrow |
 | `rogue-refuse-unbond` | Exit mid-commitment to dodge a slash | Blocked by the unbonding period |
@@ -134,4 +134,4 @@ Not coverage. Three things:
 
 ---
 
-Next: [Test plan](TEST_PLAN.md) · [Phase 5 monitoring](PHASE5_MONITORING.md) · [Trust model](../docs/04-trust-model.md)
+Next: [Test plan](TEST_PLAN.md) · [Phase 5 monitoring](PHASE5_MONITORING.md) · [Trust model](../docs/05-trust-model.md)

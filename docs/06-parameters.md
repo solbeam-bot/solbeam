@@ -1,64 +1,131 @@
-# 6. Parameters & governance
+# 06. Parameters
 
-> **Most of this is a specification, not shipped behaviour.** The built set is exactly four things:
-> the **light client** (cw-144 difficulty verification and Merkle inclusion), the **`solBSV`**
-> **token**, the **mint**, and **fork staging with chainwork** — 27 passing on-chain tests.
-> **The vault, the federation, threshold custody, governance, slashing and all of peg-out are
-> designed and not built.** Nothing here is settable at runtime today: the only parameter in the
-> shipped program is `MIN_CONFIRMATIONS = 12`, **fixed in code**. [`13-summary.md`](13-summary.md)
-> is the authoritative model; where this document and that one disagree, that one is right.
+**Every value the system turns on, in one place.** Each row has an **ID**, a **name**, a **value** and
+a **description**, with a status marker. The intent is that this becomes a config that both the
+on-chain program and the node software read, so a specification can be correct while the numbers are
+still provisional.
 
-## The parameters
+> **Almost all of this is a specification, not shipped behaviour.** The built set is 16 instructions
+> and 37 passing / 0 failing. The only parameters actually settable in the built program are
+> **`maturity_blocks`** (a stored `Config` field, shipped at **0**) and the authority timelock
+> (`TIMELOCK_SLOTS = 32`, a constant). **`FLOOR` is not a parameter in code** — it is the constant
+> `MIN_CONFIRMATIONS = 12`. Nothing else here is settable at runtime.
 
-The defaults below come from [`13-summary.md`](13-summary.md) and
-[`23-federation.md`](23-federation.md). **All of them are parameters rather than constants** — that
-is the point of the governance design — except where the note says otherwise.
+## How to read the value column
 
-| Parameter | Default | Class | What it does |
+| Marker | Meaning |
+|---|---|
+| **mea** | **Measured.** From the code, the chain or the toolchain. Do not change without re-measuring |
+| **dec** | **Decided.** A settled design choice |
+| **ph** | **Placeholder.** A starting value expected to move |
+| **der** | **Derived.** Computed from other parameters; changing it directly is a bug |
+| **built** | Present in the program today |
+| **der·superseded** | Derived, and no longer binding; recorded for history |
+| **open** | **Undecided.** No value yet — this is work to do |
+
+---
+
+## Light client
+
+| ID | Name | Value | Description |
 |---|---|---|---|
-| **Mint fee** | **30 bp**, governed | economic | Replaces the discovered order-book fee (D2, superseded) |
-| **Redeem fee** | **30 bp**, governed | economic | Same fee in the other direction |
-| **Bond — mint side (`fed.bond_mint`)** | **1,000 BSV**, BSV, **outside the reserve**, under the **collective key** | **safety** | **The bond is the float** — working capital for transfers — not a capital requirement sized against the reserve and not a capacity ceiling. **Held under the collective key, not the member's own**, and seized by the **members collectively** with a threshold-signed transaction; slashing pays the slashers from it. A collective action by the majority, not an automatic rule (doc 13, *The two bonds*) |
-| **Bond — redeem side (`fed.bond_redeem`)** | **1,000 BSV**, posted as `solBSV` | **safety** | **The float**, seizable on Solana. **Neither bond sits inside the reserve**; the `k` line is a coverage floor, not a capacity ceiling |
-| **Bond coverage floor `k`** | **1** | **safety** | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, checked on mint and exit. A **solvency floor, not a capacity ceiling**. The old single formula `aggregate_bond ≥ k × non_bonded_supply` is **superseded** (D14), and the `n/t` capacity arithmetic built on `k` is **withdrawn** (doc 26 §5) |
-| **Gateway signing threshold (`fed.threshold`)** | **4-of-N, `N` open** — the number is deferred | **safety** | `t` of `n` for the gateway **threshold ECDSA** key. One leg of the reserve's **2-of-2 `OP_CHECKMULTISIG`** with the Greycore; the gateway key emits one signature |
-| **Greycore size / threshold** | `fed.greycore_size` / `fed.greycore_threshold`, both **`open`** | **safety** | The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose who do not run the reserve. **The Greycore co-signs every reserve spend** and **finds and admits replacement members** |
-| **Governance threshold** | **85% of pledged coins** | **safety** | The proposal bar |
-| **Governance delay** | **30 days** | **safety** | Signal time between passing and taking effect. **This is the exit window** |
-| **Signal** | **live from the moment it is raised** | **safety** | The proposal is visible while it is only a proposal |
-| **Governance scope** | **includes the upgrade authority** | **safety** | There is no immutable floor; the exit window is the floor |
-| **Pause** | mints only; majority threshold; lifts after N days | **safety** | **Redemptions can never be paused.** Pausing inbound is a safety valve; pausing outbound is taking hostages |
-| **`FLOOR`** | **12 BSV blocks** (~2 h) | **safety** | Minimum confirmation depth before a deposit may be minted. Settable in the design; **fixed as `MIN_CONFIRMATIONS = 12` in the built code** |
-| **`MATURITY`** | **144 blocks** (~24 h) | **safety** | How long a staged mint waits before it can be released |
-| **`WINDOW`** | **192 records / 32 h** | **fixed by arithmetic** | How far back the light client can prove anything at all |
-| **DAA** | **cw-144** as specified | **safety** | Governable in the design, so a BSV rule change is a vote; **hard-coded in the built program (X3)** |
-| **Unbonding period** | — | **safety** | Must outlast the payout deadline, or a member can take a job and leave |
-| **Challenge bounty share** | — | economic | Unspecified; see §Open parameters |
+| `lc.window_hours` | Window length (hours) | **32** `dec` | How much BSV history the client keeps. Sets the deposit deadline |
+| `lc.window` | Window length (records) | **192** `der` | `window_hours × 3600 / seconds_per_block`. Bounded above by the account cap |
+| `lc.seconds_per_block` | Target block spacing | **600** `mea` | BSV's ten-minute target |
+| `lc.record_size` | Bytes per header record | **52** `der` | `32 hash + 16 chainwork + 4 time`. Not configurable |
+| `lc.lookback` | DAA lookback (records) | **147** `der` | `144 + 3` for the median-of-three. **Measured: 146 reproduces 0/324 headers, 147 reproduces 324/324** |
+| `lc.daa` | Difficulty rule | **cw-144** `mea` | The rule BSV actually uses. Verified against real mainnet headers. **Hard-coded (X3)** |
+| `lc.daa_clamp_low` | Lower clamp | **72 × 600 s** `mea` | Multiplies `seconds_per_block`, **not** the averaging window |
+| `lc.daa_clamp_high` | Upper clamp | **288 × 600 s** `mea` | As above |
+| `lc.floor` | Confirmation depth | **12 blocks** `built` | `MIN_CONFIRMATIONS`, **fixed in code**, not a runtime parameter |
+| `lc.max_fork_batch` | Headers per fork tx | **12** `mea` | Set by the 1,232-byte transaction limit |
+| `lc.max_account_create` | Solana account cap | **10,240 bytes** `mea` | A Solana limit, not a choice |
+| `lc.cluster_id` | Deployment identifier | **open** | Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** — the code checks only that the recipient's 32 bytes appear in the `OP_RETURN` |
+| `lc.pow_limit_bits` | Maximum target | **open** | Regtest uses `0x207fffff`; mainnet must be set |
+| `lc.max_staleness_slots` | Freshness bound | **54,000 slots (~6 h)** `dec` | How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator** |
 
-**A safety parameter bounds a fraud; an economic parameter sets price and size.** The distinction is
-load-bearing where it comes to governance: whoever can set `FLOOR = 0` or `WINDOW = 0` holds a mint
-voucher, and whoever can pause redemptions holds the reserve hostage. That is why **redemptions are
-outside governance's reach entirely** rather than merely subject to a supermajority.
+## Vault
 
-### How the safety parameters actually protect
+| ID | Name | Value | Description |
+|---|---|---|---|
+| `v.maturity_blocks` | Maturity | **0** `built` | Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks** |
+| `v.reorg_margin` | Detection margin | **48 blocks** at the designed values `der` | `window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth |
+| `v.escrow_close_refund` | Rent refund on close | **true** `dec` | Closing an item returns its rent to the caller |
 
-The old model's answer was "safety parameters may only be moved in the conservative direction". The
-new model's answer is different, and it is the more important change in this chapter:
+## Federation
 
-**There is no immutable floor. The floor is the exit window.**
+| ID | Name | Value | Description |
+|---|---|---|---|
+| `fed.bond_mint` | Mint-side bond — BSV side (**the float**) | **1,000 BSV** `dec` | Held **outside the reserve**. **The bond is the float** — working capital for transfers — **not a capital requirement sized against the reserve**, and not a capacity ceiling. The `k × (BSV held)` line is a solvency check on mint and exit. **Held under the collective (threshold ECDSA) key, not the member's own**, and seized by the **members collectively**; slashing pays the slashers from it. A collective action by the majority, not an automatic rule |
+| `fed.bond_key` | Mint-side bond custody | **collective (threshold ECDSA) key** `dec` | **The design requirement the mechanism rests on.** If a member controls their own bond they move it the moment they are caught. *Residuals:* a majority could seize an honest member's bond; nothing on BSV compels signing, so the duty to slash is **social** |
+| `fed.bond_redeem` | Redeem-side bond — `solBSV` side (**the float**) | **1,000 BSV** `dec` | Seizable on Solana. **This side is enforceable.** Neither bond sits inside the reserve |
+| `fed.bond_size` | Nominal bond size | **1,000 BSV** `dec` | Superseded by the two side-specific bonds; kept as the per-side default name |
+| `fed.total_bond` | Aggregate bond (tracked) | **superseded** | The old single running total is replaced by two side-specific aggregates |
+| `fed.mint_gate` | Bonds gate minting | **true** `dec` | **F5.** A mint is refused unless the BSV-side bond covers the BSV held after it. A **solvency floor, not a capacity claim.** The old `total_bond ≥ k × (non_bonded_supply + amount)` is **superseded** |
+| `fed.bond_asset` | Bond denomination | **split** `dec` | Mint side BSV, redeem side `solBSV`; neither inside the reserve. No price oracle is needed for either |
+| `fed.collusion_mitigation` | Against a colluding threshold | **transparency** `dec` | **Stated risk, not a mechanism.** No on-chain predicate proves who signed an off-chain threshold signature. The maximum loss is the whole **non-member supply**. Publishing the reserve and supply converts a hidden theft into a visible one; the unchallenged-spend case is separately addressed by the **reported spent-outpoint record** |
+| `fed.k` | Bond coverage floor | **1** `dec` | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, checked on mint and exit. **A solvency check, not a capacity ceiling.** The capacity arithmetic built on `k` and `n/t` is **withdrawn**. Capital inefficiency accepted |
+| `fed.threshold` | Gateway signing threshold | **4-of-N, `N` open** | `t` of `n` for the gateway **threshold ECDSA** key. **`N` is a variable; the number is arbitrary and deferred.** The key emits **one** signature and is one leg of the reserve's 2-of-2 script. Changing `t` or `n` is a **re-sharing**, not a migration |
+| `fed.greycore_size` | Greycore size | **open** | The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose, who do not run the reserve. The Greycore **finds and admits replacement members** |
+| `fed.greycore_threshold` | Greycore threshold | **open** | How many Greycore keys must sign alongside the gateway. The Greycore **co-signs every reserve spend**, which is what constrains the reserve. 4-of-5 was an earlier proposal and is not settled |
+| `fed.shards` | Shard count | **open** | One key or several groups. Affects blast radius and latency. **There is no sharding today: blast radius is 100%** |
+| `fed.unbond_slots` | Unbonding period | **open** | Must exceed the redemption deadline plus the challenge window |
+| `fed.delegated_staking` | Delegated staking | **disabled** `dec` | **Phase 2.** Lets non-members delegate `solBSV` to a member and share its fee. Activatable by governance, not built |
+| `fed.script` | Reserve deposit script | **2-of-2 `OP_CHECKMULTISIG`** `dec`, **shape accepted in code** `built` | `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`. Both keys must sign; the Greycore polices every reserve spend. The committed code accepts this shape: `is_reserve_multisig`, `MAX_SCRIPT_LEN = 71`, `DepositScript::SPACE = 84`. **The keys/quorum behind it are not built** |
+| `fed.bond_enforced_on_chain` | BSV-side bond seizure | **collective action** `dec` | The Solana program cannot seize the BSV-side bond; the members sign a threshold transaction. Stated as a residual, not hidden |
 
-A change needs **85% of pledged coins** and takes **30 days**, with the proposal signalled **live
-from the moment it is raised** — and **redemptions run throughout, because they can never be
-paused**. So a proposal that would harm holders does not trap them: it **empties the bridge before it
-lands.** By the time it takes effect there is nothing left to take.
+## Governance
 
-**The residual, stated plainly:** a holder who does not watch and does not act within 30 days is
-exposed. That is a disclosure obligation, not a mechanism.
+| ID | Name | Value | Description |
+|---|---|---|---|
+| `gov.threshold` | Pass threshold | **85%** `ph` | Share of pledged coins required |
+| `gov.delay` | Delay before effect | **30 days** `ph` | **Reducible** by governance, but never below `gov.delay_min`. Redemptions run throughout |
+| `gov.delay_min` | Minimum delay (**floor**) | **open** (7 days proposed) | **F7.** Both readings are defensible and the choice is open: *with a floor*, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; *without*, the exit window is whatever the current majority allows. A judgement about trust, **not a correctness question** |
+| `gov.signal` | Signal from proposal | **true** `dec` | Live from the moment it is raised |
+| `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. Nothing is immutable, so the exit window, not the rule, is the protection |
+| `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `dec` | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. **Not built** |
+| `gov.authority_timelock` | Authority timelock | **32 slots** `built` | `TIMELOCK_SLOTS`, a PoC value. Applied to `propose_authority_change` / `execute_authority_change` / `cancel_authority_change`. Must be long enough to exit |
+| `gov.pause_threshold` | Pause threshold | **>50%** `ph` | Lower than a governance change, because the power is bounded |
+| `gov.pause_duration` | Pause auto-lift | **open** | Days before a pause lapses unless renewed |
+
+## Fees
+
+| ID | Name | Value | Description |
+|---|---|---|---|
+| `fee.mint_bp` | Peg-in fee (**gross**) | **30 bp** `dec` | Covers all transaction fees; the remainder is member income. **Its physical location is unspecified — N1** |
+| `fee.redeem_bp` | Peg-out fee (**gross**) | **30 bp** `dec` | As above |
+| `fee.bounty_share` | Challenger bounty | **open** | Share of a slashed bond paid to whoever proves the misbehaviour. The `burn_staged` bounty is suggested, not sized, and **not built** |
+
+## Peg-in
+
+| ID | Name | Value | Description |
+|---|---|---|---|
+| `pi.min_peg_in` | Minimum deposit | **1 BSV** `dec` | Prices out dust griefing. Decided; **enforcement is not in code** |
+| `pi.max_used` | Legacy replay-list cap | **200** `der·superseded` | Replaced by a **nullifier PDA per deposit**, which is **built**. There is no list and no ceiling |
+| `pi.op_return_layout` | Deposit commitment | **version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient** `dec` | **Designed.** What is built checks only that the recipient's 32 bytes appear in an `OP_RETURN` |
+
+## Peg-out
+
+| ID | Name | Value | Description |
+|---|---|---|---|
+| `po.deadline` | Redemption deadline | **open** | `D`. Must satisfy `D ≥ payout_confirmations + challenge_window` |
+| `po.challenge_window` | Challenge window | **open** | `W`. Confirmations a payout needs before settling |
+| `po.payout_confirmations` | Payout depth | **open** | BSV confirmations before a payout is provable. `C_payout` |
+
+## Measured constants — do not change without re-measuring
+
+| ID | Name | Value | Description |
+|---|---|---|---|
+| `m.rent_per_byte` | Solana rent | **5,080 lamports/byte** `mea` | `(bytes + 128) × 5,080`. **The 128-byte overhead is inside this rate.** 6,960 is an older toolchain's constant and overstates by ~37%. Measured: `solana rent 0` = 650,240 lamports; `solana rent 165` = 1,488,440 |
+| `m.signature_fee` | Solana base fee | **5,000 lamports** `mea` | Per signature |
+| `m.token_decimals` | `solBSV` decimals | **8** `mea` | — |
+| `m.blob_max` | Transaction size | **1,232 bytes** `mea` | Solana limit; drives `lc.max_fork_batch` |
+
+---
 
 ## The parameters that are arithmetic, not choices
 
-Two numbers are worth separating from the rest, because they are not policy and cannot be governed
-into being different. They are measured facts about the built client:
+Two numbers cannot be governed into being different. They are measured facts about the built client:
 
 ```
 WINDOW              = 192 records  = 32 hours at 600 s/block
@@ -69,118 +136,119 @@ LOOKBACK            = 147 records  (144 + 3 for cw-144's median-of-three)
 ```
 
 - **52 bytes a record, not 32.** cw-144 subtracts two cumulative chainworks and two timestamps 144
-  blocks apart, so a record must carry hash, chainwork and time. A bare-hash window cannot verify
-  the difficulty rule at all.
+  blocks apart, so a record must carry hash, chainwork and time. A bare-hash window cannot verify the
+  difficulty rule at all.
 - **147 records of lookback**, so 192 is only 45 records of slack above the minimum.
-- **194 is the arithmetic maximum** (10,211 bytes, 29 bytes of margin); **192 is the largest window
-  with real margin.** A 48-hour window would be 288 × 52 = 14,976 bytes plus overhead, 46% over the
-  cap, and `initialize` would simply revert. **The old 48-hour deposit deadline was never
-  achievable.**
+- **194 is the arithmetic maximum** (10,211 bytes, 29 bytes margin); **192 is the largest window with
+  real margin.** A 48-hour window would be 288 × 52 = 14,976 bytes plus overhead, 46% over the cap,
+  and `initialize` would simply revert. **The old 48-hour deposit deadline was never achievable.**
 
-**Consequence, and it is a product decision rather than a detail:** the deposit lifetime is **32
-hours**, down from the 48 the earlier design assumed. A deposit whose block has left the window can
+**Consequence:** the deposit lifetime is **32 hours**. A deposit whose block has left the window can
 never be proven again.
+
+## How the safety parameters actually protect
+
+The old model's answer was "safety parameters may only be moved in the conservative direction". The
+current answer is different:
+
+**There is no immutable floor. The floor is the exit window.**
+
+A change needs **85% of pledged coins** and takes **30 days**, signalled **live from the moment it is
+raised** — and **redemptions run throughout, because they can never be paused.** So a proposal that
+would harm holders does not trap them: it **empties the bridge before it lands.**
+
+**A safety parameter bounds a fraud; an economic parameter sets price and size.** The distinction is
+load-bearing: whoever can set `FLOOR = 0` or `WINDOW = 0` holds a mint voucher, and whoever can pause
+redemptions holds the reserve hostage. That is why **redemptions are outside governance's reach
+entirely** rather than merely subject to a supermajority.
+
+**The residual, stated plainly:** a holder who does not watch and does not act within the delay is
+exposed. That is a disclosure obligation, not a mechanism.
+
+**Test overrides are compile-time, not config.** "Remove the minimum during testing" must be a
+`#[cfg(feature = …)]`, never a runtime value — a runtime value can leak to mainnet, a compile-time one
+cannot.
 
 ## Security parameters, and the one that is a market
 
-The old design made **depth a term of the bid**, priced on an order book. **That is superseded.**
-Depth is now a protocol parameter:
+Depth is a protocol parameter, not a market term (the order book is removed):
 
-- **`FLOOR` = 12 blocks** is the minimum. It makes a reorg cost real mining work to undo a deposit;
-  a low floor makes attacks cheap and therefore frequent, raising the number of chances for a
-  detection failure to slip through.
-- **`MATURITY` = 144 blocks** sets the time available to detect. A staged mint is released only once
-  the tip has advanced past the deposit **and** the hash the client stores at that height still
-  matches the one recorded when the deposit was proven. If it differs, the deposit was reorged and
-  the staged tokens **burn**.
+- **`FLOOR` = 12 blocks** is the minimum. It makes a reorg cost real mining work; a low floor makes
+  attacks cheap and frequent, raising the number of chances for a detection failure to slip through.
+- **Maturity = 144 blocks designed** sets the time available to detect. A staged mint is released only
+  once the tip has advanced past the deposit **and** the hash the client stores at that height still
+  matches. If it differs, the deposit was reorged and the staged tokens **burn**. **Shipped at 0.**
 - **`WINDOW` = 32 hours** bounds the reorg the client can see at all. Beyond it, a reorg is not
-  detectable *by definition*, because the client no longer holds the header.
-
-The bounds that need no oracle are exactly these: a high `FLOOR` makes out-mining expensive, and the
-vault means a *successful* fraud mints tokens that are **not in anyone's wallet** — there is nothing
-to dump and no innocent buyer to inherit the loss.
+  detectable *by definition*.
 
 **The honest limit:** the reserve is off-chain BSV the program cannot read, so `custodied BSV ≥
-outstanding solBSV` is **tracked, not verified** (D8). What the program *can* compare is each bond
-against what its side holds — `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)` —
-since those are quantities it holds or measures, and **neither bond sits inside the reserve**.
+outstanding solBSV` is **tracked, not verified**. What the program *can* compare is each bond against
+what its side holds, since those are quantities it holds or measures, and neither bond sits inside the
+reserve.
 
-## What the program can and cannot see
-
-| Quantity | Where it lives | How the program treats it |
-|---|---|---|
-| BSV headers, chainwork, time | On Solana, in the light client | **Verified.** cw-144 replay, 324/324 real mainnet headers exact |
-| Deposit inclusion | Proved against the light client | **Verified** — proof of work and Merkle branch |
-| Deposit's block hash | Stored when the deposit is proven | **Compared later**, to decide release vs burn. No reporter |
-| Deadline | Solana slots | **Read natively.** A cluster halt freezes the clock; it does not burn anyone |
-| Bonds | One on Solana (`solBSV`), one on BSV (native, outside the reserve) | **Compared on-chain per side**: `bsv_bond ≥ k × (BSV held)`, `solbsv_bond ≥ k × (solBSV held)`. The **mint-side bond is seized by the members collectively** under the collective key, not by the program |
-| The BSV reserve itself | Off-chain, under a **threshold ECDSA** key | **Not readable.** Monitored and published, not enforced — and **publication is an early deliverable**, not a late one (doc 07) |
-| Price, hashrate, reorg cost | Off-chain | **Never consulted.** Published as information; deciding on them would make them oracles |
+**One calibration warning, load-bearing:** BSV's hashpower is not Bitcoin's. Six confirmations do not
+carry the same meaning here, so `FLOOR` must be calibrated to **BSV**, not inherited. And depth must
+move with the value it secures — a depth adequate for 10 BSV is not adequate for 10,000. Governance is
+what lets the value move without shipping a program.
 
 ## What was specified before, and is now superseded
 
-The previous version of this chapter carried a stable of IDs — `P1`–`P10`, `FLOOR` as fixed-in-code
-(D4), `k = 1` (D5), "no governance at all" (D7), the reserve invariant as monitored (D8) — under a
-two-gate, per-relayer, order-book model. That model is **superseded**, and the table below records
-what became of each rather than rewriting it silently.
+An earlier chapter carried a stable of IDs under a two-gate, per-relayer, order-book model. The table
+records what became of each rather than rewriting it silently.
 
 | Old ID | Old content | Now |
 |---|---|---|
-| **P1** | `FLOOR` = 12 BSV blocks, fixed in code for the PoC | **Kept as the default**, but it is a **governable parameter**, not fixed — except that the built code has `MIN_CONFIRMATIONS = 12` and no setter |
-| **P2** | `C_payout` = 12 payout confirmations | **Superseded.** Payouts settle against the light client after a challenge window; the number is not yet specified |
-| **P3** | Redemption deadline = 6 h of Solana slots | **Superseded.** The deadline is set per redemption by the holder; the default is unspecified |
-| **P4** | Challenge window = 24 h | **Superseded.** The payout challenge/`MATURITY` design settles this; no default is specified |
-| **P5** | `RECENT_REORG_WINDOW` = 12 h, enforced-or-monitored undecided | **Superseded.** The vault compares stored hashes; there is no separate window parameter |
-| **P6** | `TIP_STALENESS` = 2 h | **Superseded** as a parameter; `set_paused` is the built authority-gated safety valve when the tip stops advancing |
-| **P7** | `MIN_PEG_IN` = 10 BSV | **Superseded** — an economic parameter, no longer specified |
-| **P8** | `MAX_PEG_IN` = 10,000 BSV | **Superseded.** The nominal bound is the bond's coverage floor; the earlier "total value locked is capped by total bonds pledged" is **withdrawn** — the bond is the float, and the reserve is constrained by the Greycore co-signature |
-| **P9** | `MAX_PEG_OUT` = 10,000 BSV | **Superseded.** A redemption is bounded by the reserve and the payout path, not a per-transaction number |
-| **P10** | `HOT_FLOAT_CAP` | **Removed with the pooled float.** There is one reserve under a **threshold ECDSA key**, and the two-sided bonds are the bound |
-| **—** | bond `k` = 1 (D5) | **`k = 1` kept, formula superseded** (D14): two-sided bonds replace `bond ≥ k × owed` |
+| **P1** | `FLOOR` = 12 BSV blocks, fixed in code for the PoC | **Kept as the default**, but a **governable parameter** in the design — except the built code still has `MIN_CONFIRMATIONS = 12` and no setter |
+| **P2** | `C_payout` = 12 payout confirmations | **Superseded.** Payouts settle against the light client after a challenge window; the number is not specified |
+| **P3** | Redemption deadline = 6 h of Solana slots | **Superseded.** The deadline is set per redemption; the default and minimum are unspecified |
+| **P4** | Challenge window = 24 h | **Superseded.** No default specified |
+| **P5** | `RECENT_REORG_WINDOW` = 12 h | **Superseded.** The vault compares stored hashes; there is no separate window parameter |
+| **P6** | `TIP_STALENESS` = 2 h | **Superseded** as a parameter by `lc.max_staleness_slots`; the pause is the built authority-gated safety valve |
+| **P7** | `MIN_PEG_IN` = 10 BSV | **Superseded** — now 1 BSV, decided, not enforced |
+| **P8** | `MAX_PEG_IN` = 10,000 BSV | **Superseded.** The earlier "total value locked is capped by total bonds pledged" is **withdrawn** |
+| **P9** | `MAX_PEG_OUT` = 10,000 BSV | **Superseded.** A redemption is bounded by the reserve and the payout path |
+| **P10** | `HOT_FLOAT_CAP` | **Removed** with the pooled float. There is one reserve, and the two-sided bonds are the bound |
 | **D4** | `FLOOR` fixed in code | **Superseded.** The default is 12; the mechanism is governance |
 | **D7** | No governance in the PoC | **Superseded.** 85% / 30 days / live signal, holding the upgrade authority |
 | **D8** | Reserve invariant monitored, not enforced | **Kept**, and it is the honest residual |
 
 **Two of the old reasons survive verbatim, because they were right:**
 
-- **A stablecoin bond is a written call option on the reserve.** Post `$500k` against `10,000 BSV`
-  and the member is short `5,000 BSV`; at `$100` the option is in the money, and absconding becomes
-  the rational trade. A price governor cannot fix a written option — it is reactive, it needs an
-  oracle, and the window between the move and the throttle *is* the trade. **Denominate each bond in
-  the asset its side holds** — BSV on the mint side (held outside the reserve), `solBSV` on the
-  redeem side. That removes the position instead of hedging it, needs no oracle, and keeps each
-  inequality checkable from quantities the program holds or measures (D14).
+- **A stablecoin bond is a written call option on the reserve** (see
+  [05. Trust model](05-trust-model.md#why-the-bonds-are-denominated-in-what-they-protect-not-a-stablecoin)).
+  Denominate each bond in the asset its side holds: that removes the position instead of hedging it.
 - **A change must be disclosed before someone transacts.** A holder should be able to see the fee,
-  `FLOOR`, `MATURITY` and the bond before they peg in. Published, the external metrics are
-  information; consulted by the program, they would be oracles.
+  `FLOOR`, maturity and the bond before they peg in.
 
 **One old reason does not survive:** "loosening a safety parameter should require shipping a new
-program." That was written for a design with **no governance**. The new model governs the upgrade
-authority itself, so the protection is not that the rules are frozen — it is that **you can leave
-before they change.**
+program." That was written for a design with no governance. The protection is not that the rules are
+frozen — it is that you can leave before they change.
 
 ## Open parameters, named so they are not lost
 
-| Unspecified | Note |
-|---|---|
-| **The signing threshold** | **`fed.threshold` = 4-of-N**, `N` a variable and the number deferred. One leg of the reserve's 2-of-2 script with the Greycore (doc 24) |
-| **The Greycore** | `fed.greycore_size` and `fed.greycore_threshold`, both `open` — the second signer set on the reserve script |
-| **Leaver-shares** | An open finalisation item: a departing member retains a valid share, so the effective threshold degrades with churn. Key rotation or proactive re-sharing (doc 23) |
-| **Unbonding period** | Must outlast the payout deadline; no default |
-| **Pause threshold and duration** | "A majority of pledged coins" and "N days" — neither is fixed |
-| **Challenge bounty share** | How a seizure splits between the wronged holder and the challenger |
-| **Redeem deadline default** | The holder sets it; the minimum is not stated |
-| **Genesis — decided** | Members post a **BSV-side bond**, so no `solBSV` needs to exist first (D16). A capped, explicitly-unbonded first mint is a documented later option, not chosen. It is no longer an open parameter |
-| **Shards** | One threshold key, or groups with their own |
+**Load-bearing first:**
+
+1. **`fed.threshold` — 4-of-N, with `N` deferred.** It is one leg of the reserve's 2-of-2 script, so
+   every "no single member can move funds" claim depends on it. It must be fixed before launch.
+2. **`fed.greycore_size` / `fed.greycore_threshold`** — the second signer set, both `open`. The
+   Greycore co-signature is what constrains the reserve, so these are load-bearing in the same way.
+3. **Leaver-shares** — not a parameter but an unresolved mechanism; the effective threshold degrades
+   with churn.
+4. **`po.deadline` / `po.challenge_window` / `po.payout_confirmations`** — three values that are one
+   security parameter: the window in which a theft can be proven.
+5. **`gov.delay_min`** — the exit floor; it decides whether a majority can shorten the warning.
+6. **`gov.authority_timelock`** — load-bearing for F4 in the same way `po.deadline` is for redemptions.
+
+The remaining placeholders — `lc.cluster_id`, `lc.pow_limit_bits`, `fed.shards`, `fed.unbond_slots`,
+`gov.pause_duration`, `fee.bounty_share` — can be filled once the structure is audited.
 
 **Three things are open in the built code, and are not governance questions:**
 
-1. **A5 — the program upgrade authority can override every parameter.** It is an unconditional mint
-   voucher. Governance holding it is the design's answer; until that exists, it is a live critical.
-2. **X3 — the DAA is hard-coded.** BSV's own documentation says the rule will change, so a
-   consensus change halts the bridge until a redeploy. Making it governable is the fix.
-3. **The vault's design has failed two audits** and is being re-audited against this model
-   ([`21-vault-structural.md`](21-vault-structural.md)).
+1. **The program upgrade authority can override every parameter.** It is the design's answer to put it
+   under governance; until that exists, it is a live critical.
+2. **X3 — the DAA is hard-coded.** A BSV consensus change halts the bridge until a redeploy.
+3. **The vault's protective window ships at 0**, so the reversal is available and racy rather than
+   automatic.
 
 ## Change checklist
 
@@ -189,33 +257,55 @@ Any parameter change, once a mechanism exists, should be:
 1. **Proposed publicly**, with the reasoning and the new arithmetic.
 2. **Signalled live from the moment it is raised**, so the 30 days are visible time rather than a
    surprise.
-3. **Effective only after the delay**, with redemptions open throughout — **they are never
-   pausable**, and that is the one guarantee the design does not trade away.
+3. **Effective only after the delay**, with redemptions open throughout — **they are never pausable**,
+   and that is the one guarantee the design does not trade away.
 4. **Published** in a changelog with the effective date.
-5. **Incapable of moving funds.** The bond and the vault are program-owned; parameters are not a
-   path to the reserve.
+5. **Incapable of moving funds.** The bond and the vault are program-owned; parameters are not a path
+   to the reserve.
 
-**No process to execute any of this exists yet.** The checklist is the shape the governance design
-has to satisfy, not a description of a mechanism that runs.
-
----
-
-Next: [Roadmap](07-roadmap.md)
+**No process to execute any of this exists yet.** The checklist is the shape the governance design has
+to satisfy, not a description of a mechanism that runs.
 
 ---
 
-## What replaced the order book
+## The revenue model
 
-The book, matching and market-making were removed, so this document absorbs the two facts that
-survived them.
+**The fee is gross, and it is the only revenue.** A 30 bp charge on mint and on redeem covers the real
+transaction costs, and **whatever is left is the income of the bonded members**, shared pro rata to
+stake.
 
-- **The fee is 30 bp to mint and 30 bp to redeem**, set by governance — not discovered.
-- **The bond is the float, and it does not cap capacity.** The two-sided bonds carry a **coverage
-  floor** (`k = 1` per side), checked on mint and exit, but the earlier claim that total value locked
-  is bounded by bonded capital is **withdrawn** — as is its `~$180k` figure. Sizing the bond against
-  the reserve produced an impossible inequality twice, and the `n/t` multiple is RenVM's own
-  bribery-cost calculation, which does not apply to a bond that is the float (doc 26 §5). **What
-  constrains the reserve is the Greycore co-signature**, not the bond.
+At the **1 BSV minimum** this is a useful sanity check rather than a projection:
 
-There is no on-chain market, no matching and no liquidity mining. Any market for `solBSV` exists
-outside this system.
+| Per mint (1 BSV ≈ $30) | |
+|---|---|
+| Fee collected at 30 bp | **$0.090** |
+| Solana transaction fees (mint + its share of header pushes) | ~$0.001 |
+| BSV relay at 1 sat/byte | ~$0.00007 |
+| First-time ATA rent | $0.115 — **refundable, a lockup not a cost** |
+| **Non-refundable cost** | **~$0.001** |
+
+**The fee covers the non-refundable cost by roughly two orders of magnitude at the minimum deposit**,
+and the margin is the members'. The ATA rent is the one figure that exceeds the fee, and it is
+recoverable by closing the account.
+
+**This also prices the risk.** A member's return is the fee share against two-sided 1,000 BSV bonds —
+the float, which also stands to be lost if the member misbehaves. The market for members is the market
+for that trade.
+
+## The bond is the float, deliberately
+
+**The bond is working capital, not a capital requirement.** At `k = 1` each two-sided bond must sit at
+a coverage floor of at least what its side holds, but that is a **solvency check, not a capacity
+ceiling**, and nothing forces the bonds to track the reserve as it grows. This replaces the
+**superseded** single-bond formula `aggregate_bond ≥ k × non_bonded_supply`.
+
+**The earlier capacity claim is withdrawn.** Sizing the bond against the vault produced an impossible
+inequality twice (`B ≥ B + H`, then the `k = 1` versus `3×` contradiction), and the `n/t` multiple is
+RenVM's own bribery-cost calculation, which does not apply to a bond that is the float. The `~$180k`
+and `$300k` capacity figures are both **withdrawn**. **What constrains the reserve is the Greycore
+co-signature, not the bond.**
+
+**Phase 2: delegated staking.** Non-members delegating `solBSV` to a member and sharing its fee,
+activatable by governance. It would let the bond base grow without new operators, at the cost of
+introducing a staking layer with its own incentive problems. Deliberately deferred: the mechanism
+should not be designed until the thing it is meant to scale has been shown to work.

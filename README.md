@@ -22,7 +22,7 @@ order book, no leverage. Branding **SOLBEAM**, ticker `solBSV`, 8 decimals, MIT.
 | | |
 |---|---|
 | **Minting** | **The deposit is verified; the backing is reported.** The program verifies BSV proof of work and Merkle inclusion directly. **The program verifies deposits; the federation reports backing** — it reports spent deposit outpoints because Solana cannot read the BSV UTXO set; not a new trust assumption. **The program's upgrade authority is the other exception** — it can re-anchor the checkpoint, so in production it must be threshold-held and timelocked, and the 30-day exit is the real guarantee |
-| **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone |
+| **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. A reorg is a fact about headers, not a report from anyone. **The vault is built, but its protective window ships at 0**, so the reversal is a race and release normally wins; what protects a deposit today is `MIN_CONFIRMATIONS = 12` — prevention, not reversal |
 | **The reserve** | **Trusted, and bounded.** The BSV is under a **2-of-2 `OP_CHECKMULTISIG`** — the gateway's threshold ECDSA key plus the **Greycore**'s, both required — so no gateway majority and no Greycore can move it alone. What protects you is a **bond anyone can seize by proving misbehaviour on-chain** |
 
 **The one trust assumption: the gateway threshold and the Greycore do not collude.** It is not
@@ -52,31 +52,35 @@ produced its own evidence, and anyone may submit it.
 
 ## Where it stands
 
-**Built and tested:** the light client with cw-144, the `solBSV` token, the mint, and fork staging
-with chainwork — **37 on-chain tests**, **51/51** synthetic Phase 1A checks, **21/21** against a
-live SV Node. The window is **192 records of 52 bytes**, `SPACE` **10,107** of 10,240, a
-**32-hour** deposit lifetime. F7 (the retarget), P2 (the fork re-anchor), A7 (double-mint) and the
-window resize are all fixed in code.
+**Built and tested:** the light client with cw-144, the `solBSV` token, the mint, fork staging
+with chainwork, the **nullifier**, the **timelocked authority**, and **the vault** (`release_mint`,
+`burn_staged`, `set_maturity`) — **16 instructions, 37 passing / 0 failing**, **51/51** synthetic
+Phase 1A checks, **21/21** against a live SV Node. The window is **192 records of 52 bytes**, `SPACE`
+**10,107** of 10,240, a **32-hour** deposit lifetime. F7 (the retarget), P2 (the fork re-anchor), A7
+(double-mint) and the window resize are all fixed in code.
 
-**Designed, not built:** the **vault**, the **federation** (threshold custody, governance,
-slashing) and **all of peg-out**. Those are a specification, not a property of the code; the
-shipped program mints straight to the depositor's token account.
+**Designed, not built:** the **federation** (threshold custody, the Greycore, governance, slashing)
+and **all of peg-out**. Those are a specification, not a property of the code. The vault's
+**protective window is currently 0**, so the reversal is a race rather than a comfortable window.
 
 **Removed:** the order book and discovered fees, per-relayer independent keys, and the
 "no governance" posture.
 
-**Still open, and not dressed up:** the vault's design carries unfixed audit findings and is being
-re-audited against this model; the genesis bootstrap has no path (members bond `solBSV`, which
-does not exist until a mint happens); sharding the threshold key is undecided; the DAA is
-hard-coded; and the replay list (`MAX_USED = 200`) is **gone** — replay is a nullifier PDA per deposit, so the 200-peg-in ceiling no longer exists.
+**Still open, and not dressed up:** leaver-shares are unfinalised (a departing member keeps a valid
+share, so the effective threshold degrades with churn); sharding the threshold key is undecided, so
+the blast radius is 100% of the reserve; the DAA is hard-coded, so a BSV consensus change would halt
+the bridge until governance acts; there is no numeric capacity rule (the bond is the float); and the
+vault's protective window ships at **0**. The replay list (`MAX_USED = 200`) is **gone** — replay is a
+nullifier PDA per deposit, so the 200-peg-in ceiling no longer exists. **Genesis is decided:** members
+post a BSV-side bond, so no `solBSV` needs to exist first.
 
 **Nothing here is audited. Do not put money in it.**
 
 | | |
 |---|---|
 | Website | <https://solbeam.me> |
-| The model, in one document | [`docs/13-summary.md`](docs/13-summary.md) — read this first |
-| The federation in detail | [`docs/23-federation.md`](docs/23-federation.md) |
+| Status, built vs designed | [`docs/08-status-and-roadmap.md`](docs/08-status-and-roadmap.md) — read this first |
+| The federation in detail | [`docs/03-the-federation.md`](docs/03-the-federation.md) |
 | Documentation | [`docs/`](docs/README.md) — the GitBook |
 | Proof of concept | [`poc/`](poc/README.md) — test code, fixtures, scripts and the phased plan |
 | Licence | MIT |
@@ -87,7 +91,7 @@ hard-coded; and the replay list (`MAX_USED = 200`) is **gone** — replay is a n
 
 | Path | What it is |
 |---|---|
-| `docs/` | The project documentation. The model, the federation, trust model, parameters, roadmap, FAQ |
+| `docs/` | The project documentation: what it is, how it works, the federation, the flow, the trust model, parameters, decisions, status and roadmap, costs, and the audit history |
 | `website/` | The static site at `solbeam.me`. Deployed by a Cloudflare Worker named `solbeam-main`, configured by `wrangler.jsonc` at the repo root — see [`website/README.md`](website/README.md) |
 | `poc/` | The proof of concept: Python checkers, fixtures, scripts and the phased plan. Deliberately disposable — the production stack is a separate decision, made on the evidence this produces |
 | `workstreams/` | Measurement workstreams. [`W1`](workstreams/W1-light-client-verification.md) closed the difficulty rule and the window resize |

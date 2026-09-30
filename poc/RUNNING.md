@@ -179,5 +179,5 @@ The full list of toolchain facts, with reasoning, is in [`VERSIONS.md`](VERSIONS
 | Attack it yourself | [`ADVERSARY_PLAYBOOK.md`](ADVERSARY_PLAYBOOK.md) |
 | What is pinned, and why | [`VERSIONS.md`](VERSIONS.md) |
 | The Solana program | [`solana/README.md`](solana/README.md) |
-| The trust model | [`../docs/04-trust-model.md`](../docs/04-trust-model.md) |
+| The trust model | [`../docs/05-trust-model.md`](../docs/05-trust-model.md) |
 | What the site will publish once there is data | [`PHASE5_MONITORING.md`](PHASE5_MONITORING.md) |
