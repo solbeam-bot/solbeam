@@ -5,6 +5,7 @@ a **description**, with a status marker. The intent is that this becomes a confi
 on-chain program and the node software read, so a specification can be correct while the numbers are
 still provisional.
 
+**The sheet is now driven by [`config/params.json`](../config/params.json); `docs/parameters.csv` is generated from it by `config/gen.py`.**
 > **Almost all of this is a specification, not shipped behaviour.** The built set is 17 instructions
 > and 45 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, shipped at **0**) and the authority timelock

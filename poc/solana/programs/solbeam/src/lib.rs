@@ -41,6 +41,12 @@ use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount, Transfer}
 use solana_sha256_hasher::hash as sha256;
 
 pub mod difficulty;
+/// The generated parameter sheet. **The constants below that correspond to a
+/// parameter row live here now**, generated from `config/params.json`; the rows
+/// of `docs/06-parameters.md` and `docs/parameters.csv` are the same values, so
+/// the doc, the CSV and this program cannot drift. Regenerate with
+/// `python3 config/gen.py`.
+pub mod params;
 
 use difficulty::{compact_to_target, target_to_compact, Record, MAINNET_POW_LIMIT_BITS, U256};
 
@@ -76,9 +82,7 @@ pub const HEADER_LEN: usize = 80;
 /// The whole account is deserialised on every instruction, so a bigger window
 /// is also more compute on the mint path. 9,984 bytes of records is comfortable
 /// against the 200,000 CU budget.
-pub const WINDOW_HOURS: u64 = 32;
-pub const SECONDS_PER_BLOCK: u64 = 600;
-pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; // 192
+pub use params::{SECONDS_PER_BLOCK, WINDOW, WINDOW_HOURS}; // WINDOW == 192
 
 /// The window must be wide enough for the difficulty algorithm to be
 /// computable at all. `LOOKBACK` is 147 (144 + 3 for the median); a window at
@@ -87,6 +91,21 @@ pub const WINDOW: usize = (WINDOW_HOURS * 3600 / SECONDS_PER_BLOCK) as usize; //
 const _: () = assert!(
     WINDOW > difficulty::LOOKBACK as usize,
     "WINDOW must exceed the cw-144 lookback (147 records) or the retarget is not computable"
+);
+
+// The generated values are pinned to the cw-144 module's own arithmetic.
+// `difficulty.rs` `#[path]`-includes `params.rs`, so these are the same bytes
+// the vectors crate compiles; the assertions make a parameter change that
+// disagrees with the algorithm a compile error rather than a quiet divergence.
+const _: () = assert!(SEED_RECORDS == difficulty::LOOKBACK as usize);
+const _: () = assert!(SECONDS_PER_BLOCK == difficulty::BLOCK_SPACING);
+const _: () = assert!(
+    params::DAA_CLAMP_LOW_MULTIPLIER
+        == difficulty::MIN_ACTUAL_TIMESPAN / difficulty::BLOCK_SPACING as i64
+);
+const _: () = assert!(
+    params::DAA_CLAMP_HIGH_MULTIPLIER
+        == difficulty::MAX_ACTUAL_TIMESPAN / difficulty::BLOCK_SPACING as i64
 );
 
 /// How many records the window must hold before cw-144 is computable — the
@@ -105,12 +124,12 @@ const _: () = assert!(
 /// the checkpoint is pinned by the seed's linkage check. That keeps the
 /// arithmetic 147 seed + 45 live = the 192-record window, with no extra field
 /// to remember the checkpoint's timestamp.
-pub const SEED_RECORDS: usize = difficulty::LOOKBACK as usize;
+pub use params::SEED_RECORDS;
 
 /// How deep a deposit must be buried before it can be minted. Twelve blocks is
 /// roughly two hours on BSV. The test matrix compresses time, not depth, so this
 /// stays a real number.
-pub const MIN_CONFIRMATIONS: u64 = 12;
+pub use params::MIN_CONFIRMATIONS;
 
 /// How old the client's view of the chain may be before the vault refuses to act,
 /// in Solana slots. **54,000 is about six hours.**
@@ -125,7 +144,7 @@ pub const MIN_CONFIRMATIONS: u64 = 12;
 /// The clock is [`LightClient::last_push_slot`], which is `Clock::slot` at the
 /// last accepted header. It cannot be back-dated by the submitter because it
 /// comes from the sysvar.
-pub const MAX_STALENESS_SLOTS: u64 = 54_000;
+pub use params::MAX_STALENESS_SLOTS;
 
 /// Seed prefix of the **staged mint** PDA: `[b"mint", txid, vout]`.
 ///
@@ -151,7 +170,7 @@ pub const CONFIG_SEED: &[u8] = b"config";
 /// `solBSV` is a classic SPL token with eight decimals, matching BSV's own
 /// satoshi precision. One satoshi is one base unit, so no conversion is ever
 /// needed when minting a deposit.
-pub const TOKEN_DECIMALS: u8 = 8;
+pub use params::TOKEN_DECIMALS;
 
 /// Seed prefix of the per-deposit replay **nullifier**.
 ///
@@ -199,7 +218,7 @@ pub const SPENT_OUTPOINT_SEED: &[u8] = b"spent_outpoint";
 /// clock past it. It is a named constant precisely because the production value
 /// is a policy decision: doc 24 carries it as `gov.authority_timelock`, and that
 /// is the number to change, in one place.
-pub const TIMELOCK_SLOTS: u64 = 32;
+pub use params::TIMELOCK_SLOTS;
 
 /// Size of one `HeaderRecord`: the block hash, the block's cumulative
 /// chainwork, and its timestamp.
@@ -219,7 +238,7 @@ pub const TIMELOCK_SLOTS: u64 = 32;
 /// it. `bits` is deliberately NOT stored: it is `target_to_compact` of the
 /// target the client recomputes anyway, so a stored copy could only ever agree
 /// with itself or hide a wrong target.
-pub const HEADER_RECORD_SIZE: usize = 32 + 16 + 4; // hash + chainwork: u128 + time: u32
+pub use params::HEADER_RECORD_SIZE;
 
 /// The fixed part of `LightClient`. Named so the compile-time assertion below
 /// can show its arithmetic instead of hiding it behind one number.
@@ -243,14 +262,14 @@ pub const LIGHT_CLIENT_FIXED: usize = 8      // discriminator
 /// graceful failure — `initialize` simply reverts — so it is asserted at compile
 /// time rather than discovered on testnet. This cap is the reason the window is
 /// sized against a 64-byte record rather than the 116-byte one it started with.
-pub const MAX_ACCOUNT_CREATE: usize = 10_240;
+pub use params::MAX_ACCOUNT_CREATE;
 
 /// How many branch headers fit in one transaction. A Solana transaction is
 /// capped at 1232 bytes; after the signature, accounts, blockhash, instruction
 /// header and the `Vec<u8>` length prefix roughly 215 bytes are gone, leaving
 /// about 12 headers of 80 bytes. The earlier `push_fork` failed precisely
 /// because it ignored this ceiling and tried to send 72.
-pub const MAX_FORK_BATCH: usize = 12;
+pub use params::MAX_FORK_BATCH;
 
 const _: () = assert!(
     LightClient::SPACE <= MAX_ACCOUNT_CREATE,
@@ -352,7 +371,7 @@ pub mod solbeam {
         // raisable through the timelocked authority path; see
         // `AuthorityChange::SetMaturity`.
         let config = &mut ctx.accounts.config;
-        config.maturity_blocks = 0;
+        config.maturity_blocks = params::DEFAULT_MATURITY_BLOCKS;
         config.bump = ctx.bumps.config;
 
         msg!(
@@ -1772,7 +1791,7 @@ mod lc_offsets {
     pub const WINDOW_START: usize = 56;
     pub const RECORDS_LEN: usize = 64;
     pub const RECORDS: usize = 68;
-    pub const RECORD_SIZE: usize = 52;
+    pub const RECORD_SIZE: usize = super::HEADER_RECORD_SIZE;
     /// authority (32) + expected_bits (4) + no_retargeting (1) + pow_limit_bits
     /// (4) + seed_remaining (4) + last_push_slot (8) + paused (1) + bump (1).
     pub const TAIL_LEN: usize = 55;
@@ -3281,7 +3300,7 @@ pub fn op_return_payload(script: &[u8]) -> Option<&[u8]> {
 ///
 /// `OP_2 <33-byte key> <33-byte key> OP_2 OP_CHECKMULTISIG` is 1+34+34+1+1 = 71 bytes.
 /// Grown from 25 when the reserve script became a 2-of-2 rather than a plain P2PKH.
-pub const MAX_SCRIPT_LEN: usize = 71;
+pub use params::MAX_SCRIPT_LEN;
 
 /// A canonical P2PKH script: `76 a9 14 <20 bytes> 88 ac`, 25 bytes.
 ///
