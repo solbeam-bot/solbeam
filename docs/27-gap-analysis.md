@@ -160,9 +160,10 @@ SOLBEAM inverts that. Concretely, we add:
 3. **Reorg reversal.** The program stores the block hash a deposit was proven against and compares
    its own headers. If the hash at that height **differs**, the deposit was reorged and the staged
    tokens **burn**. A reorg is a fact about headers the program already keeps, not a report from
-   anyone. **Fork staging built; the reversal designed, not built** — there is no `release_mint` and
-   no `burn_staged` in the code.
-4. **The nullifier**, one PDA per `(txid, vout)`, replacing a bounded used-deposit list so replay is
+   anyone. **Fork staging and the reversal are both BUILT** — `release_mint` and `burn_staged` exist and are
+   permissionless, and the burn path is exercised by test at a non-zero maturity. **The caveat is the
+   shipped maturity: it is 0, so the window is removed and the reversal is available and racy rather
+   than automatic.** **The nullifier**, one PDA per `(txid, vout)`, replacing a bounded used-deposit list so replay is
    per-account rather than a capacity ceiling. **Built.**
 5. **The 147-record seed and header window**, so a reorg is **visible on-chain** at all. **Built.**
 
