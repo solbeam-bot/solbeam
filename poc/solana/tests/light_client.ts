@@ -87,6 +87,28 @@ function stagedMintPda(
     [STAGED_MINT_SEED, txidInternal, voutBuf], programId)[0];
 }
 
+/**
+ * The program's `SPENT_OUTPOINT_SEED`. The reported spent-outpoint record (N5)
+ * is keyed on the deposit's identity exactly as the nullifier is, but it is a
+ * separate account: the nullifier records that *this program* minted the
+ * deposit, the spent record that the *reserve* spent the output.
+ */
+const SPENT_OUTPOINT_SEED = Buffer.from("spent_outpoint");
+
+/**
+ * The reported spent-outpoint record for a deposit: `[b"spent_outpoint", txid,
+ * vout_le]`, derived exactly as the program's `create_spent_outpoint` and
+ * `require_not_spent` do. `txid` is in INTERNAL order, as everywhere else.
+ */
+function spentOutpointPda(
+  programId: anchor.web3.PublicKey, txidInternal: Buffer, vout: number,
+): anchor.web3.PublicKey {
+  const voutBuf = Buffer.alloc(4);
+  voutBuf.writeUInt32LE(vout, 0);
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [SPENT_OUTPOINT_SEED, txidInternal, voutBuf], programId)[0];
+}
+
 /** The SPL token account's `amount`, a u64 at offset 64. */
 function tokenAmount(data: Buffer): number {
   return Number(data.readBigUInt64LE(64));
@@ -470,6 +492,14 @@ describe("solbeam — verify a deposit against the window", () => {
     displayToInternal(fixture.proof.txid),
     fixture.proof.vout,
   );
+  // The reported spent-outpoint record for the same deposit. It does not exist
+  // here — nothing has reported this deposit spent — so `verify_deposit` reads
+  // it as "not spent". A missing account and an empty one are both unspent.
+  const spentOutpoint = spentOutpointPda(
+    program.programId,
+    displayToInternal(fixture.proof.txid),
+    fixture.proof.vout,
+  );
   // The loader's ProgramData PDA — see the first describe block. The provider
   // wallet is the localnet upgrade authority, so it is the only key that can
   // call `initialize_bridge`.
@@ -521,8 +551,8 @@ describe("solbeam — verify a deposit against the window", () => {
    * nothing is created here on the depositor's behalf.
    */
   const verifyAccounts = () => ({
-    lightClient, nullifier, staged, depositScript, config, mint, vault,
-    recipientOwner, submitter: provider.wallet.publicKey,
+    lightClient, spentOutpoint, nullifier, staged, depositScript, config, mint,
+    vault, recipientOwner, submitter: provider.wallet.publicKey,
   });
 
   /** `release_mint` pays the staged item out to the recipient's ATA. */
@@ -1036,6 +1066,14 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
     displayToInternal(fixture.proof.txid),
     fixture.proof.vout,
   );
+  // The spent-outpoint record for this deposit. `verify_deposit` requires the
+  // account on every claim now, so every call site must supply it; this one is
+  // empty, i.e. the federation has not reported the deposit spent.
+  const spentOutpoint = spentOutpointPda(
+    program.programId,
+    displayToInternal(fixture.proof.txid),
+    fixture.proof.vout,
+  );
   const [config] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("config")], program.programId);
   const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
@@ -1079,8 +1117,8 @@ describe("solbeam — replay across a re-inclusion (A7)", () => {
   });
 
   const accounts = () => ({
-    lightClient, nullifier, staged, depositScript, config, mint, vault,
-    recipientOwner, submitter: provider.wallet.publicKey,
+    lightClient, spentOutpoint, nullifier, staged, depositScript, config, mint,
+    vault, recipientOwner, submitter: provider.wallet.publicKey,
   });
 
   it("refuses the same (txid, vout) re-included at a different height", async () => {
@@ -1211,8 +1249,10 @@ describe("solbeam — pruning a nullifier (P5/W1)", () => {
   const nullifier = nullifierPda(
     program.programId, txidInternal, fixture.proof.vout);
   // `verify_deposit` now needs these even for a claim it refuses early: the
-  // staged item, the config and the vault.
+  // staged item, the spent-outpoint record, the config and the vault.
   const staged = stagedMintPda(
+    program.programId, txidInternal, fixture.proof.vout);
+  const spentOutpoint = spentOutpointPda(
     program.programId, txidInternal, fixture.proof.vout);
   const [config] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("config")], program.programId);
@@ -1306,8 +1346,8 @@ describe("solbeam — pruning a nullifier (P5/W1)", () => {
         header: Array.from(rawAt(fixture.proof.height)),
         tx: Buffer.from(fixture.deposit_tx_raw, "hex"),
       }).accounts({
-        lightClient, nullifier, staged, depositScript, config, mint, vault,
-        recipientOwner, submitter: provider.wallet.publicKey,
+        lightClient, spentOutpoint, nullifier, staged, depositScript, config,
+        mint, vault, recipientOwner, submitter: provider.wallet.publicKey,
       }).rpc();
       expect.fail("a pruned deposit must not be mintable again");
     } catch (e: any) {
@@ -2141,6 +2181,10 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
   const nullifierB = nullifierPda(program.programId, txidB, 0);
   const stagedA = stagedMintPda(program.programId, txidA, 0);
   const stagedB = stagedMintPda(program.programId, txidB, 0);
+  // The spent-outpoint records for the two fabricated deposits. Both are empty:
+  // this suite stages real, unspent deposits, so the backing check must pass.
+  const spentA = spentOutpointPda(program.programId, txidA, 0);
+  const spentB = spentOutpointPda(program.programId, txidB, 0);
 
   let blockA: Buffer; // height 127
   let blockB: Buffer; // height 128
@@ -2169,12 +2213,13 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
   });
 
   const verifyAccounts = (
+    spent: anchor.web3.PublicKey,
     nullifier: anchor.web3.PublicKey,
     staged: anchor.web3.PublicKey,
     recipient: anchor.web3.PublicKey,
   ) => ({
-    lightClient, nullifier, staged, depositScript, config, mint, vault,
-    recipientOwner: recipient, submitter: provider.wallet.publicKey,
+    lightClient, spentOutpoint: spent, nullifier, staged, depositScript, config,
+    mint, vault, recipientOwner: recipient, submitter: provider.wallet.publicKey,
   });
 
   const releaseAccounts = (
@@ -2236,14 +2281,14 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
     supplyBefore = Number(
       (await provider.connection.getAccountInfo(mint))!.data.readBigUInt64LE(36));
 
-    for (const [nul, stg, tx, height, header, owner, amount] of [
-      [nullifierA, stagedA, txA, 127, blockA, ownerA, AMOUNT_A],
-      [nullifierB, stagedB, txB, 128, blockB, ownerB, AMOUNT_B],
-    ] as [anchor.web3.PublicKey, anchor.web3.PublicKey, Buffer, number, Buffer,
-          anchor.web3.PublicKey, number][]) {
+    for (const [spent, nul, stg, tx, height, header, owner, amount] of [
+      [spentA, nullifierA, stagedA, txA, 127, blockA, ownerA, AMOUNT_A],
+      [spentB, nullifierB, stagedB, txB, 128, blockB, ownerB, AMOUNT_B],
+    ] as [anchor.web3.PublicKey, anchor.web3.PublicKey, anchor.web3.PublicKey,
+          Buffer, number, Buffer, anchor.web3.PublicKey, number][]) {
       await program.methods
         .verifyDeposit(claimFor(tx, height, header, amount, owner))
-        .accounts(verifyAccounts(nul, stg, owner))
+        .accounts(verifyAccounts(spent, nul, stg, owner))
         .rpc();
     }
   });
@@ -2405,5 +2450,417 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
     const mintInfo = await provider.connection.getAccountInfo(mint);
     expect(Number(mintInfo!.data.readBigUInt64LE(36)))
       .to.equal(supplyBefore + AMOUNT_A);
+  });
+});
+
+/**
+ * N5 — the **reported spent-outpoint record** — plus the three vault guards the
+ * happy path cannot reach.
+ *
+ * `verify_deposit` proves an output *paid* the deposit script. It cannot prove
+ * the outpoint is *unspent*: Solana cannot read BSV's UTXO set. Under the
+ * federation the deposit script *is* the reserve, so a member signing a
+ * consolidation or payout spends a deposit output while the original deposit
+ * stays provable and mintable — an unbacked mint. The mechanism, decided in
+ * docs 03/05/06, is that the federation's software **reports** spent deposit
+ * outpoints and the program checks mints against the report. It is deliberately
+ * *not* permissionless: a record anyone can write turns mint availability into
+ * an attack surface.
+ *
+ * This block exercises the write path (`report_spent`), the read path
+ * (`verify_deposit`'s refusal), and the address pinning that makes the read path
+ * meaningful. It also reaches the vault guards the earlier blocks could not:
+ * `WrongStagedMint`, `AlreadyStaged` and `DepositHeightNotInWindow` on both
+ * exits — each through a real instruction path rather than an assumed one.
+ */
+describe("solbeam — the reported spent-outpoint record, and the vault's hard guards (N5)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  /** Main-chain headers 113–128; the fork supplies the deeper heights, to 190. */
+  const rawAt = (height: number): Buffer => Buffer.from(
+    (fixture.headers.find((h: any) => h.height === height)
+      ?? fixture.fork.headers.find((h: any) => h.height === height))!.raw, "hex");
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("mint")], program.programId);
+  const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault")], program.programId);
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+  const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("deposit_script")], program.programId);
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
+
+  const BPF_LOADER_UPGRADEABLE = new anchor.web3.PublicKey(
+    "BPFLoaderUpgradeab1e11111111111111111111111");
+  const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
+    [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
+
+  const TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+  const ASSOCIATED_TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+
+  const DEPOSIT_SCRIPT = Buffer.from(fixture.deposit_script, "hex");
+  const AMOUNT = 3_000_000;
+
+  // E is staged and never released: it drives `AlreadyStaged` and both
+  // `DepositHeightNotInWindow` paths. G is never staged: it drives
+  // `WrongSpentOutpoint`, `WrongStagedMint`, the report, and the spent refusal.
+  const ownerE = anchor.web3.Keypair.generate().publicKey;
+  const ownerG = anchor.web3.Keypair.generate().publicKey;
+  const ataE = anchor.web3.PublicKey.findProgramAddressSync(
+    [ownerE.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM)[0];
+
+  const u32 = (n: number): Buffer => {
+    const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b;
+  };
+  const u64 = (n: number): Buffer => {
+    const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b;
+  };
+
+  const depositTx = (recipient: Buffer, amount: number, salt: number): Buffer => {
+    const opReturn = Buffer.concat([Buffer.from([0x6a, 0x20]), recipient]);
+    return Buffer.concat([
+      u32(1),
+      Buffer.from([1]),
+      Buffer.alloc(32, salt),
+      u32(salt),
+      Buffer.from([0]),
+      u32(0xffffffff),
+      Buffer.from([2]),
+      u64(amount),
+      Buffer.from([DEPOSIT_SCRIPT.length]), DEPOSIT_SCRIPT,
+      u64(0),
+      Buffer.from([opReturn.length]), opReturn,
+      u32(0),
+    ]);
+  };
+
+  const blockWith = (txid: Buffer, prev: Buffer, salt: number): Buffer => {
+    const header = Buffer.alloc(80);
+    header.writeUInt32LE(0x20000000, 0);
+    doubleSha256(prev).copy(header, 4);
+    txid.copy(header, 36);
+    header.writeUInt32LE(1_800_000_000 + salt, 68);
+    header.writeUInt32LE(REGTEST_BITS, 72);
+    return mineRegtest(header);
+  };
+
+  const push = async (raw: Buffer) => {
+    await program.methods.pushHeader(Array.from(raw))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+  };
+
+  const txE = depositTx(ownerE.toBuffer(), AMOUNT, 0x41);
+  const txG = depositTx(ownerG.toBuffer(), AMOUNT, 0x42);
+  const txidE = doubleSha256(txE);
+  const txidG = doubleSha256(txG);
+
+  const nullifierE = nullifierPda(program.programId, txidE, 0);
+  const stagedE = stagedMintPda(program.programId, txidE, 0);
+  const spentE = spentOutpointPda(program.programId, txidE, 0);
+  const nullifierG = nullifierPda(program.programId, txidG, 0);
+  const stagedG = stagedMintPda(program.programId, txidG, 0);
+  const spentG = spentOutpointPda(program.programId, txidG, 0);
+  // Wrong-outpoint accounts: the PDAs for `(txid, 1)` rather than `(txid, 0)`.
+  // They are not merely wrong values — they are what a caller would pass to try
+  // to make an unchecked account point somewhere harmless.
+  const spentGWrongVout = spentOutpointPda(program.programId, txidG, 1);
+  const stagedGWrongVout = stagedMintPda(program.programId, txidG, 1);
+
+  let blockE: Buffer;
+  let blockG: Buffer;
+
+  const claimFor = (
+    tx: Buffer, height: number, header: Buffer, amount: number,
+    recipient: anchor.web3.PublicKey,
+  ) => ({
+    height: new anchor.BN(height),
+    txid: Array.from(doubleSha256(tx)),
+    vout: 0,
+    amount: new anchor.BN(amount),
+    recipient: Array.from(recipient.toBuffer()),
+    index: 0,
+    branch: [] as number[][],
+    header: Array.from(header),
+    tx,
+  });
+
+  const verifyAccounts = (
+    spent: anchor.web3.PublicKey,
+    nullifier: anchor.web3.PublicKey,
+    staged: anchor.web3.PublicKey,
+    recipient: anchor.web3.PublicKey,
+  ) => ({
+    lightClient, spentOutpoint: spent, nullifier, staged, depositScript, config,
+    mint, vault, recipientOwner: recipient, submitter: provider.wallet.publicKey,
+  });
+
+  const setMaturity = async (blocks: number) => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 40;
+    await proposeChange(
+      gov, { setMaturity: { blocks: new anchor.BN(blocks) } }, effective);
+    await waitForSlot(provider.connection, effective);
+    await executeChange(gov);
+  };
+
+  /**
+   * (Re)build the deterministic regtest chain this block runs on: anchor at 115,
+   * push 116, ten fillers, E at 127, G at 128, then bury to 139.
+   *
+   * Deterministic on purpose. The `AlreadyStaged` test re-runs this after a
+   * forward re-anchor, and block 127 must come out **byte for byte** the one the
+   * original proof was checked against, or the rebuilt claim would fail on the
+   * header rather than reach the guard under test.
+   */
+  const rebuildChain = async () => {
+    await timelockedCheckpoint(gov, 115, rawAt(115));
+    await push(rawAt(116));
+    let parent = rawAt(116);
+    for (let h = 117; h <= 126; h++) {
+      parent = blockWith(Buffer.alloc(32, h), parent, h);
+      await push(parent);
+    }
+    blockE = blockWith(txidE, parent, 1);
+    await push(blockE);
+    blockG = blockWith(txidG, blockE, 2);
+    await push(blockG);
+    parent = blockG;
+    for (let h = 129; h <= 139; h++) {
+      parent = forkFrom(rawAt(h), parent, h);
+      await push(parent);
+    }
+  };
+
+  before(async () => {
+    await rebuildChain();
+    // Make E's recorded maturity independent of what earlier blocks left in
+    // `Config` — the vault block raises it to 30. At 0 the later forward
+    // re-anchor to 190 leaves `mature_at = 127` well satisfied, so the guard
+    // that fires in the out-of-window tests is `DepositHeightNotInWindow` and
+    // not `NotMatured`.
+    await setMaturity(0);
+    // Stage E, and never release it: its staged item must still exist for the
+    // `AlreadyStaged` and out-of-window tests. This also proves the backing
+    // check passes when the record is empty, so the refusals below are about
+    // the report and not a blanket failure.
+    await program.methods.verifyDeposit(claimFor(txE, 127, blockE, AMOUNT, ownerE))
+      .accounts(verifyAccounts(spentE, nullifierE, stagedE, ownerE)).rpc();
+    expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
+    expect(await provider.connection.getAccountInfo(spentE)).to.equal(null);
+  });
+
+  it("refuses a spent-outpoint report from a key that is not the program authority", async () => {
+    const stranger = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      stranger.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+
+    try {
+      await program.methods.reportSpent(Array.from(txidG), 0)
+        .accounts({
+          authority: stranger.publicKey, programData,
+          spentOutpoint: spentG,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([stranger]).rpc();
+      expect.fail("a non-authority must not write the spent record");
+    } catch (e: any) {
+      expect(String(e)).to.contain("Unauthorized");
+    }
+    // A refused report writes nothing.
+    expect(await provider.connection.getAccountInfo(spentG)).to.equal(null);
+  });
+
+  it("refuses a claim pointed at a different outpoint's spent record", async () => {
+    // `spent_outpoint` is an `UncheckedAccount`, so the program re-derives the
+    // address from the claim. Pointing it at another outpoint's (empty) PDA must
+    // be refused *before* the emptiness test runs — otherwise any caller could
+    // pass a fresh account and skip the backing check entirely, which would make
+    // every test below pass vacuously.
+    try {
+      await program.methods.verifyDeposit(claimFor(txG, 128, blockG, AMOUNT, ownerG))
+        .accounts(verifyAccounts(spentGWrongVout, nullifierG, stagedG, ownerG))
+        .rpc();
+      expect.fail("must not accept the wrong spent-outpoint account");
+    } catch (e: any) {
+      expect(String(e)).to.contain("WrongSpentOutpoint");
+    }
+    expect(await provider.connection.getAccountInfo(nullifierG)).to.equal(null);
+  });
+
+  it("refuses a staged mint addressed with the wrong (txid, vout)", async () => {
+    // Reachable: the staged PDA is re-derived from the claim inside
+    // `create_staged_mint`, so a different outpoint's PDA is refused there
+    // rather than by an Anchor seed constraint. G is otherwise valid and stays
+    // fresh — the refusal reverts.
+    try {
+      await program.methods.verifyDeposit(claimFor(txG, 128, blockG, AMOUNT, ownerG))
+        .accounts(verifyAccounts(spentG, nullifierG, stagedGWrongVout, ownerG))
+        .rpc();
+      expect.fail("must not stage against the wrong (txid, vout)");
+    } catch (e: any) {
+      expect(String(e)).to.contain("WrongStagedMint");
+    }
+    expect(await provider.connection.getAccountInfo(stagedG)).to.equal(null);
+    expect(await provider.connection.getAccountInfo(nullifierG)).to.equal(null);
+  });
+
+  it("records a spent outpoint for the program authority, and refuses a duplicate", async () => {
+    await program.methods.reportSpent(Array.from(txidG), 0)
+      .accounts({
+        authority: provider.wallet.publicKey, programData,
+        spentOutpoint: spentG,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+
+    // The account's existence is the record, and it is owned by this program.
+    // It is read raw rather than through `program.account.spentOutpoint`: the
+    // record is never used as a typed `Account<>` anywhere — it is hand-built
+    // and read only for `data_is_empty` — so Anchor does not put it in the IDL.
+    // The layout asserted here is the one `create_spent_outpoint` writes by hand.
+    const [, expectedBump] = anchor.web3.PublicKey.findProgramAddressSync(
+      [SPENT_OUTPOINT_SEED, txidG, u32(0)], program.programId);
+    const record = await provider.connection.getAccountInfo(spentG);
+    expect(record, "the spent record must exist").to.not.equal(null);
+    expect(record!.owner.toBase58()).to.equal(program.programId.toBase58());
+    expect(record!.data.length).to.equal(9); // 8 discriminator + 1 bump
+    expect(record!.data[8]).to.equal(expectedBump);
+
+    // A second report says the same thing a second time and is refused, not
+    // silently accepted.
+    try {
+      await program.methods.reportSpent(Array.from(txidG), 0)
+        .accounts({
+          authority: provider.wallet.publicKey, programData,
+          spentOutpoint: spentG,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .rpc();
+      expect.fail("must not record the same outpoint twice");
+    } catch (e: any) {
+      expect(String(e)).to.contain("OutpointAlreadyReported");
+    }
+    expect(await provider.connection.getAccountInfo(spentG)).to.not.equal(null);
+  });
+
+  it("refuses to mint a deposit whose outpoint is in the spent record", async () => {
+    // G is fully valid, unstaged and its nullifier does not exist: without the
+    // report this exact call stages. It is refused at the backing check, which
+    // is the point of N5 — the proof says the output *paid*, the record says it
+    // was *spent*, and only the record can carry that.
+    try {
+      await program.methods.verifyDeposit(claimFor(txG, 128, blockG, AMOUNT, ownerG))
+        .accounts(verifyAccounts(spentG, nullifierG, stagedG, ownerG))
+        .rpc();
+      expect.fail("a spent deposit must not be mintable");
+    } catch (e: any) {
+      expect(String(e)).to.contain("DepositSpent");
+    }
+    expect(await provider.connection.getAccountInfo(stagedG)).to.equal(null);
+    expect(await provider.connection.getAccountInfo(nullifierG)).to.equal(null);
+  });
+
+  it("refuses to stage a deposit whose staged item already exists (AlreadyStaged)", async () => {
+    // `AlreadyStaged` is NOT reachable by an ordinary replay: a second
+    // `verify_deposit` for the same outpoint hits the nullifier first and fails
+    // `AlreadyMinted`, which is why no earlier test can reach it. It becomes
+    // reachable in exactly the situation the prune doc describes as required to
+    // create a replay — the nullifier is pruned after its block leaves the
+    // window, and the same transaction is then re-included inside the window, a
+    // reorg deeper than the window itself. That is constructed here honestly:
+    //
+    //   1. re-anchor forward so E's block (127) is below window_start (190);
+    //   2. prune E's nullifier — permitted because its *stored* height is below
+    //      the window — leaving E's staged item untouched;
+    //   3. re-anchor back to 115 and re-push the identical chain, so block 127
+    //      is canonical and byte-for-byte the one the proof names;
+    //   4. claim E again: the nullifier is gone so the replay check passes, and
+    //      the staged item that still exists is what refuses the mint.
+    const originalBlockE = doubleSha256(blockE).toString("hex");
+
+    await timelockedCheckpoint(gov, 190, rawAt(190));
+    expect((await program.account.lightClient.fetch(lightClient))
+      .windowStart.toNumber()).to.equal(190);
+
+    await program.methods.pruneNullifier(Array.from(txidE), 0)
+      .accounts({
+        lightClient, nullifier: nullifierE,
+        submitter: provider.wallet.publicKey,
+      })
+      .rpc();
+    expect(await provider.connection.getAccountInfo(nullifierE)).to.equal(null);
+    // The prune closed the nullifier, not the staged item: those are the two
+    // different lifetimes the design keeps apart.
+    expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
+
+    await rebuildChain();
+    expect(doubleSha256(blockE).toString("hex")).to.equal(originalBlockE);
+
+    try {
+      await program.methods.verifyDeposit(claimFor(txE, 127, blockE, AMOUNT, ownerE))
+        .accounts(verifyAccounts(spentE, nullifierE, stagedE, ownerE))
+        .rpc();
+      expect.fail("must not stage a deposit whose staged item still exists");
+    } catch (e: any) {
+      // `AlreadyStaged` specifically. `AlreadyMinted` would mean the nullifier
+      // was never pruned; `HeaderMismatch` would mean the rebuilt chain differs.
+      // Either way the test would be passing for the wrong reason.
+      expect(String(e)).to.contain("AlreadyStaged");
+    }
+    // Still staged, still not minted twice.
+    expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
+  });
+
+  it("refuses to release a staged mint whose deposit height has left the window", async () => {
+    // Park the checkpoint above E's height. E has matured (recorded maturity
+    // 0), so the maturity check passes — the refusal is that the client no
+    // longer holds height 127 at all, so the deposit's hash cannot be checked.
+    await timelockedCheckpoint(gov, 190, rawAt(190));
+
+    try {
+      await program.methods.releaseMint(Array.from(txidE), 0)
+        .accounts({
+          lightClient, staged: stagedE, mint, vault,
+          recipientTokenAccount: ataE, recipientOwner: ownerE,
+          submitter: provider.wallet.publicKey,
+        })
+        .rpc();
+      expect.fail("must not release once the deposit height has left the window");
+    } catch (e: any) {
+      expect(String(e)).to.contain("DepositHeightNotInWindow");
+    }
+    // The item and the vault are untouched, and no ATA was created.
+    expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
+    expect(await provider.connection.getAccountInfo(ataE)).to.equal(null);
+  });
+
+  it("refuses to burn a staged mint whose deposit height has left the window", async () => {
+    // The window is still parked at 190 from the release test, so this is the
+    // same condition on the other exit. `burn_staged` does not require
+    // freshness, so `DepositHeightNotInWindow` cannot be confused with
+    // `StaleClient` here.
+    try {
+      await program.methods.burnStaged(Array.from(txidE), 0)
+        .accounts({
+          lightClient, staged: stagedE, mint, vault,
+          submitter: provider.wallet.publicKey,
+        })
+        .rpc();
+      expect.fail("must not burn once the deposit height has left the window");
+    } catch (e: any) {
+      expect(String(e)).to.contain("DepositHeightNotInWindow");
+    }
+    expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
   });
 });

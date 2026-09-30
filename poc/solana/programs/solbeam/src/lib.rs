@@ -168,6 +168,22 @@ pub const TOKEN_DECIMALS: u8 = 8;
 /// out of a legitimate deposit. See [`DepositNullifier`].
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 
+/// Seed prefix of the **reported spent-outpoint record**: `[b"spent_outpoint",
+/// txid, vout]`.
+///
+/// One PDA per `(txid, vout)`, exactly as the replay nullifier is, and its
+/// **existence** is the record. `verify_deposit` refuses a claim whose outpoint
+/// is present. This is N5's mechanism: Solana cannot read BSV's UTXO set, so
+/// spentness is *reported* by the federation (see [`crate::report_spent`]) and
+/// the program checks mints against the report.
+///
+/// Deliberately the same key shape as the nullifier — the deposit's identity is
+/// `(txid, vout)` — and deliberately a **different account**: the nullifier
+/// records that *this program* minted the deposit; this records that the
+/// **reserve spent the output**. They are different facts with different
+/// lifetimes, and conflating them would make one of the two unusable.
+pub const SPENT_OUTPOINT_SEED: &[u8] = b"spent_outpoint";
+
 /// How long a checkpoint or pause change must sit pending before it may be
 /// executed, in slots. **This is the F4 fix's number.**
 ///
@@ -933,6 +949,59 @@ pub mod solbeam {
         Ok(())
     }
 
+    /// Record a deposit outpoint the reserve has spent, so that
+    /// [`verify_deposit`] will refuse to mint it. **This is N5's reported
+    /// spent-outpoint record.**
+    ///
+    /// Solana cannot read BSV's UTXO set, so spentness is **reported, not
+    /// proved**. That is not a new trust assumption: under the federation the
+    /// deposit script *is* the reserve and the members already hold its key, so
+    /// an honesty request about a UTXO adds nothing to what they can already do.
+    /// The honest statement the design makes is two sentences — *"the program
+    /// verifies deposits; the federation reports backing"* (docs 03, 05, 06).
+    ///
+    /// **PoC stand-in, and a reviewer should read it as one.** The signer is the
+    /// program's **upgrade authority**, verified on-chain against the loader's
+    /// `ProgramData` account exactly as [`crate::Initialize`] and
+    /// [`crate::initialize_bridge`] verify it — standing in for the federation,
+    /// which does not exist yet. When it does, the signer becomes the
+    /// federation's key or quorum and nothing else about the instruction needs
+    /// to change.
+    ///
+    /// **The permissionless alternative was considered and rejected.** Letting
+    /// anyone submit a spend proof would make the record writable by anyone,
+    /// which turns mint *availability* into an attack surface rather than only
+    /// mint *correctness*. This instruction is deliberately not that.
+    ///
+    /// The account is seeded on `(txid, vout)` and built by hand to follow
+    /// [`DepositNullifier`] rather than Anchor's `init`. The seeds *are*
+    /// expressible here — both are instruction arguments — but
+    /// `transfer` + `allocate` + `assign` is what stops a lamport sent to this
+    /// public PDA from blocking the first report; see [`create_spent_outpoint`].
+    /// Reporting twice is refused rather than silently accepted — a report is a
+    /// statement about a fact, and a second one says nothing new.
+    pub fn report_spent(ctx: Context<ReportSpent>, txid: [u8; 32], vout: u32) -> Result<()> {
+        create_spent_outpoint(
+            &ctx.accounts.spent_outpoint.to_account_info(),
+            &ctx.accounts.authority.to_account_info(),
+            ctx.program_id,
+            txid,
+            vout,
+        )?;
+
+        emit!(SpentOutpointReported {
+            txid,
+            vout,
+            authority: ctx.accounts.authority.key(),
+        });
+        msg!(
+            "SOLBEAM spent outpoint reported {}:{}",
+            display_hex(&txid),
+            vout
+        );
+        Ok(())
+    }
+
     /// Verify a BSV deposit against the header window, and refuse to accept the
     /// same one twice.
     ///
@@ -944,11 +1013,19 @@ pub mod solbeam {
     /// prove the outpoint is *unspent*** — Solana has no view of BSV's UTXO set.
     /// Under the federation the deposit script is the pooled reserve and the same
     /// members hold the key, so a consolidation or payout can spend a deposit
-    /// output while the original deposit stays provable and mintable. The
-    /// software's answer is the replay **nullifier** below, which records that
-    /// *this program* has already minted a given `(txid, vout)`; that is a
-    /// mint-side gate, and it is not the same thing as spentness. See A2/N5 and
-    /// decision P5.
+    /// output while the original deposit stays provable and mintable. Two
+    /// separate records answer that, and neither is a spentness proof:
+    ///
+    ///   * the **spent-outpoint record** (step 7) — the federation reports
+    ///     outpoints it has seen the reserve spend, and this instruction refuses
+    ///     a deposit whose outpoint is in that record. The report is the whole
+    ///     mechanism, because on-chain spentness is impossible;
+    ///   * the replay **nullifier** (step 8) — records that *this program* has
+    ///     already minted a given `(txid, vout)`. It is a mint-side gate and it
+    ///     is **not** the same thing as spentness: it stops a double mint, never
+    ///     a mint after the output was spent.
+    ///
+    /// See A2/N5 and decisions P5 and the spent-record decision.
     ///
     /// **What it does with a verified claim changed in doc 31.** It used to mint
     /// straight to the depositor. It now **stages** the mint — creating a
@@ -1034,7 +1111,20 @@ pub mod solbeam {
             SolbeamError::InsufficientConfirmations
         );
 
-        // 7. Replay. The (txid, vout) pair is the identity of a deposit, so a
+        // 7. Backing. The federation's spent-outpoint record is consulted
+        //    **before** the replay nullifier, because it answers a different
+        //    question: not "has this program minted this deposit" but "has the
+        //    reserve already spent this output". The address is re-derived from
+        //    the claim, never trusted, so a caller cannot point the check at an
+        //    empty account of its own (see `require_not_spent`).
+        require_not_spent(
+            &ctx.accounts.spent_outpoint.to_account_info(),
+            ctx.program_id,
+            claim.txid,
+            claim.vout,
+        )?;
+
+        // 8. Replay. The (txid, vout) pair is the identity of a deposit, so a
         //    PDA seeded on exactly those two values is the record. Creating it
         //    *is* the mint; a second claim finds it already there and reverts
         //    with `AlreadyMinted`.
@@ -1053,7 +1143,7 @@ pub mod solbeam {
             claim.height,
         )?;
 
-        // 8. The recipient named in the OP_RETURN is the account the staged mint
+        // 9. The recipient named in the OP_RETURN is the account the staged mint
         //    will be released to. This is the binding between the BSV payload and
         //    the Solana destination, so it is checked rather than assumed. No
         //    token account is created here any more: nothing is minted to the
@@ -1063,12 +1153,12 @@ pub mod solbeam {
             SolbeamError::RecipientMismatch
         );
 
-        // 9. Stage the mint. The item is a PDA on `(txid, vout)` — the deposit's
-        //    identity, never its height — and it records the maturity read from
-        //    `Config` **now**, so a later raise cannot trap this deposit. Created
-        //    by hand for the same reason the nullifier is: the seeds come from
-        //    instruction arguments, and the existence check must produce
-        //    `AlreadyStaged` rather than a system-program error.
+        // 10. Stage the mint. The item is a PDA on `(txid, vout)` — the deposit's
+        //     identity, never its height — and it records the maturity read from
+        //     `Config` **now**, so a later raise cannot trap this deposit. Created
+        //     by hand for the same reason the nullifier is: the seeds come from
+        //     instruction arguments, and the existence check must produce
+        //     `AlreadyStaged` rather than a system-program error.
         create_staged_mint(
             &ctx.accounts.staged.to_account_info(),
             &ctx.accounts.submitter.to_account_info(),
@@ -1082,7 +1172,7 @@ pub mod solbeam {
             ctx.accounts.config.maturity_blocks,
         )?;
 
-        // 10. Mint into the VAULT, not to the recipient. The authority is this
+        // 11. Mint into the VAULT, not to the recipient. The authority is this
         //     program's own PDA, so the program signs for it — no operator key
         //     can mint. The tokens leave the vault only through `release_mint`
         //     (to the recipient, once matured and still canonical) or are burned
@@ -2169,6 +2259,38 @@ pub struct PruneNullifier<'info> {
     pub submitter: Signer<'info>,
 }
 
+/// Write one entry in the federation's **spent-outpoint record**.
+///
+/// `authority` must be the program's upgrade authority, read from the loader's
+/// `ProgramData` account for this program — the same on-chain identity check
+/// [`Initialize`] and [`InitializeBridge`] use. It stands in for the federation
+/// until the federation exists (see [`crate::report_spent`]).
+///
+/// `spent_outpoint` is an `UncheckedAccount` because the record is created by
+/// hand — see [`create_spent_outpoint`], which is what makes a pre-funded PDA
+/// unable to block a report — and it is read only for `data_is_empty`, never
+/// deserialised. The address is re-derived from `(txid, vout)` and checked
+/// inside `create_spent_outpoint`. It is `mut` because creating it funds and
+/// allocates it. There is deliberately **no instruction that closes it**.
+#[derive(Accounts)]
+pub struct ReportSpent<'info> {
+    /// The program's upgrade authority, and the payer of the record's rent.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(
+        address = program_data_address() @ SolbeamError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ SolbeamError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
+    /// CHECK: address re-derived from `(txid, vout)` and compared against
+    /// `SPENT_OUTPOINT_SEED` in `create_spent_outpoint`; `data_is_empty` is what
+    /// refuses a second report.
+    #[account(mut)]
+    pub spent_outpoint: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 // ---------------------------------------------------------------------------
 // header maths
 // ---------------------------------------------------------------------------
@@ -2244,6 +2366,128 @@ pub fn work_from_bits(bits: u32) -> u128 {
     } else {
         work.as_u128()
     }
+}
+
+// -- the reported spent-outpoint record -------------------------------------
+
+/// Refuse a claim whose deposit outpoint the federation has reported spent.
+///
+/// The address is **re-derived from the claim** and compared before the account
+/// is read. That is the whole security property of this check: `spent_outpoint`
+/// is an `UncheckedAccount`, because its seeds are the claim's `(txid, vout)`
+/// and Anchor cannot express those as a constraint, so without the re-derivation
+/// a caller could pass any empty account it liked and skip the backing check.
+///
+/// Missing and empty are both *not spent*. Only a non-empty account at the
+/// derived PDA counts, and only this program can write one: the PDA cannot sign
+/// for itself, so `allocate`/`assign` at that address is reachable only through
+/// [`create_spent_outpoint`]. Lamports sent to the address by anyone else do not
+/// make `data_is_empty()` false and so cannot fake a report — they are merely
+/// forfeited when the authority first reports the outpoint.
+fn require_not_spent<'info>(
+    spent: &AccountInfo<'info>,
+    program_id: &Pubkey,
+    txid: [u8; 32],
+    vout: u32,
+) -> Result<()> {
+    let vout_bytes = vout.to_le_bytes();
+    let (expected, _bump) = Pubkey::find_program_address(
+        &[SPENT_OUTPOINT_SEED, txid.as_ref(), &vout_bytes],
+        program_id,
+    );
+    require!(
+        spent.key() == expected,
+        SolbeamError::WrongSpentOutpoint
+    );
+    require!(spent.data_is_empty(), SolbeamError::DepositSpent);
+    Ok(())
+}
+
+/// Create the spent-outpoint record for a deposit outpoint, refusing a second
+/// report.
+///
+/// The mirror of [`create_nullifier`], and built the same way for the same
+/// reason: `transfer` + `allocate` + `assign` rather than `create_account`, so a
+/// lamport sent to this public PDA cannot block a report. The system program's
+/// `CreateAccount` refuses a destination that already holds lamports, which is a
+/// targeted, near-free denial of service on the record; `Allocate` only requires
+/// empty data, so pre-existing lamports are absorbed (and forfeited) rather than
+/// fatal.
+///
+/// **This record is permanent, and that is deliberate.** The nullifier has a
+/// prune because its block leaving the window is what makes a replay harmless
+/// again. There is no equivalent event for spentness: a spent output is spent
+/// forever, so any instruction that could close this account would re-open the
+/// mint of a deposit the reserve has already spent — the exact N5 hole. There
+/// is therefore no `prune_spent`, no `close`, and no field that a future
+/// instruction could use to justify one. The rent is a permanent, one-off cost
+/// the authority pays, which is also why being the authority is the only way to
+/// write here.
+fn create_spent_outpoint<'info>(
+    spent: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    program_id: &Pubkey,
+    txid: [u8; 32],
+    vout: u32,
+) -> Result<()> {
+    let vout_bytes = vout.to_le_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[SPENT_OUTPOINT_SEED, txid.as_ref(), &vout_bytes],
+        program_id,
+    );
+    require!(
+        spent.key() == expected,
+        SolbeamError::WrongSpentOutpoint
+    );
+    require!(
+        spent.data_is_empty(),
+        SolbeamError::OutpointAlreadyReported
+    );
+
+    let seeds: &[&[u8]] = &[SPENT_OUTPOINT_SEED, txid.as_ref(), &vout_bytes, &[bump]];
+    let rent = Rent::get()?.minimum_balance(SpentOutpoint::SPACE);
+    let existing = spent.lamports();
+    if existing < rent {
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                anchor_lang::system_program::ID,
+                anchor_lang::system_program::Transfer {
+                    from: authority.clone(),
+                    to: spent.clone(),
+                },
+            ),
+            rent - existing,
+        )?;
+    }
+
+    anchor_lang::system_program::allocate(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Allocate {
+                account_to_allocate: spent.clone(),
+            },
+            &[seeds],
+        ),
+        SpentOutpoint::SPACE as u64,
+    )?;
+    anchor_lang::system_program::assign(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Assign {
+                account_to_assign: spent.clone(),
+            },
+            &[seeds],
+        ),
+        program_id,
+    )?;
+
+    // Written field for field rather than through Borsh, exactly as the
+    // nullifier is: discriminator then `bump`. The account carries no other
+    // data — its existence is the record, and there is nothing to prune against.
+    let mut data = spent.try_borrow_mut_data()?;
+    data[..8].copy_from_slice(SpentOutpoint::DISCRIMINATOR);
+    data[8] = bump;
+    Ok(())
 }
 
 // -- the replay nullifier ---------------------------------------------------
@@ -2507,6 +2751,35 @@ impl DepositNullifier {
     pub const SPACE: usize = 8 + 8 + 1; // 17 bytes: discriminator + height + bump
 }
 
+/// The federation's **spent-outpoint record**: one PDA per `(txid, vout)`, and
+/// its **existence** is the record. This is N5's mechanism (doc 03 §3, doc 05).
+///
+/// Solana cannot read BSV's UTXO set, so spentness is *reported*, not proved:
+/// [`report_spent`] is the write path, [`verify_deposit`] checks it, and the
+/// honest statement is *"the program verifies deposits; the federation reports
+/// backing."* The record is keyed on the deposit's identity `(txid, vout)` — the
+/// same key the nullifier uses — because a reorg that re-includes the
+/// transaction must hit the same report, not a fresh one.
+///
+/// **Permanent, and not prunable.** The nullifier's `deposit_height` exists so
+/// that [`prune_nullifier`] can close it once its block has left the window and
+/// a replay is harmless again. Spentness has no such event: the output is spent
+/// forever, so closing this account would re-open the mint of a deposit the
+/// reserve has already spent — exactly the hole the record exists to close.
+/// Hence no height field, no prune instruction and no `close` anywhere:
+/// `bump` is all there is to store.
+#[account]
+pub struct SpentOutpoint {
+    pub bump: u8,
+}
+
+impl SpentOutpoint {
+    /// 8 discriminator + 1 bump = 9 bytes. `create_spent_outpoint` writes this
+    /// layout by hand; `vault_layout_tests::spent_outpoint_layout_is_discriminator_then_bump`
+    /// asserts the two agree.
+    pub const SPACE: usize = 8 + 1;
+}
+
 /// One verified deposit whose mint is **held in the vault** rather than paid
 /// straight to the recipient. Doc 31's `StagedMint`.
 ///
@@ -2684,6 +2957,21 @@ pub struct InitializeToken<'info> {
 pub struct VerifyDeposit<'info> {
     #[account(seeds = [b"light_client"], bump = light_client.bump)]
     pub light_client: Account<'info, LightClient>,
+    /// The federation's **spent-outpoint record** for this deposit, one PDA per
+    /// `(txid, vout)`.
+    ///
+    /// Same situation as the nullifier below: the seeds come from the `claim`
+    /// argument, so this is an `UncheckedAccount` whose address is re-derived and
+    /// compared inside [`require_not_spent`] before it is read. That check is
+    /// load-bearing rather than hygiene — with the address unverified a caller
+    /// could supply an unrelated empty account and skip the backing check
+    /// entirely. A missing account and an empty one are both "not spent";
+    /// only a non-empty account owned by this program at the derived address is
+    /// a report, and only this program can ever write there.
+    /// CHECK: address re-derived from `(claim.txid, claim.vout)` and compared
+    /// against `SPENT_OUTPOINT_SEED` in `require_not_spent`; only
+    /// `data_is_empty` is read from it.
+    pub spent_outpoint: UncheckedAccount<'info>,
     /// The replay nullifier for this deposit, one PDA per `(txid, vout)`.
     ///
     /// An `UncheckedAccount` because its seeds come from the `claim` argument,
@@ -2825,6 +3113,18 @@ pub struct DepositStaged {
     pub recipient: [u8; 32],
     pub height: u64,
     pub maturity_at_deposit: u64,
+}
+
+/// A deposit outpoint has been recorded as spent by the reserve, so
+/// [`verify_deposit`] will refuse to mint it. Emitted so the record's contents
+/// are visible from the log as well as from the PDA.
+#[event]
+pub struct SpentOutpointReported {
+    pub txid: [u8; 32],
+    pub vout: u32,
+    /// The signer that reported it — the program authority today, the
+    /// federation later.
+    pub authority: Pubkey,
 }
 
 /// A staged mint has been released out of the vault to its recipient.
@@ -3126,6 +3426,12 @@ pub enum SolbeamError {
     DepositHashChanged,
     #[msg("the client's stored hash at the deposit's height is unchanged — there is nothing to burn")]
     DepositHashUnchanged,
+    #[msg("the spent-outpoint account is not the PDA this (txid, vout) derives")]
+    WrongSpentOutpoint,
+    #[msg("this deposit outpoint is already recorded as spent")]
+    OutpointAlreadyReported,
+    #[msg("the reserve has spent this deposit's outpoint, so it cannot be minted")]
+    DepositSpent,
 }
 
 #[cfg(test)]
@@ -3239,5 +3545,26 @@ mod vault_layout_tests {
             c.maturity_blocks
         );
         assert_eq!(data[16], c.bump);
+    }
+
+    /// The spent-outpoint record is the other account `create_spent_outpoint`
+    /// writes by hand, and it is the one whose layout must stay trivial: it
+    /// stores only `bump`, because its existence is the record and it is
+    /// permanent. A field added here without a reader would be dead weight on
+    /// every reported outpoint forever.
+    #[test]
+    fn spent_outpoint_layout_is_discriminator_then_bump() {
+        let s = SpentOutpoint { bump: 253 };
+        let mut borsh = Vec::new();
+        borsh.extend_from_slice(SpentOutpoint::DISCRIMINATOR);
+        AnchorSerialize::serialize(&s, &mut borsh).unwrap();
+        assert_eq!(borsh.len(), SpentOutpoint::SPACE);
+
+        // The two byte writes `create_spent_outpoint` performs.
+        let mut manual = vec![0u8; SpentOutpoint::SPACE];
+        manual[..8].copy_from_slice(SpentOutpoint::DISCRIMINATOR);
+        manual[8] = s.bump;
+
+        assert_eq!(manual, borsh, "you must update create_spent_outpoint");
     }
 }

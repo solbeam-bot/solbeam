@@ -104,6 +104,7 @@ document says X"* and *"the program can be set to X"* are different claims.
 | `fed.delegated_staking` | Delegated staking | **disabled** `dec` | **Phase 2.** Lets non-members delegate `solBSV` to a member and share its fee. Activatable by governance, not built |
 | `fed.script` | Reserve deposit script | **2-of-2 `OP_CHECKMULTISIG`** `dec`, **shape accepted in code** `built` | `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`. Both keys must sign; the Greycore polices every reserve spend. The committed code accepts this shape: `is_reserve_multisig`, `MAX_SCRIPT_LEN = 71`, `DepositScript::SPACE = 84`. **The keys/quorum behind it are not built** |
 | `fed.bond_enforced_on_chain` | BSV-side bond seizure | **collective action** `dec` | The Solana program cannot seize the BSV-side bond; the members sign a threshold transaction. Stated as a residual, not hidden |
+| `fed.spent_report` | Spent-outpoint record (N5) | **one PDA per `(txid, vout)`, written by the program authority** `built` | `report_spent` records a deposit outpoint the reserve has spent; `verify_deposit` refuses a deposit whose outpoint is in the record. The signer is the **upgrade authority** — a **PoC stand-in** for the federation, which does not exist yet. Permanent and rent-exempt with **no prune**: closing a record would re-open the mint of an already-spent deposit |
 
 ## Governance
 
