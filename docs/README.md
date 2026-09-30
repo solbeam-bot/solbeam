@@ -42,7 +42,7 @@ The distinction the rest of this set is careful about:
 
 - **Built** — the light client with `cw-144`, the `solBSV` token, the mint (`verify_deposit`), fork
   staging, the nullifier, the timelocked authority, and **the vault** (`release_mint`,
-  `burn_staged`, `set_maturity`). **17 instructions, 45 passing / 0 failing.**
+  `burn_staged`, `set_maturity`). **21 instructions, 64 passing / 0 failing.**
 - **Designed, not built** — the **federation**, the **Greycore**, **peg-out** ([spec](11-peg-out-spec.md), with defaults now fixed), and **governance**.
   The reserve script's *shape* is accepted by the code; the threshold key and second quorum that
   would fill it are not.

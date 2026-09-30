@@ -158,14 +158,26 @@
 
     <div class="phase">
       <div class="phase__head">
-        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__mark mark--part" aria-hidden="true">&#9680;</span>
         <span class="phase__name">Phase 3 &middot; Peg-out</span>
-        <span class="phase__state">Not started</span>
+        <span class="phase__state">Built, with one dependency</span>
       </div>
       <ul>
-        <li><strong>Designed, not built.</strong> Burn &rarr; a federation member pays BSV &rarr; the payout is proved on-chain &rarr; settled.</li>
-        <li><strong>Done: the vault.</strong> Minted <code>solBSV</code> lands in a program-owned vault, and <code>release_mint</code> / <code>burn_staged</code> are both <strong>permissionless</strong> — so a recipient does not need a relayer to release their own tokens, and anyone can burn a deposit the chain has moved against.</li>
-        <li><strong>But the protective window ships at 0.</strong> Maturity is a stored parameter, and the PoC ships it at zero: depth zero means <em>immediately releasable</em>. So the burn predicate is satisfied instantly rather than being unreachable — release and burn become a <strong>race</strong>, and release normally wins. <strong>What protects a deposit today is the twelve-confirmation delay (~2 hours), which is prevention, not reversal.</strong> The window exists so that reversal is not a race; raising it needs no redeploy.</li>
+        <li><strong>Done: the redemption flow.</strong> <code>initiate_redeem</code> escrows the holder's <code>solBSV</code> and names a BSV address; <code>cancel_redeem</code> returns it <strong>unchanged</strong> if no payout happens by the deadline; <code>claim_payout</code> proves the payment through the <strong>existing light client</strong>; <code>settle_redeem</code> burns the escrow once the payout is deep enough and the challenge window has passed.</li>
+        <li><strong>Escrow, not an immediate burn</strong> — because a burn is final and the payout might never happen. A holder whose tokens were burned at step one would have lost their claim on the reserve and hold nothing. Escrowing keeps <code>supply ≤ reserve</code> true at every point in between.</li>
+        <li><strong>The fee needs no account.</strong> The holder redeems <code>A</code> and receives <code>A − fee</code>; the reserve falls by <code>A − fee</code>, the supply falls by <code>A</code>, so the reserve-to-supply ratio <strong>improves by the fee</strong>. The members keep it in BSV, inside the reserve they already hold.</li>
+        <li><strong>The deadline is in Solana slots, not BSV height</strong> — deliberately. A height deadline would never expire if the header feed stalled, and the holder's funds would freeze with no way out.</li>
+        <li><strong>But the payout is made by a member, not the program.</strong> The program can verify that BSV moved; it cannot move BSV. <strong>Until there is a federation, nobody is obliged to pay</strong>, so every redemption would time out into cancellation. That is a configuration rather than a defect — a holder is never stuck, only delayed — but it means peg-out cannot be demonstrated end to end until Phase 4 exists.</li>
+      </ul>
+    </div>
+
+    <div class="phase">
+      <div class="phase__head">
+        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__name">Phase 4 &middot; The federation</span>
+        <span class="phase__state">Designed, not built</span>
+      </div>
+      <ul>
         <li><strong>The federation holds the reserve.</strong> Members bond <strong>BSV</strong> — working capital for transfers, the <em>float</em>, <strong>not</strong> capital sized against the vault. Sizing the bond against the vault produced an impossible inequality twice, so <strong>every capacity figure is withdrawn with the reason recorded</strong>.</li>
         <li><strong>A second quorum co-signs every reserve movement.</strong> The reserve script is a <code>2-of-2</code>: the members' threshold key <em>and</em> the second quorum's key. Neither can move funds alone, and that is what actually constrains the reserve. The second quorum is <strong>trusted third parties with reputations to lose, not node operators</strong>.</li>
         <li><strong>The design follows RenVM deliberately.</strong> A bonded member set, a second quorum, epochs for membership — the precedent is good, and it is the bridge that issued wrapped ZEC. <strong>What we add is reorg reversal</strong>, which the reference does not address at all.</li>
@@ -190,8 +202,8 @@
 
     <h2>What is proven so far</h2>
     <div class="tally">
-      <span><b>17</b> instructions built</span>
-      <span><b>45</b> on-chain tests</span>
+      <span><b>21</b> instructions built</span>
+      <span><b>64</b> on-chain tests</span>
       <span><b>0</b> of peg-out built</span>
       <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>

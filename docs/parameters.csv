@@ -51,7 +51,7 @@ pi.max_used,Legacy replay-list cap,200 der·superseded,superseded,"Replaced by a
 pi.op_return_layout,Deposit commitment,version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient dec,designed,Designed. What is built checks only that the recipient's 32 bytes appear in an OP_RETURN
 po.payout_confirmations,Payout depth,6 BSV blocks built,built-frozen,BSV confirmations before a payout is provable. C_payout
 po.challenge_window,Challenge window,144 BSV blocks built,built-frozen,W. Confirmations a payout needs before settling
-po.deadline,Redemption deadline,"216,000 slots built",built-mutable,D. Must satisfy D ≥ payout_confirmations + challenge_window
+po.deadline,Redemption deadline,"216,000 slots built",built-mutable,"How long a member has to pay before the holder may cancel. In Solana SLOTS, because a height deadline would never expire if the header feed stalled. NOTE: the earlier claim that this must exceed payout_confirmations + challenge_window does NOT hold at these values (216,000 slots against 150 BSV blocks). The pay-and-refund race is closed structurally instead -- cancel_redeem is refused while a claim is live."
 po.cancel_grace,Cancellation grace,0 built,built-frozen,Cancellation is immediate on expiry. A grace period would only delay the exit
 po.d_min,Minimum redemption,"1,000,000 base units (0.01 BSV) built",built-frozen,"Minimum redemption, so a claim's proof is worth the transaction fees to settle"
 po.max_pending,Concurrent redemption cap,64 built,built-frozen,"Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded"

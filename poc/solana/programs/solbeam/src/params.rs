@@ -118,7 +118,7 @@ pub const CHALLENGE_WINDOW: u64 = 144;
 
 /// `po.deadline` -- Redemption deadline -- `216,000 slots built`.
 ///
-/// D. Must satisfy D ≥ payout_confirmations + challenge_window
+/// How long a member has to pay before the holder may cancel. In Solana SLOTS, because a height deadline would never expire if the header feed stalled. NOTE: the earlier claim that this must exceed payout_confirmations + challenge_window does NOT hold at these values (216,000 slots against 150 BSV blocks). The pay-and-refund race is closed structurally instead -- cancel_redeem is refused while a claim is live.
 pub const REDEEM_DEADLINE_SLOTS: u64 = 216_000;
 
 /// `po.cancel_grace` -- Cancellation grace -- `0 built`.
