@@ -86,8 +86,9 @@
       against the implementation, and it is now correct on all 324.
       <br><br>
       Below, <strong>"Done" means done and tested</strong>; everything described as designed is a
-      specification. <strong>The vault, the federation and peg-out are specified but not built</strong> —
-      the program still mints straight to the depositor's token account.
+      specification. <strong>The vault is now built</strong> — every mint lands in a program-owned
+      account, and <code>release_mint</code> and <code>burn_staged</code> are permissionless.
+      <strong>The federation, the reserve script and peg-out are still specified and not built.</strong>
       <br><br>
       <strong>What changed since this page was last accurate.</strong> The design moved from an
       operator-less model to a <strong>bonded federation</strong> following the architecture of
