@@ -376,7 +376,7 @@
       "id": "fee.redeem_bp",
       "name": "Peg-out fee (gross)",
       "value": 30,
-      "status": "designed",
+      "status": "built-frozen",
       "description": "As above",
       "csv_value": "30 bp dec"
     },
@@ -413,28 +413,52 @@
       "csv_value": "version \u2016 cluster_id \u2016 program_hash \u2016 flags \u2016 recipient dec"
     },
     {
-      "id": "po.deadline",
-      "name": "Redemption deadline",
-      "value": null,
-      "status": "designed",
-      "description": "D. Must satisfy D \u2265 payout_confirmations + challenge_window",
-      "csv_value": "open"
+      "id": "po.payout_confirmations",
+      "name": "Payout depth",
+      "value": 6,
+      "status": "built-frozen",
+      "description": "BSV confirmations before a payout is provable. C_payout",
+      "csv_value": "6 BSV blocks built"
     },
     {
       "id": "po.challenge_window",
       "name": "Challenge window",
-      "value": null,
-      "status": "designed",
+      "value": 144,
+      "status": "built-frozen",
       "description": "W. Confirmations a payout needs before settling",
-      "csv_value": "open"
+      "csv_value": "144 BSV blocks built"
     },
     {
-      "id": "po.payout_confirmations",
-      "name": "Payout depth",
-      "value": null,
-      "status": "designed",
-      "description": "BSV confirmations before a payout is provable. C_payout",
-      "csv_value": "open"
+      "id": "po.deadline",
+      "name": "Redemption deadline",
+      "value": 216000,
+      "status": "built-mutable",
+      "description": "D. Must satisfy D \u2265 payout_confirmations + challenge_window",
+      "csv_value": "216,000 slots built"
+    },
+    {
+      "id": "po.cancel_grace",
+      "name": "Cancellation grace",
+      "value": 0,
+      "status": "built-frozen",
+      "description": "Cancellation is immediate on expiry. A grace period would only delay the exit",
+      "csv_value": "0 built"
+    },
+    {
+      "id": "po.d_min",
+      "name": "Minimum redemption",
+      "value": 1000000,
+      "status": "built-frozen",
+      "description": "Minimum redemption, so a claim's proof is worth the transaction fees to settle",
+      "csv_value": "1,000,000 base units (0.01 BSV) built"
+    },
+    {
+      "id": "po.max_pending",
+      "name": "Concurrent redemption cap",
+      "value": 64,
+      "status": "built-frozen",
+      "description": "Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded",
+      "csv_value": "64 built"
     },
     {
       "id": "m.rent_per_byte",

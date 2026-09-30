@@ -2928,3 +2928,766 @@ describe("solbeam — the reported spent-outpoint record, and the vault's hard g
     expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
   });
 });
+
+/**
+ * Peg-out — **the redemption half** (doc 11).
+ *
+ * `initiate_redeem` escrows, `cancel_redeem` returns on timeout, `claim_payout`
+ * proves the member paid through the light client, and `settle_redeem` burns
+ * once the challenge window has passed with the payout still canonical. The
+ * point of the block is that **every one of those paths is exercised through a
+ * real instruction**, not merely implemented: the guards are reached by
+ * constructing the state that trips them, and each refusal names the error it
+ * is supposed to.
+ *
+ * The one parameter the block cannot reach as shipped is `po.deadline`
+ * (216,000 slots ≈ 24 h). It is a **stored `Config` field**, exactly like
+ * `v.maturity_blocks`, so governance lowers it here through the same
+ * timelocked path and `cancel_redeem`'s deadline guard is real rather than
+ * assumed. Everything else (`po.d_min`, `po.max_pending`,
+ * `po.payout_confirmations`, `po.challenge_window`, `fee.redeem_bp`) is used at
+ * its shipped value.
+ *
+ * The chain this runs on is built from scratch in `before`, because the block
+ * before it leaves the client parked on a forward checkpoint.
+ */
+describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const fixture = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
+  const rawAt = (height: number): Buffer => Buffer.from(
+    (fixture.headers.find((h: any) => h.height === height)
+      ?? fixture.fork.headers.find((h: any) => h.height === height))!.raw, "hex");
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const [mint] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("mint")], program.programId);
+  const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("config")], program.programId);
+  const [depositScript] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("deposit_script")], program.programId);
+  const [book] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("redeem_book")], program.programId);
+  const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault")], program.programId);
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
+
+  const TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+  const ASSOCIATED_TOKEN_PROGRAM = new anchor.web3.PublicKey(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+  const SYSTEM_PROGRAM = anchor.web3.SystemProgram.programId;
+
+  const DEPOSIT_SCRIPT = Buffer.from(fixture.deposit_script, "hex");
+
+  // The sheet's peg-out numbers, at their shipped values.
+  const PAYOUT_CONFIRMATIONS = P("po.payout_confirmations");
+  const CHALLENGE_WINDOW = P("po.challenge_window");
+  const D_MIN = P("po.d_min");
+  const MAX_PENDING = P("po.max_pending");
+  const FEE_BP = P("fee.redeem_bp");
+  const CANCEL_GRACE = P("po.cancel_grace");
+
+  // A policy the suite sets low through the timelocked authority path so the
+  // deadline guard is reachable on a validator at all.
+  const SMALL_DEADLINE = 60;
+
+  const holder = provider.wallet.publicKey;
+  const holderAta = anchor.web3.PublicKey.findProgramAddressSync(
+    [holder.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM)[0];
+
+  const DEPOSIT_AMOUNT = 200_000_000; // 2 BSV
+  const AMOUNT = 5_000_000;           // 0.05 BSV per redemption
+  const feeOf = (amount: number): number => Math.floor(amount * FEE_BP / 10_000);
+  const payoutMin = AMOUNT - feeOf(AMOUNT);
+
+  const u32 = (n: number): Buffer => {
+    const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b;
+  };
+  const u64 = (n: number): Buffer => {
+    const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b;
+  };
+  const redeemPda = (id: number): anchor.web3.PublicKey =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("redeem"), u64(id)], program.programId)[0];
+  const escrowPda = (id: number): anchor.web3.PublicKey =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("redeem_escrow"), u64(id)], program.programId)[0];
+  const payoutNullifierPda = (
+    txid: Buffer, vout: number,
+  ): anchor.web3.PublicKey =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("payout_nullifier"), txid, u32(vout)], program.programId)[0];
+
+  /** The canonical P2PKH script for a 20-byte HASH160. */
+  const p2pkh = (hash: Buffer): Buffer => Buffer.concat([
+    Buffer.from([0x76, 0xa9, 0x14]), hash, Buffer.from([0x88, 0xac]),
+  ]);
+
+  const depositTx = (recipient: Buffer, amount: number, salt: number): Buffer => {
+    const opReturn = Buffer.concat([Buffer.from([0x6a, 0x20]), recipient]);
+    return Buffer.concat([
+      u32(1),
+      Buffer.from([1]),
+      Buffer.alloc(32, salt),
+      u32(salt),
+      Buffer.from([0]),
+      u32(0xffffffff),
+      Buffer.from([2]),
+      u64(amount),
+      Buffer.from([DEPOSIT_SCRIPT.length]), DEPOSIT_SCRIPT,
+      u64(0),
+      Buffer.from([opReturn.length]), opReturn,
+      u32(0),
+    ]);
+  };
+
+  /**
+   * A legacy, one-input, one-output transaction paying `script` `value`. The
+   * output is the whole payment, so a single-transaction block commits to it
+   * directly and the Merkle branch is empty.
+   */
+  const payoutTx = (script: Buffer, value: number, salt: number): Buffer =>
+    Buffer.concat([
+      u32(1),
+      Buffer.from([1]),
+      Buffer.alloc(32, salt),
+      u32(salt),
+      Buffer.from([0]),
+      u32(0xffffffff),
+      Buffer.from([1]),
+      u64(value),
+      Buffer.from([script.length]), script,
+      u32(0),
+    ]);
+
+  const blockWith = (txid: Buffer, prev: Buffer, salt: number): Buffer => {
+    const header = Buffer.alloc(80);
+    header.writeUInt32LE(0x20000000, 0);
+    doubleSha256(prev).copy(header, 4);
+    txid.copy(header, 36);
+    header.writeUInt32LE(1_800_000_000 + salt, 68);
+    header.writeUInt32LE(REGTEST_BITS, 72);
+    return mineRegtest(header);
+  };
+
+  /** The raw header of the current tip. Every push updates it. */
+  let parent: Buffer;
+
+  const push = async (raw: Buffer): Promise<void> => {
+    await program.methods.pushHeader(Array.from(raw))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    parent = raw;
+  };
+
+  const funded = async (): Promise<anchor.web3.Keypair> => {
+    const key = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      key.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig);
+    return key;
+  };
+
+  const setMaturity = async (blocks: number): Promise<void> => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 40;
+    await proposeChange(
+      gov, { setMaturity: { blocks: new anchor.BN(blocks) } }, effective);
+    await waitForSlot(provider.connection, effective);
+    await executeChange(gov);
+  };
+
+  const setRedeemDeadline = async (slots: number): Promise<void> => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 40;
+    await proposeChange(
+      gov, { setRedeemDeadline: { slots: new anchor.BN(slots) } }, effective);
+    await waitForSlot(provider.connection, effective);
+    await executeChange(gov);
+  };
+
+  const initiateAccounts = (id: number) => ({
+    holder, lightClient, config, book,
+    pending: redeemPda(id),
+    mint,
+    holderTokenAccount: holderAta,
+    escrow: escrowPda(id),
+    tokenProgram: TOKEN_PROGRAM,
+    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM,
+    systemProgram: SYSTEM_PROGRAM,
+  });
+
+  const cancelAccounts = (id: number, submitter: anchor.web3.PublicKey) => ({
+    lightClient, book, pending: redeemPda(id), escrow: escrowPda(id), mint,
+    holderTokenAccount: holderAta, holder, submitter,
+    tokenProgram: TOKEN_PROGRAM,
+    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM,
+    systemProgram: SYSTEM_PROGRAM,
+  });
+
+  const settleAccounts = (id: number) => ({
+    lightClient, book, pending: redeemPda(id), escrow: escrowPda(id), mint,
+    submitter: provider.wallet.publicKey, tokenProgram: TOKEN_PROGRAM,
+  });
+
+  /** The `claim_payout` account set, with a caller-chosen nullifier PDA. */
+  const claimAccounts = (
+    id: number, nullifier: anchor.web3.PublicKey,
+  ) => ({
+    lightClient, pending: redeemPda(id), payoutNullifier: nullifier,
+    submitter: provider.wallet.publicKey, systemProgram: SYSTEM_PROGRAM,
+  });
+
+  const payoutProof = (
+    tx: Buffer, height: number, header: Buffer,
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    height: new anchor.BN(height),
+    txid: Array.from(doubleSha256(tx)),
+    vout: 0,
+    index: 0,
+    branch: [] as number[][],
+    header: Array.from(header),
+    tx,
+    ...overrides,
+  });
+
+  const balance = async (account: anchor.web3.PublicKey): Promise<number> =>
+    tokenAmount((await provider.connection.getAccountInfo(account))!.data);
+
+  /** The redemption ids the block has opened, so a later test can find them. */
+  let nextId = 0;
+  const openRedeem = async (address: Buffer, amount = AMOUNT): Promise<number> => {
+    const id = nextId++;
+    await program.methods
+      .initiateRedeem(new anchor.BN(id), new anchor.BN(amount), Array.from(address))
+      .accounts(initiateAccounts(id)).rpc();
+    return id;
+  };
+
+  // The deposit that funds the escrows. It is a real, provable deposit: the
+  // holder's own OP_RETURN, buried past MIN_CONFIRMATIONS, released through the
+  // vault. Nothing is conjured.
+  const txDep = depositTx(holder.toBuffer(), DEPOSIT_AMOUNT, 0x51);
+  const txidDep = doubleSha256(txDep);
+  const nullifierDep = nullifierPda(program.programId, txidDep, 0);
+  const stagedDep = stagedMintPda(program.programId, txidDep, 0);
+  const spentDep = spentOutpointPda(program.programId, txidDep, 0);
+  let blockDep: Buffer;
+
+  const DEPOSIT_HEIGHT = 127;
+  const BURY_TIP = DEPOSIT_HEIGHT + MIN_CONFIRMATIONS - 1; // 138
+
+  // The BSV addresses the redemptions name, and the payout script shape.
+  const addr0 = Buffer.alloc(20, 0xa0);
+  const addr1 = Buffer.alloc(20, 0xa1);
+  const addr3 = Buffer.alloc(20, 0xa3);
+  const addr4 = Buffer.alloc(20, 0xa4);
+  const addrOther = Buffer.alloc(20, 0xee);
+
+  /** The deposit claim for the funding deposit, shaped like the vault's. */
+  const depositClaim = (
+    tx: Buffer, height: number, header: Buffer, amount: number,
+    recipient: anchor.web3.PublicKey,
+  ) => ({
+    height: new anchor.BN(height),
+    txid: Array.from(doubleSha256(tx)),
+    vout: 0,
+    amount: new anchor.BN(amount),
+    recipient: Array.from(recipient.toBuffer()),
+    index: 0,
+    branch: [] as number[][],
+    header: Array.from(header),
+    tx,
+  });
+
+  before(async () => {
+    // A fresh regtest chain: anchor at 115, 116, fillers to 126, the deposit at
+    // 127, then bury it past MIN_CONFIRMATIONS.
+    await timelockedCheckpoint(gov, 115, rawAt(115));
+    await push(rawAt(116));
+    // The deadline policy: the shipped 216,000 slots is a full day and cannot
+    // be reached here, so it is lowered through the same timelocked authority
+    // path `v.maturity_blocks` uses.
+    await setRedeemDeadline(SMALL_DEADLINE);
+    expect((await program.account.config.fetch(config))
+      .redeemDeadlineSlots.toNumber()).to.equal(SMALL_DEADLINE);
+    // The previous block left maturity at its default; the release below is
+    // immediate only if that is still 0.
+    if ((await program.account.config.fetch(config)).maturityBlocks.toNumber() !== 0) {
+      await setMaturity(0);
+    }
+
+    parent = rawAt(116);
+    for (let h = 117; h <= 126; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    blockDep = blockWith(txidDep, parent, 1);
+    await push(blockDep); // 127
+    for (let h = 128; h <= BURY_TIP; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+
+    await program.methods
+      .verifyDeposit(depositClaim(txDep, DEPOSIT_HEIGHT, blockDep, DEPOSIT_AMOUNT, holder))
+      .accounts({
+        lightClient, spentOutpoint: spentDep, nullifier: nullifierDep,
+        staged: stagedDep, depositScript, config, mint, vault,
+        recipientOwner: holder, submitter: provider.wallet.publicKey,
+      })
+      .rpc();
+    await program.methods.releaseMint(Array.from(txidDep), 0)
+      .accounts({
+        lightClient, staged: stagedDep, mint, vault,
+        recipientTokenAccount: holderAta, recipientOwner: holder,
+        submitter: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    expect(await balance(holderAta)).to.equal(DEPOSIT_AMOUNT);
+  });
+
+  // -- initiate ---------------------------------------------------------------
+
+  it("refuses a redemption below po.d_min and creates nothing", async () => {
+    try {
+      await program.methods
+        .initiateRedeem(new anchor.BN(0), new anchor.BN(D_MIN - 1), Array.from(addr0))
+        .accounts(initiateAccounts(0)).rpc();
+      expect.fail("a redemption below po.d_min must be refused");
+    } catch (e: any) {
+      expect(String(e)).to.contain("BelowMinimumRedeem");
+    }
+    // The whole transaction reverted, so neither the item nor the book exists.
+    expect(await provider.connection.getAccountInfo(redeemPda(0))).to.equal(null);
+    expect(await provider.connection.getAccountInfo(book)).to.equal(null);
+  });
+
+  it("escrows exactly the amount, and records the address, fee and deadline", async () => {
+    const id = await openRedeem(addr0);
+    expect(id).to.equal(0);
+
+    const item = await program.account.pendingRedeem.fetch(redeemPda(0));
+    expect(item.holder.toBase58()).to.equal(holder.toBase58());
+    expect(item.amount.toNumber()).to.equal(AMOUNT);
+    // The fee is fee.redeem_bp of the amount, rounded down, and it is *stored*:
+    // a later parameter change must not move an in-flight redemption.
+    expect(item.fee.toNumber()).to.equal(feeOf(AMOUNT));
+    expect(Buffer.from(item.bsvAddress).toString("hex"))
+      .to.equal(addr0.toString("hex"));
+    expect(item.initiatedSlot.toNumber()).to.be.greaterThan(0);
+    expect(item.deadlineSlot.toNumber())
+      .to.equal(item.initiatedSlot.toNumber() + SMALL_DEADLINE + CANCEL_GRACE);
+    expect(item.payoutHeight.toNumber()).to.equal(0);
+
+    // The escrow is program-owned and holds the full amount; the holder is down
+    // exactly that, and nothing has been burned.
+    const escrow = await provider.connection.getAccountInfo(escrowPda(0));
+    expect(escrow!.owner.toBase58()).to.equal(TOKEN_PROGRAM.toBase58());
+    expect(tokenAmount(escrow!.data)).to.equal(AMOUNT);
+    expect(await balance(holderAta)).to.equal(DEPOSIT_AMOUNT - AMOUNT);
+
+    const counters = await program.account.redeemBook.fetch(book);
+    expect(counters.nextId.toNumber()).to.equal(1);
+    expect(counters.pending.toNumber()).to.equal(1);
+  });
+
+  it("refuses an id that is not the book's next id", async () => {
+    const counters = await program.account.redeemBook.fetch(book);
+    try {
+      await program.methods
+        .initiateRedeem(
+          new anchor.BN(counters.nextId.toNumber() + 3),
+          new anchor.BN(AMOUNT), Array.from(addr0))
+        .accounts(initiateAccounts(counters.nextId.toNumber() + 3)).rpc();
+      expect.fail("an id that skips the counter must be refused");
+    } catch (e: any) {
+      expect(String(e)).to.contain("WrongRedeemId");
+    }
+    expect(await provider.connection.getAccountInfo(book)).to.not.equal(null);
+  });
+
+  // -- cancel -----------------------------------------------------------------
+
+  it("refuses to cancel before the deadline", async () => {
+    try {
+      await program.methods.cancelRedeem(new anchor.BN(0))
+        .accounts(cancelAccounts(0, provider.wallet.publicKey)).rpc();
+      expect.fail("cancel must wait for the deadline");
+    } catch (e: any) {
+      expect(String(e)).to.contain("DeadlineNotReached");
+    }
+    expect(tokenAmount(
+      (await provider.connection.getAccountInfo(escrowPda(0)))!.data))
+      .to.equal(AMOUNT);
+  });
+
+  it("returns the escrow unchanged once the deadline passes — permissionless", async () => {
+    const id = await openRedeem(addr1);
+    const item = await program.account.pendingRedeem.fetch(redeemPda(id));
+    await waitForSlot(provider.connection, item.deadlineSlot.toNumber() + 2);
+
+    const before = await balance(holderAta);
+    // A stranger, not the holder: that is what makes the remedy permissionless.
+    const stranger = await funded();
+    await program.methods.cancelRedeem(new anchor.BN(id))
+      .accounts(cancelAccounts(id, stranger.publicKey))
+      .signers([stranger]).rpc();
+
+    // Unchanged: no fee is charged on a redemption that was never paid.
+    expect(await balance(holderAta)).to.equal(before + AMOUNT);
+    expect(await provider.connection.getAccountInfo(redeemPda(id))).to.equal(null);
+    expect(await provider.connection.getAccountInfo(escrowPda(id))).to.equal(null);
+    // R0 is still pending, so only the count for R1 was returned.
+    expect((await program.account.redeemBook.fetch(book)).pending.toNumber())
+      .to.equal(1);
+  });
+
+  // -- claim ------------------------------------------------------------------
+
+  // The payout chain. `P0` is the correct payment; the two after it are wrong on
+  // purpose, and each is mined into its own block so the proof is real and only
+  // the condition under test differs.
+  const P0 = 139;
+  const PWRONG = 145;
+  const PLOW = 151;
+  const txPay0 = payoutTx(p2pkh(addr0), payoutMin, 0x61);
+  const txidPay0 = doubleSha256(txPay0);
+  const txPayWrong = payoutTx(p2pkh(addrOther), payoutMin, 0x62);
+  const txidPayWrong = doubleSha256(txPayWrong);
+  const txPayLow = payoutTx(p2pkh(addr0), payoutMin - 1, 0x63);
+  const txidPayLow = doubleSha256(txPayLow);
+  let blkP0: Buffer;
+  let blkWrong: Buffer;
+  let blkLow: Buffer;
+
+  const claim0 = async (
+    tx: Buffer, height: number, header: Buffer,
+    overrides: Record<string, unknown> = {},
+    nullifier = payoutNullifierPda(doubleSha256(tx), 0),
+  ) => program.methods
+    .claimPayout(new anchor.BN(0), payoutProof(tx, height, header, overrides))
+    .accounts(claimAccounts(0, nullifier)).rpc();
+
+  const claimForId = async (
+    id: number, tx: Buffer, height: number, header: Buffer,
+  ) => program.methods
+    .claimPayout(new anchor.BN(id), payoutProof(tx, height, header))
+    .accounts(claimAccounts(id, payoutNullifierPda(doubleSha256(tx), 0))).rpc();
+
+  it("refuses a payout that is not yet po.payout_confirmations deep", async () => {
+    blkP0 = blockWith(txidPay0, parent, 0x61);
+    await push(blkP0); // 139, depth 1
+    try {
+      await claim0(txPay0, P0, blkP0);
+      expect.fail("a one-deep payout must not be claimable");
+    } catch (e: any) {
+      expect(String(e)).to.contain("InsufficientConfirmations");
+    }
+    expect((await program.account.pendingRedeem.fetch(redeemPda(0)))
+      .payoutHeight.toNumber()).to.equal(0);
+  });
+
+  it("buries the payout, then refuses a payment to a different address", async () => {
+    // Five more blocks put P0 at exactly PAYOUT_CONFIRMATIONS (139..144).
+    for (let h = P0 + 1; h <= P0 + PAYOUT_CONFIRMATIONS - 1; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    // The wrong-address payment also gets six confirmations, so the refusal is
+    // the address check and not the depth check.
+    blkWrong = blockWith(txidPayWrong, parent, 0x62);
+    await push(blkWrong); // 145
+    for (let h = PWRONG + 1; h <= PWRONG + PAYOUT_CONFIRMATIONS - 1; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    try {
+      await claim0(txPayWrong, PWRONG, blkWrong);
+      expect.fail("a payment to another address must not settle this redemption");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutAddressMismatch");
+    }
+  });
+
+  it("refuses a payout below amount − fee", async () => {
+    blkLow = blockWith(txidPayLow, parent, 0x63);
+    await push(blkLow);
+    for (let h = PLOW + 1; h <= PLOW + PAYOUT_CONFIRMATIONS - 1; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    try {
+      await claim0(txPayLow, PLOW, blkLow);
+      expect.fail("a payout below amount − fee must not settle");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutAmountTooLow");
+    }
+  });
+
+  it("stages the correct payout, and records the block it was proven against", async () => {
+    await claim0(txPay0, P0, blkP0);
+    const item = await program.account.pendingRedeem.fetch(redeemPda(0));
+    expect(item.payoutHeight.toNumber()).to.equal(P0);
+    expect(Buffer.from(item.payoutHash).toString("hex"))
+      .to.equal(doubleSha256(blkP0).toString("hex"));
+
+    // The outpoint record exists, uses the hand-written layout, and names this
+    // redemption — which is what stops it settling another one.
+    const nullifier = payoutNullifierPda(txidPay0, 0);
+    const [, bump] = anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("payout_nullifier"), txidPay0, u32(0)], program.programId);
+    const record = await provider.connection.getAccountInfo(nullifier);
+    expect(record).to.not.equal(null);
+    expect(record!.owner.toBase58()).to.equal(program.programId.toBase58());
+    expect(record!.data.length).to.equal(17);
+    expect(record!.data.readBigUInt64LE(8)).to.equal(0n);
+    expect(record!.data[16]).to.equal(bump);
+  });
+
+  it("refuses a second claim against a live payout (PayoutAlreadyClaimed)", async () => {
+    try {
+      await claim0(txPay0, P0, blkP0);
+      expect.fail("a live claim must not be re-staged");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutAlreadyClaimed");
+    }
+  });
+
+  it("refuses to cancel a redemption with a live payout", async () => {
+    try {
+      await program.methods.cancelRedeem(new anchor.BN(0))
+        .accounts(cancelAccounts(0, provider.wallet.publicKey)).rpc();
+      expect.fail("a paid redemption must not be cancelled");
+    } catch (e: any) {
+      expect(String(e)).to.contain("RedeemClaimed");
+    }
+    expect(await provider.connection.getAccountInfo(escrowPda(0))).to.not.equal(null);
+  });
+
+  it("refuses to settle before po.challenge_window BSV blocks have passed", async () => {
+    try {
+      await program.methods.settleRedeem(new anchor.BN(0))
+        .accounts(settleAccounts(0)).rpc();
+      expect.fail("settle must wait for the challenge window");
+    } catch (e: any) {
+      expect(String(e)).to.contain("ChallengeWindowNotElapsed");
+    }
+  });
+
+  it("refuses to settle a redemption with no claimed payout", async () => {
+    // R2 names R0's address and amount on purpose: it is the redemption the
+    // replay test below tries to settle with R0's single payment.
+    const id = await openRedeem(addr0);
+    try {
+      await program.methods.settleRedeem(new anchor.BN(id))
+        .accounts(settleAccounts(id)).rpc();
+      expect.fail("a redemption with no claim must not settle");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutNotClaimed");
+    }
+  });
+
+  it("refuses a payout proof with the wrong header, txid or Merkle branch", async () => {
+    // R2 is open and unclaimed, so the header checks are the next guards.
+    const id = Number(
+      (await program.account.redeemBook.fetch(book)).nextId.toNumber()) - 1;
+    try {
+      await program.methods.claimPayout(new anchor.BN(id), payoutProof(txPay0, PWRONG, blkP0))
+        .accounts(claimAccounts(id, payoutNullifierPda(txidPay0, 0))).rpc();
+      expect.fail("a header that is not the canonical block must be refused");
+    } catch (e: any) {
+      expect(String(e)).to.contain("HeaderMismatch");
+    }
+    try {
+      await program.methods.claimPayout(
+        new anchor.BN(id),
+        payoutProof(txPay0, P0, blkP0, { txid: Array.from(Buffer.alloc(32, 9)) }))
+        .accounts(claimAccounts(id, payoutNullifierPda(txidPay0, 0))).rpc();
+      expect.fail("a txid that is not the transaction's hash must be refused");
+    } catch (e: any) {
+      expect(String(e)).to.contain("TxidMismatch");
+    }
+    try {
+      await program.methods
+        .claimPayout(new anchor.BN(id), payoutProof(txPay0, P0, blkP0, {
+          branch: [Array.from(Buffer.alloc(32, 7))],
+        }))
+        .accounts(claimAccounts(id, payoutNullifierPda(txidPay0, 0))).rpc();
+      expect.fail("a branch that does not fold to the root must be refused");
+    } catch (e: any) {
+      expect(String(e)).to.contain("BadMerkleProof");
+    }
+  });
+
+  it("refuses a proof pointed at a different outpoint's payout nullifier", async () => {
+    const id = Number(
+      (await program.account.redeemBook.fetch(book)).nextId.toNumber()) - 1;
+    try {
+      // The address and amount are a *different* redemption's, but the account
+      // passed is the PDA for (txid, 1) rather than (txid, 0).
+      await program.methods.claimPayout(
+        new anchor.BN(id), payoutProof(txPay0, P0, blkP0))
+        .accounts(claimAccounts(id, payoutNullifierPda(txidPay0, 1))).rpc();
+      expect.fail("the nullifier address must be re-derived, not trusted");
+    } catch (e: any) {
+      expect(String(e)).to.contain("WrongPayoutNullifier");
+    }
+  });
+
+  it("refuses one BSV payment settling a second redemption (W5 replay)", async () => {
+    const id = Number(
+      (await program.account.redeemBook.fetch(book)).nextId.toNumber()) - 1;
+    // R2 names the same address and amount as R0, so every other check passes
+    // and only the outpoint record can refuse it.
+    expect((await program.account.pendingRedeem.fetch(redeemPda(id))).amount.toNumber())
+      .to.equal(AMOUNT);
+    try {
+      await claimForId(id, txPay0, P0, blkP0);
+      expect.fail("one payment must not settle two redemptions");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutOutpointReused");
+    }
+    // And the refused claim wrote nothing.
+    expect((await program.account.pendingRedeem.fetch(redeemPda(id)))
+      .payoutHeight.toNumber()).to.equal(0);
+  });
+
+  it("burns the escrow once the challenge window has passed", async () => {
+    const supplyBefore = Number(
+      (await provider.connection.getAccountInfo(mint))!.data.readBigUInt64LE(36));
+    const settleAt = P0 + CHALLENGE_WINDOW;
+    while ((await program.account.lightClient.fetch(lightClient)).tipHeight.toNumber()
+           < settleAt) {
+      const tip = (await program.account.lightClient.fetch(lightClient))
+        .tipHeight.toNumber();
+      await push(blockWith(Buffer.alloc(32, tip + 1), parent, tip + 1));
+    }
+    await program.methods.settleRedeem(new anchor.BN(0))
+      .accounts(settleAccounts(0)).rpc();
+
+    // The escrow is gone and the supply fell by the whole amount; the reserve
+    // falls by `amount − fee`, which is where the fee physically lands.
+    expect(await provider.connection.getAccountInfo(escrowPda(0))).to.equal(null);
+    expect(await provider.connection.getAccountInfo(redeemPda(0))).to.equal(null);
+    expect(Number(
+      (await provider.connection.getAccountInfo(mint))!.data.readBigUInt64LE(36)))
+      .to.equal(supplyBefore - AMOUNT);
+    // The payout nullifier outlives the item: it is the replay record.
+    expect(await provider.connection.getAccountInfo(payoutNullifierPda(txidPay0, 0)))
+      .to.not.equal(null);
+  });
+
+  // -- the challenge: a reorged payout ----------------------------------------
+
+  it("refuses to settle a reorged payout, and lets the holder cancel it", async () => {
+    const id3 = await openRedeem(addr3);
+    const id4 = await openRedeem(addr4);
+
+    // A fresh chain whose block 130 pays R3 and whose block 131 pays R4.
+    await timelockedCheckpoint(gov, 115, rawAt(115));
+    await push(rawAt(116));
+    for (let h = 117; h <= 129; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    const txPay3 = payoutTx(p2pkh(addr3), payoutMin, 0x71);
+    const blkPay3 = blockWith(doubleSha256(txPay3), parent, 0x71);
+    await push(blkPay3); // 130
+    const txPay4 = payoutTx(p2pkh(addr4), payoutMin, 0x72);
+    const blkPay4 = blockWith(doubleSha256(txPay4), parent, 0x72);
+    await push(blkPay4); // 131
+    for (let h = 132; h <= 131 + PAYOUT_CONFIRMATIONS - 1; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    await claimForId(id3, txPay3, 130, blkPay3);
+    await claimForId(id4, txPay4, 131, blkPay4);
+    expect((await program.account.pendingRedeem.fetch(redeemPda(id3)))
+      .payoutHeight.toNumber()).to.equal(130);
+
+    // The reorg: re-anchor to the same height and rebuild 116..136 with
+    // *different* blocks, so the client's hash at 130 and 131 changes.
+    await timelockedCheckpoint(gov, 115, rawAt(115));
+    await push(rawAt(116));
+    let newBlk130: Buffer | null = null;
+    for (let h = 117; h <= 136; h++) {
+      const blk = blockWith(Buffer.alloc(32, 200 + h), parent, 200 + h);
+      await push(blk);
+      if (h === 130) newBlk130 = blk;
+    }
+    // The window's block 130 is now a *different* block from the one the claim
+    // was proven against — which is what "reorged" means here.
+    expect(Buffer.from((await program.account.pendingRedeem.fetch(redeemPda(id3)))
+      .payoutHash).toString("hex"))
+      .to.not.equal(doubleSha256(newBlk130!).toString("hex"));
+
+    // Settle must not burn a payout the chain has moved against.
+    try {
+      await program.methods.settleRedeem(new anchor.BN(id3))
+        .accounts(settleAccounts(id3)).rpc();
+      expect.fail("a reorged payout must not settle");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutReorged");
+    }
+
+    // And the holder is made whole rather than left with an unresolvable
+    // escrow: the deadline has long passed and the payout is demonstrably gone.
+    const before = await balance(holderAta);
+    const stranger = await funded();
+    await program.methods.cancelRedeem(new anchor.BN(id3))
+      .accounts(cancelAccounts(id3, stranger.publicKey))
+      .signers([stranger]).rpc();
+    expect(await balance(holderAta)).to.equal(before + AMOUNT);
+
+    // A claim whose height has left the window cannot be checked at all: settle
+    // refuses, and cancel refuses too, because "gone from the window" is not
+    // "shown reorged". This is the same boundary the vault's two exits have.
+    await timelockedCheckpoint(gov, 190, rawAt(190));
+    expect((await program.account.lightClient.fetch(lightClient))
+      .windowStart.toNumber()).to.equal(190);
+    try {
+      await program.methods.settleRedeem(new anchor.BN(id4))
+        .accounts(settleAccounts(id4)).rpc();
+      expect.fail("a payout height outside the window cannot be settled");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutHeightNotInWindow");
+    }
+    try {
+      await program.methods.cancelRedeem(new anchor.BN(id4))
+        .accounts(cancelAccounts(id4, provider.wallet.publicKey)).rpc();
+      expect.fail("a claim that cannot be shown reorged still blocks cancel");
+    } catch (e: any) {
+      expect(String(e)).to.contain("RedeemClaimed");
+    }
+  });
+
+  // -- the cap ----------------------------------------------------------------
+
+  it("caps concurrent pending redemptions at po.max_pending", async () => {
+    // Fill the book to the cap, then one more must be refused. The guard is on
+    // the *stored* count, so this is the shipped `po.max_pending`, not a
+    // test-only stand-in.
+    let counters = await program.account.redeemBook.fetch(book);
+    while (counters.pending.toNumber() < MAX_PENDING) {
+      await openRedeem(addr0, D_MIN);
+      counters = await program.account.redeemBook.fetch(book);
+    }
+    expect(counters.pending.toNumber()).to.equal(MAX_PENDING);
+    expect(counters.nextId.toNumber()).to.equal(nextId);
+
+    // `openRedeem` advances the local counter before the call, so the id the
+    // refused attempt used is the counter's value *now*; the book must not have
+    // moved past it.
+    const attempted = nextId;
+    try {
+      await openRedeem(addr0, D_MIN);
+      expect.fail("the cap must refuse another redemption");
+    } catch (e: any) {
+      expect(String(e)).to.contain("TooManyPendingRedemptions");
+    }
+    counters = await program.account.redeemBook.fetch(book);
+    expect(counters.pending.toNumber()).to.equal(MAX_PENDING);
+    expect(counters.nextId.toNumber()).to.equal(attempted);
+  });
+});

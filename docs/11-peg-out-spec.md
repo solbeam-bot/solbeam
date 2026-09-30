@@ -1,7 +1,11 @@
 # 11. Peg-out — spec and default parameters
 
-**Status: designed, not built.** This specifies the redemption half so it can be built against a
-config, and it fixes the `po.*` defaults that were `open`.
+**Status: built (PoC), except step 4.** `initiate_redeem`, `cancel_redeem`, `claim_payout` and
+`settle_redeem` are in the program, and the `po.*` defaults that were `open` are fixed and generated
+into it from `config/params.json`. **Membership** — who is obliged to pay — is still not built, so
+every redemption times out into a cancellation until a federation exists. `po.deadline` ships as a
+stored, timelock-mutable `Config` field defaulting to 216,000 slots, so the deadline is policy rather
+than a constant.
 
 **Why this matters more than any other remaining gap:** the bridge is currently **one-way**. Solana
 verifies BSV, so a peg-in is trustless. **A peg-out relies on a federation member paying BSV**, and

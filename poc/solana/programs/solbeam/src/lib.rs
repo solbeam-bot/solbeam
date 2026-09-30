@@ -33,7 +33,9 @@ use anchor_lang::solana_program::bpf_loader_upgradeable;
 // arguments, so it cannot be created by an Anchor `init` constraint).
 use anchor_lang::Discriminator;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount, Transfer};
+use anchor_spl::token::{
+    self, Burn, CloseAccount, Mint, MintTo, Token, TokenAccount, Transfer,
+};
 // Solana 3.x moved hashing out of `solana_program` entirely — there is no
 // `solana_program::hash` — and anchor_lang re-exports no replacement. This
 // crate is already in the tree transitively; on the SBF target it calls the
@@ -203,6 +205,54 @@ pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 /// lifetimes, and conflating them would make one of the two unusable.
 pub const SPENT_OUTPOINT_SEED: &[u8] = b"spent_outpoint";
 
+/// Seed prefix of a **pending redemption**: `[b"redeem", id_le]`.
+///
+/// The whole of the peg-out's escrow state: who is redeeming, how much is
+/// escrowed, the BSV address the payout must pay, when the member's deadline
+/// expires, and — once a payout has been proven — the block it was proven
+/// against. Doc 11 §2's "escrow, not an immediate burn" is this account plus
+/// [`REDEEM_ESCROW_SEED`]: the tokens still exist while the BSV has not moved,
+/// so `supply ≤ reserve` holds at every point in between.
+///
+/// The id is a **global counter** from [`RedeemBook`] rather than a per-holder
+/// nonce, deliberately: every redemption is then `[b"redeem", 0..]`, so a
+/// permissionless `cancel_redeem` / `claim_payout` / `settle_redeem` can find
+/// the item without knowing the holder's key. A per-holder seed would make the
+/// permissionless paths depend on an off-chain index of holders.
+pub const REDEEM_SEED: &[u8] = b"redeem";
+
+/// Seed prefix of the **escrow token account**: `[b"redeem_escrow", id_le]`.
+///
+/// A program-owned (PDA-authority) token account, one per redemption. It is
+/// separate from [`REDEEM_SEED`] because a Solana account is owned either by
+/// this program (data) or by the token program (tokens), never both — the
+/// metadata lives in the pending account and the tokens in this one.
+pub const REDEEM_ESCROW_SEED: &[u8] = b"redeem_escrow";
+
+/// Seed of the singleton **redemption book**: `[b"redeem_book"]`.
+///
+/// It carries the two counters the escrow cannot: the next redemption id (so
+/// ids are sequential and discoverable) and the number of redemptions pending
+/// right now (so `po.max_pending` is a bound the program actually enforces).
+/// A singleton with a fixed seed, exactly like [`CONFIG_SEED`], so a caller
+/// cannot point the count at an account of its own.
+pub const REDEEM_BOOK_SEED: &[u8] = b"redeem_book";
+
+/// Seed prefix of a **claimed payout outpoint**: `[b"payout_nullifier", txid,
+/// vout_le]`.
+///
+/// This is the answer to a defect the vault audit already named (W5: *"payout
+/// proofs were replayable — one payment settled every redemption with the same
+/// amount and destination"*). A proof that address `X` was paid `v` is not
+/// bound to a redemption by anything in the BSV transaction, so without a
+/// record on the Solana side the same payment settles every pending redemption
+/// that names `X` with a small enough amount — the second holder's escrow is
+/// burned without them being paid. The account records **which redemption** the
+/// outpoint settled, so it may be re-submitted for the same redemption (a reorg
+/// can re-include the transaction at another height) but never for a different
+/// one.
+pub const PAYOUT_NULLIFIER_SEED: &[u8] = b"payout_nullifier";
+
 /// How long a checkpoint or pause change must sit pending before it may be
 /// executed, in slots. **This is the F4 fix's number.**
 ///
@@ -270,6 +320,38 @@ pub use params::MAX_ACCOUNT_CREATE;
 /// about 12 headers of 80 bytes. The earlier `push_fork` failed precisely
 /// because it ignored this ceiling and tried to send 72.
 pub use params::MAX_FORK_BATCH;
+
+/// **The peg-out's numbers, from the same generated sheet.**
+///
+/// * [`PAYOUT_CONFIRMATIONS`] (`po.payout_confirmations`) — how deep the payout
+///   must be before it is provable. Lower than the mint's 12 because the burn
+///   still faces a challenge window, so depth is not the only protection.
+/// * [`CHALLENGE_WINDOW`] (`po.challenge_window`) — BSV blocks that must pass
+///   over the *staging block* before the burn executes. Deliberately the same
+///   number as the vault's designed maturity: both are "how long before we
+///   believe the chain".
+/// * [`REDEEM_DEADLINE_SLOTS`] (`po.deadline`) — the **default** the `Config`
+///   account is created with. It is a slot count, not a BSV height, because a
+///   deadline that cannot advance is not a deadline: if the header feed stalls,
+///   a height-based deadline would never expire and the holder's funds would
+///   freeze (doc 11 §4). It ships as a stored, timelock-mutable `Config` field
+///   for the same reason `v.maturity_blocks` does — so the policy can move
+///   without a redeploy, and so the suite can reach the guard.
+/// * [`CANCEL_GRACE_SLOTS`] (`po.cancel_grace`) — an extra delay on top of the
+///   deadline before cancellation. Zero: cancellation is immediate on expiry.
+/// * [`REDEEM_D_MIN`] (`po.d_min`) — the minimum redemption, in base units
+///   (0.01 BSV), so a claim's proof is worth the fees it costs to settle.
+/// * [`MAX_PENDING_REDEMPTIONS`] (`po.max_pending`) — the cap on concurrent
+///   pending redemptions, so the escrow cannot make per-instruction work
+///   unbounded.
+/// * [`REDEEM_FEE_BP`] (`fee.redeem_bp`) — the gross peg-out fee in basis
+///   points. It needs no account: the holder receives `A − fee`, the reserve
+///   falls by `A − fee`, the supply falls by `A`, so the ratio improves by the
+///   fee and the members keep BSV they did not have to pay out (doc 11 §3).
+pub use params::{
+    CANCEL_GRACE_SLOTS, CHALLENGE_WINDOW, MAX_PENDING_REDEMPTIONS,
+    PAYOUT_CONFIRMATIONS, REDEEM_DEADLINE_SLOTS, REDEEM_D_MIN, REDEEM_FEE_BP,
+};
 
 const _: () = assert!(
     LightClient::SPACE <= MAX_ACCOUNT_CREATE,
@@ -372,6 +454,7 @@ pub mod solbeam {
         // `AuthorityChange::SetMaturity`.
         let config = &mut ctx.accounts.config;
         config.maturity_blocks = params::DEFAULT_MATURITY_BLOCKS;
+        config.redeem_deadline_slots = params::REDEEM_DEADLINE_SLOTS;
         config.bump = ctx.bumps.config;
 
         msg!(
@@ -1465,6 +1548,13 @@ pub mod solbeam {
                 ctx.accounts.config.maturity_blocks = *blocks;
                 msg!("SOLBEAM maturity_blocks set to {}", blocks);
             }
+            // The peg-out deadline, through the same timelocked path. Same rule
+            // as maturity: future redemptions only, because each item records
+            // the deadline it was created with.
+            AuthorityChange::SetRedeemDeadline { slots } => {
+                ctx.accounts.config.redeem_deadline_slots = *slots;
+                msg!("SOLBEAM redeem_deadline_slots set to {}", slots);
+            }
         }
 
         emit!(AuthorityChangeExecuted {
@@ -1528,6 +1618,414 @@ pub mod solbeam {
             txid,
             vout,
             deposit_height,
+        });
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // peg-out — the redemption half (doc 11)
+    // -----------------------------------------------------------------------
+    //
+    // The shape is the vault's, applied to the other direction: initiate,
+    // cancel-on-timeout, claim against the light client, wait, settle. Steps
+    // 1–3 are built here; step 4 (membership — who is obliged to pay) is not,
+    // and doc 11 §6 records that every redemption therefore times out into a
+    // cancellation until a federation exists.
+
+    /// **Escrow** the holder's `solBSV` and name the BSV address the payout
+    /// must pay.
+    ///
+    /// No burn happens here, and that is the whole point (doc 11 §2). A burn is
+    /// final; a burn at step 1 would destroy the holder's claim on the reserve
+    /// before any BSV had moved, so a member who then failed to pay would leave
+    /// them with nothing. The tokens move to a program-owned escrow keyed on the
+    /// redemption's `id`, where they stay until the payout is proven and the
+    /// challenge window has passed (`settle_redeem`) or the deadline expires
+    /// (`cancel_redeem`).
+    ///
+    /// **`id` must be `RedeemBook::next_id`.** Requiring the next counter value
+    /// rather than accepting any unused id is what keeps the redemptions
+    /// enumerable — `[b"redeem", 0]`, `[b"redeem", 1]`, … — which is what makes
+    /// the three permissionless paths above usable by anyone rather than only by
+    /// an off-chain index that knows every holder. Two callers racing for the
+    /// same id cannot both win: the PDA is the same account, so one transaction
+    /// fails, and the loser retries at the new counter.
+    ///
+    /// The **fee is recorded on the item**, not recomputed at claim time, for
+    /// the same reason a staged mint records `maturity_at_deposit`: a later
+    /// parameter change must not change what an in-flight redemption is owed.
+    /// The payout proof must show at least `amount − fee`.
+    ///
+    /// `bsv_address` is the **20-byte HASH160** the base58 address encodes — the
+    /// only part that determines the output script, and the only part the claim
+    /// needs to compare against. Parsing base58check on-chain would add a
+    /// decoder and a checksum check on the mint path for no additional
+    /// guarantee: the program can only pay the script the hash determines.
+    pub fn initiate_redeem(
+        ctx: Context<InitiateRedeem>,
+        id: u64,
+        amount: u64,
+        bsv_address: [u8; 20],
+    ) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        require!(!lc.paused, SolbeamError::Paused);
+        require!(amount >= REDEEM_D_MIN, SolbeamError::BelowMinimumRedeem);
+
+        let book = &mut ctx.accounts.book;
+        require!(id == book.next_id, SolbeamError::WrongRedeemId);
+        require!(
+            book.pending < MAX_PENDING_REDEMPTIONS,
+            SolbeamError::TooManyPendingRedemptions
+        );
+
+        let fee = redeem_fee(amount)?;
+        let payout_min = amount.checked_sub(fee).ok_or(SolbeamError::Overflow)?;
+        require!(payout_min > 0, SolbeamError::BelowMinimumRedeem);
+
+        let now = Clock::get()?.slot;
+        // The deadline is recorded **now**, from the policy in force now. A
+        // later governance change moves the policy for future redemptions and
+        // cannot shorten or extend this one — the same rule maturity follows.
+        let deadline_slot = now
+            .checked_add(ctx.accounts.config.redeem_deadline_slots)
+            .and_then(|s| s.checked_add(CANCEL_GRACE_SLOTS))
+            .ok_or(SolbeamError::Overflow)?;
+
+        let pending = &mut ctx.accounts.pending;
+        pending.holder = ctx.accounts.holder.key();
+        pending.amount = amount;
+        pending.fee = fee;
+        pending.bsv_address = bsv_address;
+        pending.initiated_slot = now;
+        pending.deadline_slot = deadline_slot;
+        pending.payout_height = 0;
+        pending.payout_hash = [0u8; 32];
+        pending.bump = ctx.bumps.pending;
+
+        // The escrow is a program-owned (light-client-authority) token account,
+        // so no operator key can move it; the holder's authority is used only
+        // for the transfer in.
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.holder_token_account.to_account_info(),
+                    to: ctx.accounts.escrow.to_account_info(),
+                    authority: ctx.accounts.holder.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+
+        book.next_id = book.next_id.checked_add(1).ok_or(SolbeamError::Overflow)?;
+        book.pending = book.pending.checked_add(1).ok_or(SolbeamError::Overflow)?;
+        book.bump = ctx.bumps.book;
+
+        emit!(RedeemInitiated {
+            id,
+            holder: pending.holder,
+            amount,
+            fee,
+            bsv_address,
+            deadline_slot,
+        });
+        msg!(
+            "SOLBEAM redemption {} initiated: {} base units escrowed, fee {}, deadline slot {}",
+            id,
+            amount,
+            fee,
+            deadline_slot
+        );
+        Ok(())
+    }
+
+    /// Return an escrowed redemption to its holder once the deadline has
+    /// passed. **Permissionless**: the caller takes the closed accounts' rent,
+    /// which is what makes a failed peg-out recoverable without the holder
+    /// having to act.
+    ///
+    /// Two things must be true:
+    ///
+    /// * **the deadline has passed** — `Clock::slot >= deadline_slot`. The clock
+    ///   is a Solana slot, deliberately: a header-height deadline would never
+    ///   expire if the feed stalled, and the holder's funds would freeze with it
+    ///   (doc 11 §4/§6);
+    /// * **no live payout has been claimed** — if a claim is staged and the
+    ///   light client still holds the block it was proven against, the member
+    ///   has paid and the escrow is theirs to burn, not the holder's to
+    ///   withdraw. This is the fix for V2 (`cancel_redeem` raced
+    ///   `settle_redeem`): once a payout is staged, the two exits are mutually
+    ///   exclusive, so the "paid **and** refunded" case the old design made
+    ///   certain cannot arise.
+    ///
+    /// **A reorged payout is cancellable.** If the client's stored hash at the
+    /// payout's height no longer equals the one the claim was proven against,
+    /// the BSV did not stay paid, and the holder is made whole rather than left
+    /// with an escrow that no instruction could resolve (W6: a one-way latch
+    /// with no resolver). This is what the challenge window is *for*.
+    ///
+    /// The amount returned is `pending.amount` — **unchanged**, no fee: nothing
+    /// was paid, so nothing is charged.
+    pub fn cancel_redeem(ctx: Context<CancelRedeem>, id: u64) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        let pending = &ctx.accounts.pending;
+        let now = Clock::get()?.slot;
+        require!(now >= pending.deadline_slot, SolbeamError::DeadlineNotReached);
+
+        if pending.payout_height != 0 {
+            let reorged = match lc.hash_at(pending.payout_height) {
+                Some(hash) => hash != pending.payout_hash,
+                // Height gone from the window: it cannot be shown reorged, so
+                // the claim stands and the escrow is not cancellable. This is
+                // the same "too old to check" boundary the vault's exits have.
+                None => false,
+            };
+            require!(reorged, SolbeamError::RedeemClaimed);
+        }
+
+        // The destination is derived from `holder`, so a caller that supplied a
+        // different account would send the tokens somewhere else. Pinned to the
+        // holder recorded at initiation.
+        require!(
+            ctx.accounts.holder.key() == pending.holder,
+            SolbeamError::HolderMismatch
+        );
+
+        let bump = lc.bump;
+        let seeds: &[&[u8]] = &[b"light_client", &[bump]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.escrow.to_account_info(),
+                    to: ctx.accounts.holder_token_account.to_account_info(),
+                    authority: ctx.accounts.light_client.to_account_info(),
+                },
+                &[seeds],
+            ),
+            pending.amount,
+        )?;
+        close_escrow(
+            ctx.accounts.token_program.key(),
+            &ctx.accounts.escrow.to_account_info(),
+            &ctx.accounts.submitter.to_account_info(),
+            &ctx.accounts.light_client.to_account_info(),
+            bump,
+        )?;
+
+        ctx.accounts.book.pending = ctx
+            .accounts
+            .book
+            .pending
+            .checked_sub(1)
+            .ok_or(SolbeamError::Overflow)?;
+
+        emit!(RedeemCancelled {
+            id,
+            holder: pending.holder,
+            amount: pending.amount,
+        });
+        Ok(())
+    }
+
+    /// Prove, through the **existing light client**, that the named address was
+    /// paid. Permissionless: the holder does not depend on the member who owes
+    /// them, and a third party holding the proof can settle the redemption.
+    ///
+    /// The proof is the mint's proof pointed the other way — a raw legacy
+    /// transaction, a Merkle branch to the root of a header the client already
+    /// holds, and a depth check — with three differences that matter:
+    ///
+    /// * **the output must pay the address recorded at initiation**, not the
+    ///   reserve's deposit script. The stored 20-byte HASH160 is expanded to the
+    ///   canonical P2PKH script and compared byte for byte, so the check is
+    ///   against what the holder asked for and not against a caller's claim
+    ///   (this is V4: a settle that bound neither amount nor destination);
+    /// * **the amount is a floor, not an equality** — at least `amount − fee`.
+    ///   Overpayment is the member's business; underpayment is not a settlement;
+    /// * **the depth is `po.payout_confirmations`**, six blocks, lower than the
+    ///   mint's twelve because the burn that follows still faces a challenge
+    ///   window.
+    ///
+    /// The payout outpoint is recorded in a [`PayoutNullifier`] carrying **this
+    /// redemption's id**, so one BSV payment cannot settle two redemptions that
+    /// name the same address and amount (W5). It may be re-submitted for the
+    /// *same* redemption, because a reorg can re-include the transaction at a
+    /// different height and the member should not have to pay twice for the
+    /// chain's own rearrangement.
+    ///
+    /// Staging is a latch on the pending account: `payout_height` and
+    /// `payout_hash`. It is what `settle_redeem` and `cancel_redeem` resolve
+    /// against, and it is deliberately **not** final — a reorg clears it in
+    /// effect, and a re-claim overwrites it.
+    pub fn claim_payout(
+        ctx: Context<ClaimPayout>,
+        id: u64,
+        proof: PayoutProof,
+    ) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        require!(!lc.paused, SolbeamError::Paused);
+        let pending = &mut ctx.accounts.pending;
+
+        // A claim is already staged and still matches the client's window: this
+        // is a double claim, not a re-claim after a reorg. (If the stored hash
+        // no longer matches, or the height has left the window, the claim is
+        // void and a fresh proof — or the re-included transaction — may replace
+        // it.)
+        let live_claim = pending.payout_height != 0
+            && lc.hash_at(pending.payout_height) == Some(pending.payout_hash);
+        require!(!live_claim, SolbeamError::PayoutAlreadyClaimed);
+
+        // 1. The header must still be inside the window.
+        let index = lc
+            .index_of(proof.height)
+            .ok_or(SolbeamError::HeaderNotInWindow)?;
+        let record = lc
+            .headers
+            .get(index)
+            .ok_or(SolbeamError::HeaderNotInWindow)?;
+
+        // 2. The supplied header must be the canonical block at that height.
+        require!(
+            header_hash(&proof.header) == record.hash,
+            SolbeamError::HeaderMismatch
+        );
+        let merkle_root = read32(&proof.header, 36);
+
+        // 3. The transaction must be the one the proof names, and must be in
+        //    that block.
+        let txid = header_hash_of_bytes(&proof.tx);
+        require!(txid == proof.txid, SolbeamError::TxidMismatch);
+        require!(
+            fold_branch(proof.txid, proof.index, &proof.branch) == merkle_root,
+            SolbeamError::BadMerkleProof
+        );
+
+        // 4. Deep enough. `po.payout_confirmations`.
+        let confirmations = lc
+            .tip_height
+            .saturating_sub(proof.height)
+            .saturating_add(1);
+        require!(
+            confirmations >= PAYOUT_CONFIRMATIONS,
+            SolbeamError::InsufficientConfirmations
+        );
+
+        // 5. The output must pay the holder's address, and carry at least what
+        //    the redemption is owed.
+        let outputs = parse_outputs(&proof.tx)?;
+        require!(
+            (proof.vout as usize) < outputs.len(),
+            SolbeamError::NoSuchOutput
+        );
+        let (value, script) = &outputs[proof.vout as usize];
+        require!(
+            is_p2pkh_for(script, &pending.bsv_address),
+            SolbeamError::PayoutAddressMismatch
+        );
+        let payout_min = pending
+            .amount
+            .checked_sub(pending.fee)
+            .ok_or(SolbeamError::Overflow)?;
+        require!(*value >= payout_min, SolbeamError::PayoutAmountTooLow);
+        require!(*value > 0, SolbeamError::ZeroValue);
+
+        // 6. The outpoint has not already settled a *different* redemption.
+        stage_payout_outpoint(
+            &ctx.accounts.payout_nullifier.to_account_info(),
+            &ctx.accounts.submitter.to_account_info(),
+            ctx.program_id,
+            proof.txid,
+            proof.vout,
+            id,
+        )?;
+
+        pending.payout_height = proof.height;
+        pending.payout_hash = record.hash;
+
+        emit!(PayoutClaimed {
+            id,
+            txid: proof.txid,
+            vout: proof.vout,
+            height: proof.height,
+            amount: *value,
+            payout_min,
+        });
+        Ok(())
+    }
+
+    /// **Burn** the escrow once the payout has survived the challenge window.
+    ///
+    /// The predicate is the release/burn pair of the mint vault turned around:
+    ///
+    /// * **a payout was claimed** — otherwise `PayoutNotClaimed`;
+    /// * **the client still holds the payout's height and its stored hash still
+    ///   equals the claim's** — a reorg is the one thing the window exists to
+    ///   catch, and if it happened the burn must not execute (`PayoutReorged`);
+    /// * **`po.challenge_window` BSV blocks have passed over the staging
+    ///   block** — `tip_height >= payout_height + W`, so a transient fork cannot
+    ///   burn a good claim before it is buried.
+    ///
+    /// Permissionless, like every other step: the caller keeps the closed
+    /// accounts' rent, which is the reward for doing the housekeeping. The
+    /// supply falls by the full `amount` while the reserve falls by
+    /// `amount − fee`, so the reserve-to-supply ratio improves by the fee
+    /// (doc 11 §3).
+    pub fn settle_redeem(ctx: Context<SettleRedeem>, id: u64) -> Result<()> {
+        let lc = &ctx.accounts.light_client;
+        let pending = &ctx.accounts.pending;
+
+        require!(pending.payout_height != 0, SolbeamError::PayoutNotClaimed);
+        let current = lc
+            .hash_at(pending.payout_height)
+            .ok_or(SolbeamError::PayoutHeightNotInWindow)?;
+        require!(
+            current == pending.payout_hash,
+            SolbeamError::PayoutReorged
+        );
+        let settlable_at = pending
+            .payout_height
+            .checked_add(CHALLENGE_WINDOW)
+            .ok_or(SolbeamError::Overflow)?;
+        require!(
+            lc.tip_height >= settlable_at,
+            SolbeamError::ChallengeWindowNotElapsed
+        );
+
+        let bump = lc.bump;
+        let seeds: &[&[u8]] = &[b"light_client", &[bump]];
+        token::burn(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Burn {
+                    mint: ctx.accounts.mint.to_account_info(),
+                    from: ctx.accounts.escrow.to_account_info(),
+                    authority: ctx.accounts.light_client.to_account_info(),
+                },
+                &[seeds],
+            ),
+            pending.amount,
+        )?;
+        close_escrow(
+            ctx.accounts.token_program.key(),
+            &ctx.accounts.escrow.to_account_info(),
+            &ctx.accounts.submitter.to_account_info(),
+            &ctx.accounts.light_client.to_account_info(),
+            bump,
+        )?;
+
+        ctx.accounts.book.pending = ctx
+            .accounts
+            .book
+            .pending
+            .checked_sub(1)
+            .ok_or(SolbeamError::Overflow)?;
+
+        emit!(RedeemSettled {
+            id,
+            holder: pending.holder,
+            amount: pending.amount,
+            payout_height: pending.payout_height,
         });
         Ok(())
     }
@@ -2687,6 +3185,160 @@ fn create_staged_mint<'info>(
     Ok(())
 }
 
+// -- the peg-out's helpers --------------------------------------------------
+
+/// The peg-out fee on `amount`, in base units: `fee.redeem_bp` basis points.
+///
+/// The fee needs no account and is not transferred anywhere: the holder is paid
+/// `amount − fee` in BSV while the whole `amount` is burned, so the reserve
+/// falls by less than the supply and the members keep the difference inside the
+/// reserve they already hold (doc 11 §3). Rounded **down**, which favours the
+/// holder by at most one base unit.
+fn redeem_fee(amount: u64) -> Result<u64> {
+    let scaled = amount
+        .checked_mul(REDEEM_FEE_BP)
+        .ok_or(SolbeamError::Overflow)?;
+    Ok(scaled / 10_000)
+}
+
+/// True when `script` is the canonical P2PKH script for `hash160`:
+/// `76 a9 14 <hash160> 88 ac`.
+///
+/// The payout destination is stored as its 20-byte hash and expanded here, so
+/// the claim compares against the *stored* address rather than against anything
+/// the caller supplies (V4).
+pub fn is_p2pkh_for(script: &[u8], hash160: &[u8; 20]) -> bool {
+    script.len() == 25
+        && script[0] == 0x76
+        && script[1] == 0xa9
+        && script[2] == 0x14
+        && &script[3..23] == &hash160[..]
+        && script[23] == 0x88
+        && script[24] == 0xac
+}
+
+/// Close a program-owned escrow token account, returning its rent to
+/// `destination`.
+///
+/// Not Anchor's `close` constraint: the escrow's **authority is the light client
+/// PDA**, and a `close` on a token account has to be signed by that authority.
+/// Signing the CPI explicitly with the light client's seeds is the same thing
+/// `burn` and `transfer` already do here, and it keeps the authority's identity
+/// in one place rather than in a constraint that would have to re-derive it.
+fn close_escrow<'info>(
+    token_program: Pubkey,
+    escrow: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    light_client: &AccountInfo<'info>,
+    bump: u8,
+) -> Result<()> {
+    let seeds: &[&[u8]] = &[b"light_client", &[bump]];
+    token::close_account(CpiContext::new_with_signer(
+        token_program,
+        CloseAccount {
+            account: escrow.clone(),
+            destination: destination.clone(),
+            authority: light_client.clone(),
+        },
+        &[seeds],
+    ))
+}
+
+/// Record that a payout outpoint settled a redemption, refusing a second
+/// redemption for the same outpoint.
+///
+/// The mirror of [`create_nullifier`] in construction — `transfer` + `allocate`
+/// + `assign`, so a lamport sent to this public PDA cannot block a claim, and
+/// the address is re-derived from `(txid, vout)` before anything is touched.
+///
+/// It differs in one respect, and that is the W5 fix: the record stores **which
+/// redemption** the outpoint settled. A record that merely existed would refuse
+/// a legitimate re-claim when a reorg re-includes the same transaction at a
+/// different height; a record that did not exist would let one payment settle
+/// every redemption naming the same address. Storing the id gives both: the
+/// same redemption may replace its own claim, and no other redemption may use
+/// it.
+fn stage_payout_outpoint<'info>(
+    nullifier: &AccountInfo<'info>,
+    submitter: &AccountInfo<'info>,
+    program_id: &Pubkey,
+    txid: [u8; 32],
+    vout: u32,
+    redemption_id: u64,
+) -> Result<()> {
+    let vout_bytes = vout.to_le_bytes();
+    let (expected, bump) = Pubkey::find_program_address(
+        &[PAYOUT_NULLIFIER_SEED, txid.as_ref(), &vout_bytes],
+        program_id,
+    );
+    require!(
+        nullifier.key() == expected,
+        SolbeamError::WrongPayoutNullifier
+    );
+
+    // Already claimed. Only this program can write here, so a non-empty account
+    // at the derived address is one of our records and its first field is the
+    // redemption id `create_payout_nullifier` wrote.
+    if !nullifier.data_is_empty() {
+        require!(
+            nullifier.owner == program_id,
+            SolbeamError::WrongPayoutNullifier
+        );
+        let data = nullifier.try_borrow_data()?;
+        let stored = u64::from_le_bytes(data[8..16].try_into().unwrap());
+        require!(
+            stored == redemption_id,
+            SolbeamError::PayoutOutpointReused
+        );
+        return Ok(());
+    }
+
+    let seeds: &[&[u8]] = &[PAYOUT_NULLIFIER_SEED, txid.as_ref(), &vout_bytes, &[bump]];
+    let rent = Rent::get()?.minimum_balance(PayoutNullifier::SPACE);
+    let existing = nullifier.lamports();
+    if existing < rent {
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                anchor_lang::system_program::ID,
+                anchor_lang::system_program::Transfer {
+                    from: submitter.clone(),
+                    to: nullifier.clone(),
+                },
+            ),
+            rent - existing,
+        )?;
+    }
+
+    anchor_lang::system_program::allocate(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Allocate {
+                account_to_allocate: nullifier.clone(),
+            },
+            &[seeds],
+        ),
+        PayoutNullifier::SPACE as u64,
+    )?;
+    anchor_lang::system_program::assign(
+        CpiContext::new_with_signer(
+            anchor_lang::system_program::ID,
+            anchor_lang::system_program::Assign {
+                account_to_assign: nullifier.clone(),
+            },
+            &[seeds],
+        ),
+        program_id,
+    )?;
+
+    // Field for field, as the other hand-built accounts are: discriminator,
+    // `redemption_id: u64`, `bump: u8`.
+    let mut data = nullifier.try_borrow_mut_data()?;
+    data[..8].copy_from_slice(PayoutNullifier::DISCRIMINATOR);
+    data[8..16].copy_from_slice(&redemption_id.to_le_bytes());
+    data[16] = bump;
+    Ok(())
+}
+
 // -- small helpers ----------------------------------------------------------
 
 fn read32(buf: &[u8], at: usize) -> [u8; 32] {
@@ -2737,6 +3389,30 @@ pub struct DepositClaim {
     pub header: [u8; HEADER_LEN],
     /// The raw deposit transaction, so the claimed output can be re-derived
     /// rather than trusted.
+    pub tx: Vec<u8>,
+}
+
+/// Everything the producer supplies to prove a **payout**, and none of it is
+/// believed. The mirror of [`DepositClaim`], pointed at the redemption's named
+/// address instead of the reserve script.
+///
+/// There is deliberately **no amount field**: the amount is a floor derived from
+/// the stored redemption (`amount − fee`), so a caller cannot inflate what a
+/// payment is worth by claiming it is worth more. The output's own value is read
+/// from the transaction.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct PayoutProof {
+    /// Height of the block the payout is in. Must be inside the window.
+    pub height: u64,
+    /// Internal byte order, matching the Python reference and the stored records.
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub index: u32,
+    pub branch: Vec<[u8; 32]>,
+    /// The raw 80-byte header of the block at `height`. Checked against the
+    /// window's stored hash, so only the canonical block passes.
+    pub header: [u8; HEADER_LEN],
+    /// The raw payout transaction, so the output can be re-derived.
     pub tx: Vec<u8>,
 }
 
@@ -2837,6 +3513,107 @@ impl StagedMint {
     pub const SPACE: usize = 8 + 32 + 8 + 8 + 32 + 8 + 1;
 }
 
+/// One redemption in flight: **escrowed `solBSV`, a named BSV address, and the
+/// state the two exits resolve against.**
+///
+/// Created by [`initiate_redeem`] and closed by exactly one of
+/// [`cancel_redeem`] (the deadline passed with no payout) or [`settle_redeem`]
+/// (a payout was proven and the challenge window passed). No third instruction
+/// closes it, so the escrow cannot leak out of the program by another path.
+///
+/// Every field is a **stored** fact rather than a re-derivation, because the
+/// policy in force when the holder committed is what they are owed: `fee` and
+/// `deadline_slot` are copied from the parameters as they were at initiation,
+/// exactly as [`StagedMint::maturity_at_deposit`] is.
+#[account]
+pub struct PendingRedeem {
+    /// Who receives the escrow back if the redemption is cancelled, and whose
+    /// associated token account is the only valid cancellation destination.
+    pub holder: Pubkey,
+    /// The full amount escrowed, and the amount burned on settlement. The
+    /// holder receives `amount − fee` in BSV from the reserve, which is why the
+    /// two numbers are kept apart here.
+    pub amount: u64,
+    /// The fee that applied at initiation, in base units. Copied, never
+    /// recomputed: a later `fee.redeem_bp` change must not move what this
+    /// redemption is owed.
+    pub fee: u64,
+    /// The **HASH160** of the BSV address named at initiation. The payout must
+    /// pay the canonical P2PKH script this expands to, so the destination is
+    /// bound at initiation and checked at claim (V4).
+    pub bsv_address: [u8; 20],
+    /// `Clock::slot` at initiation, recorded so the deadline can be audited
+    /// rather than inferred.
+    pub initiated_slot: u64,
+    /// `initiated_slot + Config::redeem_deadline_slots + po.cancel_grace`.
+    /// After this slot — and only then — [`cancel_redeem`] may return the
+    /// escrow.
+    pub deadline_slot: u64,
+    /// The BSV height the payout was proven at, or **0 for "no claim staged"**.
+    /// The zero sentinel is safe because a proof is always against a block at
+    /// height ≥ 1.
+    pub payout_height: u64,
+    /// The hash of the block at `payout_height` when the payout was claimed.
+    /// [`settle_redeem`] burns only while the client's own window still holds
+    /// this same hash; [`cancel_redeem`] returns the escrow only when it does
+    /// not.
+    pub payout_hash: [u8; 32],
+    pub bump: u8,
+}
+
+impl PendingRedeem {
+    /// 8 discriminator + 32 holder + 8 amount + 8 fee + 20 address + 8 initiated
+    /// + 8 deadline + 8 payout height + 32 payout hash + 1 bump = 133 bytes.
+    pub const SPACE: usize = 8 + 32 + 8 + 8 + 20 + 8 + 8 + 8 + 32 + 1;
+}
+
+/// The redemption counter and the pending-redemption count. A singleton PDA
+/// (`[b"redeem_book"]`), so there is exactly one and no seed a caller can vary.
+///
+/// `next_id` makes redemptions sequentially keyed and therefore enumerable,
+/// which is what lets the three permissionless instructions work without an
+/// index of holders. `pending` is the count `po.max_pending` bounds: the cap is
+/// on *concurrent* escrows, so it is decremented on both exits.
+#[account]
+pub struct RedeemBook {
+    /// The id `initiate_redeem` must be called with next. Strictly increasing;
+    /// nothing ever writes it back.
+    pub next_id: u64,
+    /// How many [`PendingRedeem`] accounts are open right now.
+    pub pending: u64,
+    pub bump: u8,
+}
+
+impl RedeemBook {
+    /// 8 discriminator + 8 next_id + 8 pending + 1 bump = 25 bytes.
+    pub const SPACE: usize = 8 + 8 + 8 + 1;
+}
+
+/// The record that one BSV outpoint has settled one redemption.
+///
+/// One PDA per `(txid, vout)`, and it stores **which** redemption, not merely
+/// that the outpoint was used. That distinction is the whole point: an
+/// existence-only record would refuse a legitimate re-claim when a reorg
+/// re-includes the same transaction at a different height, while a
+/// per-redemption record (or none at all) lets one payment settle two
+/// redemptions that name the same address. Storing the id gives both — the same
+/// redemption may replace its own claim, and no other redemption may use it.
+///
+/// Written by hand (`transfer` + `allocate` + `assign`), exactly as
+/// [`DepositNullifier`] is, because its seeds come from instruction arguments
+/// rather than from fields Anchor's `seeds` can see.
+#[account]
+pub struct PayoutNullifier {
+    /// The [`PendingRedeem`] this outpoint settled.
+    pub redemption_id: u64,
+    pub bump: u8,
+}
+
+impl PayoutNullifier {
+    /// 8 discriminator + 8 redemption id + 1 bump = 17 bytes.
+    pub const SPACE: usize = 8 + 8 + 1;
+}
+
 /// The bridge's tunable policy: **only `maturity_blocks`, and only through the
 /// timelocked authority path.**
 ///
@@ -2851,12 +3628,24 @@ pub struct Config {
     /// **in BSV blocks**. 0 means no window at all: the vault is a pass-through
     /// and the protective window is absent.
     pub maturity_blocks: u64,
+    /// How long a redemption's member has to pay before the holder may cancel,
+    /// **in Solana slots**. Ships at `po.deadline` (216,000 ≈ 24 h) and moves
+    /// only through the timelocked authority path.
+    ///
+    /// It is a stored field rather than a bare constant for the same two
+    /// reasons `maturity_blocks` is: it is policy that should be raisable
+    /// without a redeploy, and a 24-hour constant cannot be reached by any test
+    /// on a local validator, so a constant would leave `cancel_redeem`'s only
+    /// real guard unexercised. **Defaults are recorded in
+    /// `config/params.json`; the program carries the default, not the parameter
+    /// itself.**
+    pub redeem_deadline_slots: u64,
     pub bump: u8,
 }
 
 impl Config {
-    /// 8 discriminator + 8 maturity + 1 bump = 17 bytes.
-    pub const SPACE: usize = 8 + 8 + 1;
+    /// 8 discriminator + 8 maturity + 8 redeem deadline + 1 bump = 25 bytes.
+    pub const SPACE: usize = 8 + 8 + 8 + 1;
 }
 
 /// The one change awaiting its timelock, and who proposed it.
@@ -2897,6 +3686,11 @@ pub enum AuthorityChange {
     /// was verified, so raising this cannot reach back and freeze a deposit
     /// already in flight.
     SetMaturity { blocks: u64 },
+    /// Set the peg-out deadline, in Solana slots. Applied to future redemptions
+    /// only: each [`PendingRedeem`] carries the `deadline_slot` computed when it
+    /// was initiated, so a change here cannot shorten or extend a redemption
+    /// already in flight.
+    SetRedeemDeadline { slots: u64 },
 }
 
 /// The bridge's deposit script, passed in so the check is against the account
@@ -3113,6 +3907,180 @@ pub struct BurnStaged<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+// ---------------------------------------------------------------------------
+// peg-out accounts
+// ---------------------------------------------------------------------------
+
+/// Escrow a holder's `solBSV` into a per-redemption, program-owned token
+/// account, and create the item that records the terms.
+///
+/// Three accounts are created: the singleton [`RedeemBook`] (on the first
+/// redemption only), the [`PendingRedeem`] item, and the escrow token account —
+/// both keyed on the sequential `id`. The holder signs and pays for all of
+/// them, so the escrow is genuinely the holder's and cannot be opened by a third
+/// party against their balance.
+#[derive(Accounts)]
+#[instruction(id: u64, amount: u64, bsv_address: [u8; 20])]
+pub struct InitiateRedeem<'info> {
+    #[account(mut)]
+    pub holder: Signer<'info>,
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    /// The deadline policy this redemption copies. Read once, at initiation.
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    /// The next id and the concurrent-redemption count. Created on the first
+    /// redemption; a singleton, so it cannot be re-pointed.
+    #[account(
+        init_if_needed,
+        payer = holder,
+        space = RedeemBook::SPACE,
+        seeds = [REDEEM_BOOK_SEED],
+        bump,
+    )]
+    pub book: Account<'info, RedeemBook>,
+    /// The item itself. `id` is an instruction argument, so the seeds are
+    /// expressible here — unlike the mint vault's, whose keys come from a
+    /// `DepositClaim`.
+    #[account(
+        init,
+        payer = holder,
+        space = PendingRedeem::SPACE,
+        seeds = [REDEEM_SEED, &id.to_le_bytes()],
+        bump,
+    )]
+    pub pending: Account<'info, PendingRedeem>,
+    #[account(mut, seeds = [b"mint"], bump)]
+    pub mint: Account<'info, Mint>,
+    /// The holder's own token account the escrow is drawn from. Created on
+    /// their behalf if they have never held `solBSV`.
+    #[account(
+        init_if_needed,
+        payer = holder,
+        associated_token::mint = mint,
+        associated_token::authority = holder,
+    )]
+    pub holder_token_account: Account<'info, TokenAccount>,
+    /// The escrow: a program-owned token account whose **authority is the light
+    /// client PDA**, so only this program can move or burn what is in it.
+    #[account(
+        init,
+        payer = holder,
+        seeds = [REDEEM_ESCROW_SEED, &id.to_le_bytes()],
+        bump,
+        token::mint = mint,
+        token::authority = light_client,
+    )]
+    pub escrow: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Return one escrowed redemption to its holder. Permissionless: the caller
+/// receives the closed accounts' rent.
+#[derive(Accounts)]
+#[instruction(id: u64)]
+pub struct CancelRedeem<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(mut, seeds = [REDEEM_BOOK_SEED], bump = book.bump)]
+    pub book: Account<'info, RedeemBook>,
+    /// Closed on success, so a redemption exists exactly once and cannot be
+    /// cancelled twice.
+    #[account(
+        mut,
+        seeds = [REDEEM_SEED, &id.to_le_bytes()],
+        bump = pending.bump,
+        close = submitter,
+    )]
+    pub pending: Account<'info, PendingRedeem>,
+    #[account(
+        mut,
+        seeds = [REDEEM_ESCROW_SEED, &id.to_le_bytes()],
+        bump,
+        token::mint = mint,
+        token::authority = light_client,
+    )]
+    pub escrow: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [b"mint"], bump)]
+    pub mint: Account<'info, Mint>,
+    /// Created on the holder's behalf if they have closed it, so the return
+    /// never depends on the holder having kept an account open.
+    #[account(
+        init_if_needed,
+        payer = submitter,
+        associated_token::mint = mint,
+        associated_token::authority = holder,
+    )]
+    pub holder_token_account: Account<'info, TokenAccount>,
+    /// CHECK: the destination is derived from this account, and its key is
+    /// checked against the pending item's stored `holder` before anything moves.
+    pub holder: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Prove a payout against the light client and stage the settlement.
+///
+/// `payout_nullifier` is an `UncheckedAccount` because its seeds come from the
+/// `PayoutProof`'s `(txid, vout)`, which an Anchor `seeds` constraint cannot
+/// see; the address is re-derived and compared inside [`stage_payout_outpoint`]
+/// before anything is read or created.
+#[derive(Accounts)]
+#[instruction(id: u64, proof: PayoutProof)]
+pub struct ClaimPayout<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(
+        mut,
+        seeds = [REDEEM_SEED, &id.to_le_bytes()],
+        bump = pending.bump,
+    )]
+    pub pending: Account<'info, PendingRedeem>,
+    /// CHECK: address re-derived from `(proof.txid, proof.vout)` and compared
+    /// against `PAYOUT_NULLIFIER_SEED` in `stage_payout_outpoint`.
+    #[account(mut)]
+    pub payout_nullifier: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Burn one settled escrow. Permissionless: the caller keeps the rent of the
+/// two accounts this closes.
+#[derive(Accounts)]
+#[instruction(id: u64)]
+pub struct SettleRedeem<'info> {
+    #[account(seeds = [b"light_client"], bump = light_client.bump)]
+    pub light_client: Account<'info, LightClient>,
+    #[account(mut, seeds = [REDEEM_BOOK_SEED], bump = book.bump)]
+    pub book: Account<'info, RedeemBook>,
+    #[account(
+        mut,
+        seeds = [REDEEM_SEED, &id.to_le_bytes()],
+        bump = pending.bump,
+        close = submitter,
+    )]
+    pub pending: Account<'info, PendingRedeem>,
+    #[account(
+        mut,
+        seeds = [REDEEM_ESCROW_SEED, &id.to_le_bytes()],
+        bump,
+        token::mint = mint,
+        token::authority = light_client,
+    )]
+    pub escrow: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [b"mint"], bump)]
+    pub mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub submitter: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
 #[event]
 pub struct ChainReorganised {
     pub from_height: u64,
@@ -3188,6 +4156,51 @@ pub struct NullifierPruned {
     pub txid: [u8; 32],
     pub vout: u32,
     pub deposit_height: u64,
+}
+
+/// A redemption has been opened and its `solBSV` escrowed. `fee` and
+/// `deadline_slot` are emitted because they are the terms **as they applied at
+/// initiation**, which is what the exits resolve against.
+#[event]
+pub struct RedeemInitiated {
+    pub id: u64,
+    pub holder: Pubkey,
+    pub amount: u64,
+    pub fee: u64,
+    pub bsv_address: [u8; 20],
+    pub deadline_slot: u64,
+}
+
+/// A redemption's deadline passed with no live payout, and the escrow was
+/// returned to the holder — **unchanged**, no fee.
+#[event]
+pub struct RedeemCancelled {
+    pub id: u64,
+    pub holder: Pubkey,
+    pub amount: u64,
+}
+
+/// A payout was proven against the light client and staged. `payout_min` is the
+/// floor the proof had to meet (`amount − fee`), emitted so the rule can be
+/// audited from the log.
+#[event]
+pub struct PayoutClaimed {
+    pub id: u64,
+    pub txid: [u8; 32],
+    pub vout: u32,
+    pub height: u64,
+    pub amount: u64,
+    pub payout_min: u64,
+}
+
+/// A settled redemption was burned, after the challenge window passed with the
+/// payout still canonical.
+#[event]
+pub struct RedeemSettled {
+    pub id: u64,
+    pub holder: Pubkey,
+    pub amount: u64,
+    pub payout_height: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -3451,6 +4464,36 @@ pub enum SolbeamError {
     OutpointAlreadyReported,
     #[msg("the reserve has spent this deposit's outpoint, so it cannot be minted")]
     DepositSpent,
+    #[msg("the redemption is below po.d_min")]
+    BelowMinimumRedeem,
+    #[msg("the redemption id is not the book's next id")]
+    WrongRedeemId,
+    #[msg("po.max_pending concurrent redemptions are already open")]
+    TooManyPendingRedemptions,
+    #[msg("the redemption deadline has not passed yet")]
+    DeadlineNotReached,
+    #[msg("a live payout has been claimed for this redemption, so it cannot be cancelled")]
+    RedeemClaimed,
+    #[msg("the cancel destination is not the redemption's recorded holder")]
+    HolderMismatch,
+    #[msg("no payout has been claimed for this redemption")]
+    PayoutNotClaimed,
+    #[msg("the client's stored hash at the payout's height has changed — the payout was reorged")]
+    PayoutReorged,
+    #[msg("the payout's block has left the header window, so it can no longer be checked")]
+    PayoutHeightNotInWindow,
+    #[msg("the payout has not yet been buried for po.challenge_window BSV blocks")]
+    ChallengeWindowNotElapsed,
+    #[msg("a live payout is already staged for this redemption")]
+    PayoutAlreadyClaimed,
+    #[msg("the output does not pay the redemption's BSV address")]
+    PayoutAddressMismatch,
+    #[msg("the output carries less than the redemption's amount minus its fee")]
+    PayoutAmountTooLow,
+    #[msg("the payout-nullifier account is not the PDA this (txid, vout) derives")]
+    WrongPayoutNullifier,
+    #[msg("this payout outpoint has already settled a different redemption")]
+    PayoutOutpointReused,
 }
 
 #[cfg(test)]
@@ -3547,12 +4590,14 @@ mod vault_layout_tests {
         assert_eq!(manual, borsh, "you must update create_staged_mint");
     }
 
-    /// `Config` is small enough to check the same way, and the maturity it
-    /// carries is read on the mint path before any token moves.
+    /// `Config` is small enough to check the same way, and both policy fields
+    /// it carries are read before any token moves: `maturity_blocks` on the
+    /// mint path, `redeem_deadline_slots` on the peg-out path.
     #[test]
-    fn config_layout_is_maturity_then_bump() {
+    fn config_layout_is_maturity_then_redeem_deadline_then_bump() {
         let c = Config {
             maturity_blocks: 1_234_567,
+            redeem_deadline_slots: 216_000,
             bump: 254,
         };
         let mut data = Vec::new();
@@ -3563,7 +4608,11 @@ mod vault_layout_tests {
             u64::from_le_bytes(data[8..16].try_into().unwrap()),
             c.maturity_blocks
         );
-        assert_eq!(data[16], c.bump);
+        assert_eq!(
+            u64::from_le_bytes(data[16..24].try_into().unwrap()),
+            c.redeem_deadline_slots
+        );
+        assert_eq!(data[24], c.bump);
     }
 
     /// The spent-outpoint record is the other account `create_spent_outpoint`
@@ -3585,5 +4634,107 @@ mod vault_layout_tests {
         manual[8] = s.bump;
 
         assert_eq!(manual, borsh, "you must update create_spent_outpoint");
+    }
+}
+
+/// The peg-out's hand-written layouts and its two pure functions.
+///
+/// `PendingRedeem` goes through Anchor's `init`, so it is Borsh on both sides
+/// and only needs its `SPACE` pinned to the fields it carries. `PayoutNullifier`
+/// is the one peg-out account `stage_payout_outpoint` writes by hand — for the
+/// same reason the nullifier and the spent record are written by hand, its seeds
+/// are instruction arguments — so its layout is compared against a real
+/// `AnchorSerialize` exactly as those two are.
+#[cfg(test)]
+mod pegout_tests {
+    use super::*;
+
+    #[test]
+    fn pending_redeem_space_matches_its_fields() {
+        let p = PendingRedeem {
+            holder: Pubkey::new_from_array([3u8; 32]),
+            amount: 0x0000_0001_2345_6789,
+            fee: 15_000,
+            bsv_address: [0x5a; 20],
+            initiated_slot: 999,
+            deadline_slot: 999 + REDEEM_DEADLINE_SLOTS,
+            payout_height: 968_376,
+            payout_hash: [0xcd; 32],
+            bump: 250,
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(PendingRedeem::DISCRIMINATOR);
+        AnchorSerialize::serialize(&p, &mut data).unwrap();
+        assert_eq!(data.len(), PendingRedeem::SPACE);
+    }
+
+    #[test]
+    fn payout_nullifier_manual_layout_matches_borsh() {
+        let n = PayoutNullifier {
+            redemption_id: 0x0000_0000_0000_002a,
+            bump: 249,
+        };
+        let mut borsh = Vec::new();
+        borsh.extend_from_slice(PayoutNullifier::DISCRIMINATOR);
+        AnchorSerialize::serialize(&n, &mut borsh).unwrap();
+        assert_eq!(borsh.len(), PayoutNullifier::SPACE);
+
+        // The two byte writes `stage_payout_outpoint` performs.
+        let mut manual = vec![0u8; PayoutNullifier::SPACE];
+        manual[..8].copy_from_slice(PayoutNullifier::DISCRIMINATOR);
+        manual[8..16].copy_from_slice(&n.redemption_id.to_le_bytes());
+        manual[16] = n.bump;
+
+        assert_eq!(manual, borsh, "you must update stage_payout_outpoint");
+    }
+
+    /// The fee is `fee.redeem_bp` basis points of the amount, rounded down, and
+    /// the payout floor is what is left. The arithmetic is checked here because
+    /// it decides what a claim must prove and a wrong rounding would move real
+    /// value for every redemption at once.
+    #[test]
+    fn redeem_fee_is_basis_points_rounded_down() {
+        assert_eq!(REDEEM_FEE_BP, 30);
+        // 0.01 BSV at 30 bp: 3,000 base units, floor 997,000.
+        assert_eq!(redeem_fee(1_000_000).unwrap(), 3_000);
+        // 1 BSV at 30 bp.
+        assert_eq!(redeem_fee(100_000_000).unwrap(), 300_000);
+        // Rounds down: 1,001 * 30 / 10,000 = 3.003 -> 3.
+        assert_eq!(redeem_fee(1_001).unwrap(), 3);
+        // The floor is the minimum itself, so the value moved is always the fee.
+        let amount = 5_000_000u64;
+        assert_eq!(amount - redeem_fee(amount).unwrap(), 4_985_000);
+        // No overflow at the whole-supply scale: 21M BSV in base units.
+        assert_eq!(redeem_fee(2_100_000_000_000_000).unwrap(), 6_300_000_000_000);
+    }
+
+    /// The stored address must expand to exactly the canonical P2PKH script, and
+    /// nothing else may pass — including a P2PKH for a different hash, the
+    /// reserve's own multisig, and a one-byte-mutated script.
+    #[test]
+    fn payout_script_must_be_the_stored_addresses_p2pkh() {
+        let hash = [0x11u8; 20];
+        let mut script = vec![0x76, 0xa9, 0x14];
+        script.extend(hash);
+        script.extend([0x88, 0xac]);
+        assert_eq!(script.len(), 25);
+        assert!(is_p2pkh_for(&script, &hash));
+
+        // A different holder's address.
+        assert!(!is_p2pkh_for(&script, &[0x22u8; 20]));
+        // The reserve script: a valid deposit script, not a payout address.
+        let mut multisig = vec![0x52, 0x21];
+        multisig.extend([2u8; 33]);
+        multisig.push(0x21);
+        multisig.extend([3u8; 33]);
+        multisig.extend([0x52, 0xae]);
+        assert!(is_reserve_multisig(&multisig));
+        assert!(!is_p2pkh_for(&multisig, &hash));
+        // One byte altered.
+        let mut bad = script.clone();
+        bad[2] = 0x15;
+        assert!(!is_p2pkh_for(&bad, &hash));
+        // Truncated.
+        assert!(!is_p2pkh_for(&script[..24], &hash));
     }
 }

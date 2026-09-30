@@ -69,6 +69,16 @@ RUST_CONSTANTS = [
     ("DEFAULT_MATURITY_BLOCKS", "u64", "v.maturity_blocks", None),
     ("TIMELOCK_SLOTS", "u64", "gov.authority_timelock", None),
     ("TOKEN_DECIMALS", "u8", "m.token_decimals", None),
+    # The peg-out's numbers.  `fee.redeem_bp` is grouped with the other fees and
+    # the `po.*` rows with each other, so the generated file keeps its sections
+    # in the sheet's order.
+    ("REDEEM_FEE_BP", "u64", "fee.redeem_bp", None),
+    ("PAYOUT_CONFIRMATIONS", "u64", "po.payout_confirmations", None),
+    ("CHALLENGE_WINDOW", "u64", "po.challenge_window", None),
+    ("REDEEM_DEADLINE_SLOTS", "u64", "po.deadline", None),
+    ("CANCEL_GRACE_SLOTS", "u64", "po.cancel_grace", None),
+    ("REDEEM_D_MIN", "u64", "po.d_min", None),
+    ("MAX_PENDING_REDEMPTIONS", "u64", "po.max_pending", None),
 ]
 
 

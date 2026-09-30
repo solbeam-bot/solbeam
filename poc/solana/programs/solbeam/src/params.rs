@@ -97,6 +97,45 @@ pub const TIMELOCK_SLOTS: u64 = 32;
 /// —
 pub const TOKEN_DECIMALS: u8 = 8;
 
+// -- fee --
+
+/// `fee.redeem_bp` -- Peg-out fee (gross) -- `30 bp dec`.
+///
+/// As above
+pub const REDEEM_FEE_BP: u64 = 30;
+
+// -- po --
+
+/// `po.payout_confirmations` -- Payout depth -- `6 BSV blocks built`.
+///
+/// BSV confirmations before a payout is provable. C_payout
+pub const PAYOUT_CONFIRMATIONS: u64 = 6;
+
+/// `po.challenge_window` -- Challenge window -- `144 BSV blocks built`.
+///
+/// W. Confirmations a payout needs before settling
+pub const CHALLENGE_WINDOW: u64 = 144;
+
+/// `po.deadline` -- Redemption deadline -- `216,000 slots built`.
+///
+/// D. Must satisfy D ≥ payout_confirmations + challenge_window
+pub const REDEEM_DEADLINE_SLOTS: u64 = 216_000;
+
+/// `po.cancel_grace` -- Cancellation grace -- `0 built`.
+///
+/// Cancellation is immediate on expiry. A grace period would only delay the exit
+pub const CANCEL_GRACE_SLOTS: u64 = 0;
+
+/// `po.d_min` -- Minimum redemption -- `1,000,000 base units (0.01 BSV) built`.
+///
+/// Minimum redemption, so a claim's proof is worth the transaction fees to settle
+pub const REDEEM_D_MIN: u64 = 1_000_000;
+
+/// `po.max_pending` -- Concurrent redemption cap -- `64 built`.
+///
+/// Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded
+pub const MAX_PENDING_REDEMPTIONS: u64 = 64;
+
 // -- fed --
 
 /// `fed.script` -- Reserve deposit script -- `2-of-2 OP_CHECKMULTISIG dec, shape accepted in code built`.

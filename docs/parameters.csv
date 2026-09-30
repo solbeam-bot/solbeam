@@ -44,14 +44,17 @@ gov.authority_timelock,Authority timelock,32 slots built,built-frozen,"TIMELOCK_
 gov.pause_threshold,Pause threshold,>50% ph,designed,"Lower than a governance change, because the power is bounded"
 gov.pause_duration,Pause auto-lift,open,open,Days before a pause lapses unless renewed
 fee.mint_bp,Peg-in fee (gross),30 bp dec,designed,Covers all transaction fees; the remainder is member income. Its physical location is unspecified — N1
-fee.redeem_bp,Peg-out fee (gross),30 bp dec,designed,As above
+fee.redeem_bp,Peg-out fee (gross),30 bp dec,built-frozen,As above
 fee.bounty_share,Challenger bounty,open,designed,"Share of a slashed bond paid to whoever proves the misbehaviour. The burn_staged bounty is suggested, not sized, and not built"
 pi.min_peg_in,Minimum deposit,1 BSV dec,designed,Prices out dust griefing. Decided; enforcement is not in code
 pi.max_used,Legacy replay-list cap,200 der·superseded,superseded,"Replaced by a nullifier PDA per deposit, which is built. There is no list and no ceiling"
 pi.op_return_layout,Deposit commitment,version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient dec,designed,Designed. What is built checks only that the recipient's 32 bytes appear in an OP_RETURN
-po.deadline,Redemption deadline,open,designed,D. Must satisfy D ≥ payout_confirmations + challenge_window
-po.challenge_window,Challenge window,open,designed,W. Confirmations a payout needs before settling
-po.payout_confirmations,Payout depth,open,designed,BSV confirmations before a payout is provable. C_payout
+po.payout_confirmations,Payout depth,6 BSV blocks built,built-frozen,BSV confirmations before a payout is provable. C_payout
+po.challenge_window,Challenge window,144 BSV blocks built,built-frozen,W. Confirmations a payout needs before settling
+po.deadline,Redemption deadline,"216,000 slots built",built-mutable,D. Must satisfy D ≥ payout_confirmations + challenge_window
+po.cancel_grace,Cancellation grace,0 built,built-frozen,Cancellation is immediate on expiry. A grace period would only delay the exit
+po.d_min,Minimum redemption,"1,000,000 base units (0.01 BSV) built",built-frozen,"Minimum redemption, so a claim's proof is worth the transaction fees to settle"
+po.max_pending,Concurrent redemption cap,64 built,built-frozen,"Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded"
 m.rent_per_byte,Solana rent,"5,080 lamports/byte mea",measured,"(bytes + 128) × 5,080. The 128-byte overhead is inside this rate. 6,960 is an older toolchain's constant and overstates by ~37%. Measured: solana rent 0 = 650,240 lamports; solana rent 165 = 1,488,440"
 m.signature_fee,Solana base fee,"5,000 lamports mea",measured,Per signature
 m.token_decimals,solBSV decimals,8 mea,measured,—

@@ -126,7 +126,7 @@ document says X"* and *"the program can be set to X"* are different claims.
 | ID | Name | Value | Description |
 |---|---|---|---|
 | `fee.mint_bp` | Peg-in fee (**gross**) | **30 bp** `dec` | Covers all transaction fees; the remainder is member income. **Its physical location is unspecified — N1** |
-| `fee.redeem_bp` | Peg-out fee (**gross**) | **30 bp** `dec` | As above |
+| `fee.redeem_bp` | Peg-out fee (**gross**) | **30 bp** `built` | As above |
 | `fee.bounty_share` | Challenger bounty | **open** | Share of a slashed bond paid to whoever proves the misbehaviour. The `burn_staged` bounty is suggested, not sized, and **not built** |
 
 ## Peg-in
@@ -141,9 +141,12 @@ document says X"* and *"the program can be set to X"* are different claims.
 
 | ID | Name | Value | Description |
 |---|---|---|---|
-| `po.deadline` | Redemption deadline | **open** | `D`. Must satisfy `D ≥ payout_confirmations + challenge_window` |
-| `po.challenge_window` | Challenge window | **open** | `W`. Confirmations a payout needs before settling |
-| `po.payout_confirmations` | Payout depth | **open** | BSV confirmations before a payout is provable. `C_payout` |
+| `po.payout_confirmations` | Payout depth | **6 BSV blocks** `built` | BSV confirmations before a payout is provable. `C_payout` |
+| `po.challenge_window` | Challenge window | **144 BSV blocks** `built` | `W`. Confirmations a payout needs before settling |
+| `po.deadline` | Redemption deadline | **216,000 slots** `built` | `D`. Must satisfy `D ≥ payout_confirmations + challenge_window`. A **stored, timelock-mutable `Config` field**, like `v.maturity_blocks` |
+| `po.cancel_grace` | Cancellation grace | **0** `built` | Cancellation is immediate on expiry. A grace period would only delay the exit |
+| `po.d_min` | Minimum redemption | **1,000,000 base units (0.01 BSV)** `built` | Minimum redemption, so a claim's proof is worth the transaction fees to settle |
+| `po.max_pending` | Concurrent redemption cap | **64** `built` | Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded |
 
 ## Measured constants — do not change without re-measuring
 
