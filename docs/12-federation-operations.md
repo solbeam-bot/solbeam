@@ -304,10 +304,13 @@ monitoring task to an **early deliverable**, *"and it must exist before real val
   **"Phase 5 · Public monitoring — Plan only."** It is a status/roadmap page, not a data feed, and it
   publishes no reserve or supply figure today.
 
-**There is no `website/monitor/` directory in this repository.** Checked on `main` and on the other two
-branches; no such path is tracked, and no document references one. The claim that `website/monitor/` is
-the monitoring surface is therefore **unverified**, and the artefacts above are what a reader should go
-to instead. If a `website/monitor/` page is built later, this paragraph is what it should replace.
+**The monitoring page is [`website/monitor/`](../website/monitor/)**, and it is the mitigation this section describes. It publishes BSV block height, hashrate and observed block spacing, BSV and SOL prices, and Solana validator stake and throughput — all fetched live, keyless, in the reader's browser, with the source and fetch time shown.
+
+**The figures that matter cannot be fetched, and are published by hand.** BSV held in the reserve, `solBSV` minted, and the reserve-to-supply ratio are all `null` in `data.json` and render as **"NOT PUBLISHED"** — never as zero and never as a dash, because a reader must not mistake *"we have not published this"* for *"this is zero."* Each says what would populate it and when. **The federation does not exist, so there is nothing to publish.**
+
+**It also computes the cost to out-mine the chain** — live hashrate against a stated machine and energy assumption, printed with units and labelled an electricity-only floor. **That is the number the design leans on**, and it is an assumption rather than a measurement, so the page says so.
+
+**One thing it cannot source, and does not invent:** how much SHA-256 is actually available to *rent*. That remains an open Phase 5 item.
 
 **And the limit of the mitigation stands:** publication makes a theft **visible**. It does not prevent
 one, and a published reserve balance is an assertion by the party that could steal it
