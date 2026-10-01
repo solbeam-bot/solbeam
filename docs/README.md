@@ -34,6 +34,7 @@ built-versus-designed line, what we would attack, and the roadmap.
 | [10. Audit history](10-audit-history.md) | How the design got here, and the honest record of what was wrong |
 | [11. Peg-out — spec and default parameters](11-peg-out-spec.md) | The redemption half: the flow, the `po.*` defaults, and what it does not solve |
 | [12. Federation operations](12-federation-operations.md) | What a member does, what a member is exposed to, and how little of it exists — the operational companion to 03 |
+| [13. What is left to close](13-gaps.md) | **The gap list.** Blocking, decided-but-unbuilt, undecided policy, and accepted risks |
 
 ---
 
