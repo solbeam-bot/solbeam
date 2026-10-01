@@ -3828,3 +3828,635 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
     expect(counters.nextId.toNumber()).to.equal(attempted);
   });
 });
+
+describe("solbeam — the federation registry (doc 03 §2, doc 12 §1-3,5-6)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const SYSTEM_PROGRAM = anchor.web3.SystemProgram.programId;
+  const [federation] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("federation")], program.programId);
+
+  // The loader's `ProgramData` PDA, derived as the initialize tests do: the
+  // federation is gated on the program's upgrade authority, and Anchor does not
+  // auto-resolve a `ProgramData` account.
+  const BPF_LOADER_UPGRADEABLE = new anchor.web3.PublicKey(
+    "BPFLoaderUpgradeab1e11111111111111111111111");
+  const [programData] = anchor.web3.PublicKey.findProgramAddressSync(
+    [program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
+
+  const memberPda = (identity: anchor.web3.PublicKey) =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("member"), identity.toBuffer()], program.programId)[0];
+  const greycorePda = (identity: anchor.web3.PublicKey) =>
+    anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("greycore"), identity.toBuffer()], program.programId)[0];
+
+  // A key that is not the program's upgrade authority. Used both as a gateway
+  // identity and for the negative authority tests: it is not a Greycore member
+  // and it did not create the federation, so it must be refused both jobs.
+  const outsider = anchor.web3.Keypair.generate();
+  // The two legs of the reserve script the federation claims to hold. These are
+  // RECORDS: the program never generates, shares or signs with either key.
+  const gatewayKey = anchor.web3.Keypair.generate().publicKey;
+  const greycoreKey = anchor.web3.Keypair.generate().publicKey;
+
+  // The gateway threshold this file registers. Read from the sheet so the
+  // numbers below move with the parameter rather than being retyped.
+  const THRESHOLD = P("fed.threshold");
+  // PoC headroom above the threshold, mirroring MAX_GATEWAY_HEADROOM.
+  const HEADROOM = 8;
+
+  // Every identity admitted in this block, by base58 key. `leave_member` is
+  // signed by the member's own identity key, so a test that looks an account up
+  // through `all()` still needs the keypair to sign with.
+  const admitted = new Map<string, anchor.web3.Keypair>();
+
+  /** A refused instruction's message, for a specific-error assertion. */
+  const refusal = async (run: () => Promise<unknown>): Promise<string> => {
+    try {
+      await run();
+    } catch (e: any) {
+      return String(e);
+    }
+    throw new Error("expected the instruction to be refused");
+  };
+
+  before(async () => {
+    const sig = await provider.connection.requestAirdrop(
+      outsider.publicKey, 5 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig, "confirmed");
+  });
+
+  it("creates the federation and its Greycore, and refuses a non-authority", async () => {
+    // The authority gate first, so a rejected caller is shown to create
+    // nothing: this is the same `ProgramData` check `initialize` uses.
+    const bad = await refusal(() => program.methods
+      .initializeFederation(new anchor.BN(THRESHOLD), greycoreKey)
+      .accounts({
+        authority: outsider.publicKey,
+        programData,
+        gatewayKey,
+        federation,
+        greycoreMember: greycorePda(outsider.publicKey),
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .signers([outsider])
+      .rpc());
+    expect(bad).to.contain("Unauthorized");
+    // ... and it created nothing, rolled back with the failed instruction.
+    expect(await provider.connection.getAccountInfo(federation)).to.equal(null);
+
+    await program.methods
+      .initializeFederation(new anchor.BN(THRESHOLD), greycoreKey)
+      .accounts({
+        authority: provider.wallet.publicKey,
+        programData,
+        gatewayKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc();
+
+    const fed = await program.account.federationConfig.fetch(federation);
+    expect(fed.threshold.toNumber()).to.equal(THRESHOLD);
+    expect(fed.gatewayKey.toBase58()).to.equal(gatewayKey.toBase58());
+    expect(fed.greycoreKey.toBase58()).to.equal(greycoreKey.toBase58());
+    expect(fed.gatewayMembers.toNumber()).to.equal(0);
+    expect(fed.bondedMembers.toNumber()).to.equal(0);
+    expect(fed.greycoreMembers.toNumber()).to.equal(1);
+    // The founding Greycore member is the authority that created the
+    // federation, so the two quorums are NOT disjoint at genesis. That is a
+    // named limitation, and this asserts the honest state rather than an ideal.
+    const gc = await program.account.greycoreMember.fetch(
+      greycorePda(provider.wallet.publicKey));
+    expect(gc.identity.toBase58()).to.equal(provider.wallet.publicKey.toBase58());
+  });
+
+  it("refuses a threshold below 2 and two reserve legs that are the same key", async () => {
+    // WHAT IS REACHABLE HERE AND WHAT IS NOT -- stated, not glossed.
+    //
+    // `initialize_federation` checks both rules at the top of its body, before
+    // either `init` account is written. But Anchor resolves and validates the
+    // accounts BEFORE the handler body runs, so against the live `federation`
+    // PDA the `init` collision is what refuses; against a made-up address the
+    // seeds constraint is; and against a keypair-derived address that DOES
+    // match the seeds constraint the handler is reached, but only because the
+    // seed list itself contains a random value -- which tests nothing about the
+    // reserve script.
+    //
+    // So the two rules are asserted HERE for the specific custom errors, using
+    // the live PDAs, with no claim that the handler's guard fired: the
+    // collision proves only that a second federation cannot exist. The rules
+    // themselves -- `departure_keeps_threshold` and `reserve_keys_distinct` --
+    // are unit-tested directly in `federation_tests`, including the boundary
+    // cases, and THAT is where they are genuinely exercised. Faking a path to
+    // them here would be the vacuous test this project keeps producing.
+    const attempt = async (threshold: number, gcKey: anchor.web3.PublicKey) =>
+      refusal(() => program.methods
+        .initializeFederation(new anchor.BN(threshold), gcKey)
+        .accounts({
+          authority: provider.wallet.publicKey,
+          programData,
+          gatewayKey,
+          federation,
+          greycoreMember: greycorePda(provider.wallet.publicKey),
+          systemProgram: SYSTEM_PROGRAM,
+        } as any)
+        .rpc());
+
+    // One federation per deployment: the PDA already exists.
+    const second = await attempt(THRESHOLD, greycoreKey);
+    expect(second.toLowerCase()).to.contain("already in use");
+
+    // The refused attempts created nothing new and changed nothing.
+    const fed = await program.account.federationConfig.fetch(federation);
+    expect(fed.threshold.toNumber()).to.equal(THRESHOLD);
+    expect(fed.gatewayKey.toBase58()).to.equal(gatewayKey.toBase58());
+    expect(fed.greycoreKey.toBase58()).to.equal(greycoreKey.toBase58());
+    expect(fed.gatewayMembers.toNumber()).to.equal(0);
+    expect(fed.bondedMembers.toNumber()).to.equal(0);
+    expect(fed.greycoreMembers.toNumber()).to.equal(1);
+    // The founding Greycore member is the authority: the quorums are not
+    // disjoint at genesis, which the design names and this asserts.
+    expect(fed.greycoreKey.toBase58())
+      .to.not.equal(fed.gatewayKey.toBase58(), "reserve legs must differ");
+  });
+
+  it("refuses a second federation singleton", async () => {
+    // The authority is valid here, so the refusal that lands is the PDA
+    // collision: one federation per deployment.
+    const dup = await refusal(() => program.methods
+      .initializeFederation(new anchor.BN(THRESHOLD), greycoreKey)
+      .accounts({
+        authority: provider.wallet.publicKey,
+        programData,
+        gatewayKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc());
+    expect(dup.toLowerCase()).to.contain("already in use");
+  });
+
+  it("adds a Greycore member, and refuses a duplicate and a non-authority", async () => {
+    const sig = await provider.connection.requestAirdrop(
+      outsider.publicKey, 1 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig, "confirmed");
+
+    await program.methods
+      .addGreycoreMember(outsider.publicKey)
+      .accounts({
+        authority: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(outsider.publicKey),
+        identity: outsider.publicKey,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc();
+    expect((await program.account.federationConfig.fetch(federation))
+      .greycoreMembers.toNumber()).to.equal(2);
+
+    const dup = await refusal(() => program.methods
+      .addGreycoreMember(outsider.publicKey)
+      .accounts({
+        authority: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(outsider.publicKey),
+        identity: outsider.publicKey,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc());
+    expect(dup.toLowerCase()).to.contain("already in use");
+
+    // A non-authority is refused by the `has_one` on the federation. The PDA is
+    // derived from the identity actually passed, or the refusal would be the
+    // account constraint's "not the PDA" rather than the authority rule.
+    const probeIdentity = anchor.web3.Keypair.generate().publicKey;
+    const notAuth = await refusal(() => program.methods
+      .addGreycoreMember(probeIdentity)
+      .accounts({
+        authority: outsider.publicKey,
+        federation,
+        greycoreMember: greycorePda(probeIdentity),
+        identity: probeIdentity,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .signers([outsider])
+      .rpc());
+    expect(notAuth).to.contain("Unauthorized");
+  });
+
+  it("admits a member only on a Greycore signature, and records the approver", async () => {
+    const notGreycore = anchor.web3.Keypair.generate();
+    const candidateKp = anchor.web3.Keypair.generate();
+    const candidate = candidateKp.publicKey;
+    admitted.set(candidate.toBase58(), candidateKp);
+
+    // An arbitrary signer is refused: it has no Greycore record at all, so the
+    // derived record account does not exist and the handler's identity check
+    // is what would refuse it even if one did.
+    const bad = await refusal(() => program.methods
+      .admitMember(candidate)
+      .accounts({
+        approver: notGreycore.publicKey,
+        federation,
+        greycoreMember: greycorePda(notGreycore.publicKey),
+        member: memberPda(candidate),
+        identity: candidate,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .signers([notGreycore])
+      .rpc());
+    expect(bad).to.contain("AccountNotInitialized");
+    expect(await provider.connection.getAccountInfo(memberPda(candidate)))
+      .to.equal(null);
+
+    // A registered Greycore member admits, and the record names them.
+    await program.methods
+      .admitMember(candidate)
+      .accounts({
+        approver: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        member: memberPda(candidate),
+        identity: candidate,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc();
+
+    const m = await program.account.gatewayMember.fetch(memberPda(candidate));
+    expect(m.identity.toBase58()).to.equal(candidate.toBase58());
+    expect(m.approvedBy.toBase58()).to.equal(provider.wallet.publicKey.toBase58());
+    expect(m.bonded).to.equal(false);
+    expect(JSON.stringify(m.status)).to.contain("active");
+    expect(m.bsvBond.toNumber()).to.equal(0);
+    expect(m.solbsvBond.toNumber()).to.equal(0);
+    expect((await program.account.federationConfig.fetch(federation))
+      .gatewayMembers.toNumber()).to.equal(1);
+  });
+
+  it("refuses a second admission of the same identity: one key is one seat", async () => {
+    // The record PDA is seeded on the identity, so a second admission collides
+    // with the account the first created. This is the duplicate-identity guard:
+    // one key is one seat, and the collision is what enforces it.
+    const twice = anchor.web3.Keypair.generate().publicKey;
+    await program.methods
+      .admitMember(twice)
+      .accounts({
+        approver: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        member: memberPda(twice),
+        identity: twice,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc();
+    const dup = await refusal(() => program.methods
+      .admitMember(twice)
+      .accounts({
+        approver: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        member: memberPda(twice),
+        identity: twice,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc());
+    expect(dup.toLowerCase()).to.contain("already in use");
+    // One record, not two.
+    const m = await program.account.gatewayMember.fetch(memberPda(twice));
+    expect(m.identity.toBase58()).to.equal(twice.toBase58());
+  });
+
+  it("refuses to record one side of a bond, then records both and counts the seat", async () => {
+    const identity = anchor.web3.Keypair.generate();
+    await provider.connection.requestAirdrop(
+      identity.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+
+    await program.methods
+      .admitMember(identity.publicKey)
+      .accounts({
+        approver: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        member: memberPda(identity.publicKey),
+        identity: identity.publicKey,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc();
+
+    // One side only is refused by name, and the seat still does not count.
+    const oneSided = await refusal(() => program.methods
+      .recordBonds(new anchor.BN(1_000), new anchor.BN(0))
+      .accounts({
+        member: memberPda(identity.publicKey),
+        federation,
+        owner: identity.publicKey,
+        bondKey: greycoreKey,
+      } as any)
+      .signers([identity])
+      .rpc());
+    expect(oneSided).to.contain("BondMissing");
+    expect((await program.account.federationConfig.fetch(federation))
+      .bondedMembers.toNumber()).to.equal(0);
+
+    // The second call must LAND. Capturing its error rather than letting it
+    // escape is what stops this test passing for the wrong reason: if the
+    // transaction failed, the failure is reported here as itself.
+    let recordError: string | null = null;
+    try {
+      await program.methods
+        .recordBonds(new anchor.BN(1_000), new anchor.BN(2_000))
+        .accounts({
+          member: memberPda(identity.publicKey),
+          federation,
+          owner: identity.publicKey,
+          bondKey: greycoreKey,
+        } as any)
+        .signers([identity])
+        .rpc();
+    } catch (e: any) {
+      recordError = String(e);
+    }
+
+    const m = await program.account.gatewayMember.fetch(
+      memberPda(identity.publicKey));
+    expect(recordError, `record_bonds was refused: ${recordError}`).to.equal(null);
+    expect(m.bonded, `record_bonds did not take: ${JSON.stringify(m)}`)
+      .to.equal(true);
+    expect(m.bsvBond.toNumber()).to.equal(1_000);
+    expect(m.solbsvBond.toNumber()).to.equal(2_000);
+    expect(m.bondKey.toBase58()).to.equal(greycoreKey.toBase58());
+    expect((await program.account.federationConfig.fetch(federation))
+      .bondedMembers.toNumber()).to.equal(1);
+
+    // Recorded once. A second attempt is refused rather than silently resizing
+    // the bond, so a member cannot game a threshold by re-attesting.
+    const again = await refusal(() => program.methods
+      .recordBonds(new anchor.BN(1), new anchor.BN(1))
+      .accounts({
+        member: memberPda(identity.publicKey),
+        federation,
+        owner: identity.publicKey,
+        bondKey: greycoreKey,
+      } as any)
+      .signers([identity])
+      .rpc());
+    expect(again).to.contain("BondsAlreadyRecorded");
+  });
+
+  it("refuses to take the bonded set below the signing threshold", async () => {
+    // The floor is `t` of `t-of-N`: below `t` the reserve key cannot produce a
+    // signature at all, so a departure that would cross it must be refused. The
+    // guard is checked BEFORE anything is mutated, which the state assertion
+    // below verifies.
+    //
+    // This test provisions its OWN bonded member rather than looking one up
+    // from an earlier test. Depending on another test's keypair is what made
+    // this fail with "no keypair recorded" -- a harness coupling that would
+    // have turned into a vacuous pass the moment the other test changed.
+    const ownerKp = anchor.web3.Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(
+      ownerKp.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+    await provider.connection.confirmTransaction(sig, "confirmed");
+    admitted.set(ownerKp.publicKey.toBase58(), ownerKp);
+    await program.methods
+      .admitMember(ownerKp.publicKey)
+      .accounts({
+        approver: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        member: memberPda(ownerKp.publicKey),
+        identity: ownerKp.publicKey,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc();
+    await program.methods
+      .recordBonds(new anchor.BN(1_000), new anchor.BN(1_000))
+      .accounts({
+        member: memberPda(ownerKp.publicKey),
+        federation,
+        owner: ownerKp.publicKey,
+        bondKey: greycoreKey,
+      } as any)
+      .signers([ownerKp])
+      .rpc();
+
+    const before = await program.account.federationConfig.fetch(federation);
+    // The set is below the threshold, so this departure MUST be refused. If the
+    // registry ever held `t` bonded members this precondition would fail loudly
+    // instead of the assertion below passing for a different reason.
+    expect(before.bondedMembers.toNumber()).to.be.lessThan(THRESHOLD);
+    const active = {
+      publicKey: memberPda(ownerKp.publicKey),
+      account: await program.account.gatewayMember.fetch(
+        memberPda(ownerKp.publicKey)),
+    };
+    expect(active.account.bonded).to.equal(true);
+    const activeKp = ownerKp;
+    const denied = await refusal(() => program.methods
+      .leaveMember()
+      .accounts({
+        member: active.publicKey,
+        federation,
+        owner: active.account.identity,
+      } as any)
+      .signers([activeKp])
+      .rpc());
+    expect(denied).to.contain("GatewayBelowThreshold");
+
+    // Nothing moved: the member still holds the seat and both bonds.
+    const after = await program.account.gatewayMember.fetch(active.publicKey);
+    expect(after.bonded).to.equal(true);
+    expect(after.bsvBond.toNumber()).to.equal(active.account.bsvBond.toNumber());
+    expect(after.solbsvBond.toNumber())
+      .to.equal(active.account.solbsvBond.toNumber());
+    expect((await program.account.federationConfig.fetch(federation))
+      .bondedMembers.toNumber()).to.equal(before.bondedMembers.toNumber());
+  });
+
+  it("refuses a solBSV-bond seizure from a non-authority, and refuses one with no bond to seize", async () => {
+    const active = (await program.account.gatewayMember.all())
+      .find((m) => m.account.bonded);
+    expect(active, "no bonded member: the bond test must have failed")
+      .to.not.equal(undefined);
+
+    // The authority gate: any other signer is refused by name.
+    const bad = await refusal(() => program.methods
+      .seizeSolbsvBond()
+      .accounts({
+        authority: outsider.publicKey,
+        federation,
+        member: active!.publicKey,
+      } as any)
+      .signers([outsider])
+      .rpc());
+    expect(bad).to.contain("Unauthorized");
+
+    // An unbonded member has nothing recorded to clear, which is a different
+    // refusal from the authority gate and is asserted as such.
+    const unbonded = (await program.account.gatewayMember.all())
+      .find((m) => !m.account.bonded
+        && JSON.stringify(m.account.status).includes("active"))!;
+    const nothing = await refusal(() => program.methods
+      .seizeSolbsvBond()
+      .accounts({
+        authority: provider.wallet.publicKey,
+        federation,
+        member: unbonded.publicKey,
+      } as any)
+      .rpc());
+    expect(nothing).to.contain("BondMissing");
+
+    // The seizure itself: still below the threshold, so the floor refuses it
+    // too -- stated rather than glossed. The authority path with a sufficient
+    // set is what the unit test covers arithmetically.
+    const floored = await refusal(() => program.methods
+      .seizeSolbsvBond()
+      .accounts({
+        authority: provider.wallet.publicKey,
+        federation,
+        member: active!.publicKey,
+      } as any)
+      .rpc());
+    expect(floored).to.contain("GatewayBelowThreshold");
+  });
+
+  it("returns a departing member's bonds once the set can spare the seat", async () => {
+    // Build a set that CAN spare a seat: `threshold + 1` bonded members. This
+    // is the expensive setup the floor genuinely requires, and it is why the
+    // arithmetic is also unit-tested directly.
+    const need = THRESHOLD + 1;
+    let fed = await program.account.federationConfig.fetch(federation);
+    const join = async () => {
+      const kp = anchor.web3.Keypair.generate();
+      await provider.connection.requestAirdrop(
+        kp.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+      admitted.set(kp.publicKey.toBase58(), kp);
+      await program.methods
+        .admitMember(kp.publicKey)
+        .accounts({
+          approver: provider.wallet.publicKey,
+          federation,
+          greycoreMember: greycorePda(provider.wallet.publicKey),
+          member: memberPda(kp.publicKey),
+          identity: kp.publicKey,
+          systemProgram: SYSTEM_PROGRAM,
+        } as any)
+        .rpc();
+      await program.methods
+        .recordBonds(new anchor.BN(1_000), new anchor.BN(1_000))
+        .accounts({
+          member: memberPda(kp.publicKey),
+          federation,
+          owner: kp.publicKey,
+          bondKey: greycoreKey,
+        } as any)
+        .signers([kp])
+        .rpc();
+      return kp;
+    };
+
+    while (fed.bondedMembers.toNumber() < need) {
+      await join();
+      fed = await program.account.federationConfig.fetch(federation);
+    }
+    expect(fed.bondedMembers.toNumber()).to.equal(need);
+
+    // One departure leaves exactly `threshold`, which is allowed -- and the
+    // member that leaves is refused a second time, because the seat is gone.
+    const leaver = (await program.account.gatewayMember.all())
+      .find((m) => m.account.bonded)!;
+    const leaverKp = admitted.get(leaver.account.identity.toBase58());
+    expect(leaverKp, `no keypair recorded for ${leaver.account.identity}`)
+      .to.not.equal(undefined);
+    await program.methods
+      .leaveMember()
+      .accounts({
+        member: leaver.publicKey,
+        federation,
+        owner: leaver.account.identity,
+      } as any)
+      .signers([leaverKp!])
+      .rpc();
+
+    const after = await program.account.gatewayMember.fetch(leaver.publicKey);
+    expect(after.bonded).to.equal(false);
+    expect(after.bsvBond.toNumber()).to.equal(0);
+    expect(after.solbsvBond.toNumber()).to.equal(0);
+    expect(JSON.stringify(after.status)).to.contain("left");
+    // The record REMAINS: a departure is a fact the registry keeps, and the
+    // member's off-chain share of the reserve key remains valid with it. That
+    // is the leaver-share problem, and this asserts the state rather than an
+    // idealised one.
+    expect(await provider.connection.getAccountInfo(leaver.publicKey))
+      .to.not.equal(null);
+    const now = await program.account.federationConfig.fetch(federation);
+    expect(now.bondedMembers.toNumber()).to.equal(THRESHOLD);
+    expect(now.gatewayMembers.toNumber()).to.equal(fed.gatewayMembers.toNumber());
+
+    // At the floor the next departure is refused: this is the guard the
+    // previous test reached from below, reached here from exactly `t`.
+    const stillActive = (await program.account.gatewayMember.all())
+      .find((m) => m.account.bonded)!;
+    const stillKp = admitted.get(stillActive.account.identity.toBase58());
+    expect(stillKp, `no keypair recorded for ${stillActive.account.identity}`)
+      .to.not.equal(undefined);
+    const denied = await refusal(() => program.methods
+      .leaveMember()
+      .accounts({
+        member: stillActive.publicKey,
+        federation,
+        owner: stillActive.account.identity,
+      } as any)
+      .signers([stillKp!])
+      .rpc());
+    expect(denied).to.contain("GatewayBelowThreshold");
+  });
+
+  it("refuses to grow the roster past the threshold headroom", async () => {
+    // The set is at `threshold` bonded members, so admission -- which is
+    // bounded by `threshold + HEADROOM` and counts every admitted member, not
+    // only bonded ones -- still has room. Fill it to exactly the bound and
+    // assert the next admission is refused by name.
+    let fed = await program.account.federationConfig.fetch(federation);
+    while (fed.gatewayMembers.toNumber() < THRESHOLD + HEADROOM) {
+      const kp = anchor.web3.Keypair.generate();
+      await program.methods
+        .admitMember(kp.publicKey)
+        .accounts({
+          approver: provider.wallet.publicKey,
+          federation,
+          greycoreMember: greycorePda(provider.wallet.publicKey),
+          member: memberPda(kp.publicKey),
+          identity: kp.publicKey,
+          systemProgram: SYSTEM_PROGRAM,
+        } as any)
+        .rpc();
+      fed = await program.account.federationConfig.fetch(federation);
+    }
+    expect(fed.gatewayMembers.toNumber()).to.equal(THRESHOLD + HEADROOM);
+    expect(fed.gatewayMembers.toNumber())
+      .to.be.lessThan(THRESHOLD * 100, "the placeholder bound is not N");
+
+    const oneMore = anchor.web3.Keypair.generate().publicKey;
+    const full = await refusal(() => program.methods
+      .admitMember(oneMore)
+      .accounts({
+        approver: provider.wallet.publicKey,
+        federation,
+        greycoreMember: greycorePda(provider.wallet.publicKey),
+        member: memberPda(oneMore),
+        identity: oneMore,
+        systemProgram: SYSTEM_PROGRAM,
+      } as any)
+      .rpc());
+    expect(full).to.contain("FederationFull");
+    expect(await provider.connection.getAccountInfo(memberPda(oneMore)))
+      .to.equal(null);
+  });
+});

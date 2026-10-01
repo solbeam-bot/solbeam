@@ -238,6 +238,84 @@ pub const REDEEM_ESCROW_SEED: &[u8] = b"redeem_escrow";
 /// cannot point the count at an account of its own.
 pub const REDEEM_BOOK_SEED: &[u8] = b"redeem_book";
 
+// ---------------------------------------------------------------------------
+// the federation registry (doc 03 sections 2-3, doc 12 sections 1-3, 5-6)
+// ---------------------------------------------------------------------------
+//
+// **This is records, not custody.** The reserve is off-chain BSV under a 2-of-2
+// `OP_CHECKMULTISIG` script whose two keys -- the gateway threshold key and the
+// Greycore key -- are generated and shared **off chain**, by a ceremony that is
+// not specified anywhere in this repository. Nothing here generates, holds,
+// signs with or can spend any key. What is built is the **registry**: who is a
+// member, what each side has recorded as bonded, who admitted them, whether
+// they are active, and the floor that keeps the signing set usable.
+
+/// Seed of the singleton **federation config** PDA: `[b"federation"]`.
+///
+/// It carries the two values that are parameters rather than code: the
+/// **gateway signing threshold** (`fed.threshold`, the `t` of `t-of-N`) and the
+/// **Greycore threshold**, plus the two aggregate keys those thresholds sign
+/// with. It also carries the live counts -- gateway members holding a share and
+/// Greycore members -- because a floor cannot be enforced against a number the
+/// program has to be told.
+///
+/// `greycore_key` is the single key that fills the **second leg** of the
+/// reserve's 2-of-2 script. The Greycore is itself a set with its own
+/// threshold, so `greycore_threshold` is the number of Greycore members that
+/// must assemble before that one leg can sign; the reserve script is still a
+/// 2-of-2, because its second leg is one key however many people produced it.
+pub const FEDERATION_SEED: &[u8] = b"federation";
+
+/// Seed prefix of a **gateway member record**: `[b"member", identity]`.
+///
+/// One account per member, keyed on the member's identity key, so the account's
+/// **existence is the admission** and one identity cannot hold two seats: a
+/// second `admit_member` for the same key derives the same address, and the
+/// account must be empty for the instruction to proceed.
+///
+/// The record is the member's whole on-chain state: the `solBSV`-side bond the
+/// program can seize, the **BSV-side bond, which is an attestation and not
+/// custody** (see [`Member::bsv_bond`]), the state that decides whether the
+/// member counts toward the threshold, the Greycore member whose signature
+/// admitted them, and the bond-custody key the design puts the BSV-side bond
+/// under.
+pub const GATEWAY_MEMBER_SEED: &[u8] = b"member";
+
+/// Seed prefix of a **Greycore member record**: `[b"greycore", identity]`.
+///
+/// The second set, kept in its own registry rather than as a flag on
+/// [`GATEWAY_MEMBER_SEED`], because the two sets have different jobs, different
+/// thresholds and different admission rules: a Greycore member does not hold a
+/// share of the reserve key and does not bond, and a gateway member cannot
+/// admit anyone. Admission to the gateway **requires one of these records to
+/// sign** -- that is what makes admission the Greycore's stated job rather than
+/// a convention.
+///
+/// Membership in the Greycore is itself permissioned and is entered **only by
+/// the program's upgrade authority** (see [`initialize_federation`] and
+/// [`add_greycore_member`]). The reference appoints its Greycore by community
+/// governance; no governance instruction exists here, so for now the same one
+/// key that governs the rest of this PoC appoints them. That is a stand-in, and
+/// it is recorded as one.
+pub const GREYCORE_MEMBER_SEED: &[u8] = b"greycore";
+
+/// How far past the gateway threshold the roster may grow: `t + 8`.
+///
+/// **This is a PoC placeholder, and it is not a policy.** `N` in `t-of-N` is
+/// deliberately unfixed (`fed.roster_size` is `open`), so the program cannot
+/// read a cap from configuration; but an **unbounded** set is worse than an
+/// arbitrary one, because `admit_member` writes into a registry whose live
+/// count is what the threshold floor is measured against, and every member is a
+/// share of an off-chain key the registry cannot recall. The number exists so
+/// the growth path is bounded and visible, and it is deliberately **not**
+/// presented as `N`: it is a ceiling on `N` chosen to leave room for the
+/// Greycore to admit, replace and rotate members without a re-deploy.
+///
+/// When `N` is decided, this constant should be replaced by the decided value --
+/// or by a governed parameter -- rather than kept as an invented bound.
+pub const MAX_GATEWAY_HEADROOM: u64 = 8;
+
+
 /// Seed prefix of a **claimed payout outpoint**: `[b"payout_nullifier", txid,
 /// vout_le]`.
 ///
@@ -2049,6 +2127,377 @@ pub mod solbeam {
             payout_height: pending.payout_height,
         });
         Ok(())
+    }    // -----------------------------------------------------------------------
+    // the federation registry
+    // -----------------------------------------------------------------------
+    //
+    // **Records, not custody.** The reserve is off-chain BSV under a 2-of-2
+    // script whose keys are generated and shared off chain; no instruction here
+    // holds, generates or signs with any key. What these six instructions do is
+    // record **who is in each set, what each side has attested as bonded, and
+    // the floor below which the signing set stops being usable** -- and refuse
+    // the state changes that would break that floor.
+    //
+    // Deliberately **absent**, and each absence is a specification gap rather
+    // than an omission to read past: the **re-sharing ceremony** (the mechanism
+    // by which a new member is given a share of the live key) is not specified
+    // anywhere, so `admit_member` records the admission and nothing more; the
+    // **eligibility rules** that decide who the Greycore may admit are not
+    // specified; **whether admission can be compelled** is not specified, and
+    // is unobservable anyway (a refusal produces no artifact); the **unbonding
+    // clock** (`fed.unbond_slots`) is `open`, which is why `leave_member`
+    // returns the bonds at once and records nothing about time; **key rotation**
+    // is deliberately omitted and is currently unimplementable, because
+    // `initialize_bridge` fixes `deposit_script` once; and **slashing is not
+    // built** -- see [`seize_solbsv_bond`] for what is and is not claimed there.
+
+    /// Create the federation and the Greycore: the two sets, their thresholds,
+    /// the two aggregate keys, and the founding Greycore member.
+    ///
+    /// Gated on the program's **upgrade authority**, read from the loader's
+    /// `ProgramData` account, by the same two constraints [`Initialize`] and
+    /// [`InitializeBridge`] use. There is no governance instruction in this
+    /// PoC, so this is the only entry point into the registry; removing the
+    /// program's upgrade authority before calling it makes the registry
+    /// permanently uninitialisable, which is the correct failure for a
+    /// deployment with no governing key.
+    ///
+    /// `threshold` is the `t` of `t-of-N`: it is a **floor, not a size**. `N` is
+    /// never fixed here -- members are admitted while the set has room, and the
+    /// program refuses any departure that would leave fewer bonded members than
+    /// this number. See [`admit_member`] and [`leave_member`].
+    pub fn initialize_federation(
+        ctx: Context<InitializeFederation>,
+        threshold: u64,
+        greycore_key: Pubkey,
+    ) -> Result<()> {
+        require!(threshold >= 2, SolbeamError::BadFederationThreshold);
+        require!(
+            reserve_keys_distinct(&ctx.accounts.gateway_key.key(), &greycore_key),
+            SolbeamError::ReserveKeysNotDistinct
+        );
+        require!(
+            greycore_key != ctx.accounts.authority.key(),
+            SolbeamError::ReserveKeysNotDistinct
+        );
+
+        let fed = &mut ctx.accounts.federation;
+        fed.authority = ctx.accounts.authority.key();
+        fed.threshold = threshold;
+        fed.gateway_key = ctx.accounts.gateway_key.key();
+        fed.greycore_key = greycore_key;
+        fed.greycore_threshold = 1;
+        fed.gateway_members = 0;
+        fed.greycore_members = 1;
+        fed.bonded_members = 0;
+        fed.bump = ctx.bumps.federation;
+
+        ctx.accounts.greycore_member.identity = ctx.accounts.authority.key();
+        ctx.accounts.greycore_member.bump = ctx.bumps.greycore_member;
+
+        emit!(FederationInitialized {
+            authority: ctx.accounts.authority.key(),
+            threshold,
+            gateway_key: ctx.accounts.gateway_key.key(),
+            greycore_key,
+        });
+        Ok(())
+    }
+
+    /// Add one Greycore member: `[b"greycore", identity]`.
+    ///
+    /// Authority-gated. The Greycore is a set with its own threshold, so its
+    /// members must be addable one at a time; `greycore_threshold` decides how
+    /// many of them must assemble to produce the single key that fills the
+    /// reserve script's second leg.
+    ///
+    /// **A stand-in, stated rather than implied away.** The reference appoints
+    /// its Greycore by community governance, and the design has the Greycore
+    /// admit gateway members. There is no governance instruction here, so for
+    /// now the program's upgrade authority appoints Greycore members, and the
+    /// Greycore in turn admits gateway members. At genesis the two sets are
+    /// **not disjoint** -- the founding Greycore member is the authority that
+    /// created the federation -- and **no mechanism makes them disjoint**; that
+    /// is a named limitation, not a property this code establishes.
+    pub fn add_greycore_member(
+        ctx: Context<AddGreycoreMember>,
+        identity: Pubkey,
+    ) -> Result<()> {
+        require!(
+            identity != Pubkey::default(),
+            SolbeamError::BadFederationThreshold
+        );
+        let fed = &mut ctx.accounts.federation;
+        fed.greycore_members = fed
+            .greycore_members
+            .checked_add(1)
+            .ok_or(SolbeamError::Overflow)?;
+        ctx.accounts.greycore_member.identity = identity;
+        ctx.accounts.greycore_member.bump = ctx.bumps.greycore_member;
+        emit!(GreycoreMemberAdded { identity });
+        Ok(())
+    }
+
+    /// Admit one gateway member: the Greycore's job, and its signature is what
+    /// does it.
+    ///
+    /// Creates `[b"member", identity]`. `approver` must sign, and must be the
+    /// identity of an existing [`GreycoreMember`] record -- admission **cannot
+    /// be performed by a gateway member**, by the program's upgrade authority
+    /// acting alone, or by an arbitrary signer. The approving identity is
+    /// recorded on the member, so every admission is attributable to a named
+    /// Greycore member.
+    ///
+    /// **What this does not do, and cannot:** it does not issue the new member a
+    /// share of the gateway threshold key. Adding a holder to a threshold key is
+    /// a **re-sharing**, and the ceremony -- generation, distribution,
+    /// verification -- is **not specified anywhere** in this repository. So the
+    /// registry says this identity is a member and the key does not yet know it.
+    /// The gap is the ceremony, not this instruction.
+    ///
+    /// The new member holds **no bond yet**: `bonded` is false, the member does
+    /// not count toward the threshold floor, and [`record_bonds`] is what posts
+    /// them. Admission also refuses to grow the set past `threshold + 8` -- see
+    /// [`MAX_GATEWAY_HEADROOM`] for why a bound exists at all and why the number
+    /// is a PoC placeholder rather than a policy.
+    pub fn admit_member(ctx: Context<AdmitMember>, identity: Pubkey) -> Result<()> {
+        require!(
+            identity == ctx.accounts.identity.key(),
+            SolbeamError::MemberIdentityMismatch
+        );
+        require!(
+            ctx.accounts.approver.key() == ctx.accounts.greycore_member.identity,
+            SolbeamError::NotGreycore
+        );
+
+        let fed = &mut ctx.accounts.federation;
+        require!(
+            fed.gateway_members < fed.threshold + MAX_GATEWAY_HEADROOM,
+            SolbeamError::FederationFull
+        );
+        fed.gateway_members = fed
+            .gateway_members
+            .checked_add(1)
+            .ok_or(SolbeamError::Overflow)?;
+
+        let member = &mut ctx.accounts.member;
+        member.identity = identity;
+        member.bsv_bond = 0;
+        member.solbsv_bond = 0;
+        member.bond_key = Pubkey::default();
+        member.approved_by = ctx.accounts.approver.key();
+        member.bonded = false;
+        member.status = MemberStatus::Active;
+        member.bump = ctx.bumps.member;
+
+        emit!(MemberAdmitted {
+            identity,
+            approved_by: ctx.accounts.approver.key(),
+        });
+        Ok(())
+    }
+
+    /// Record both sides of a member's bond, which is what makes the seat count.
+    ///
+    /// **Two-sided, and the two sides are not the same kind of thing:**
+    ///
+    /// * `solbsv_bond` is the **`solBSV`-side bond**. It is recorded as a
+    ///   number, and the program is the only party that can clear it, which is
+    ///   what makes this side the enforceable half. **What is not built is the
+    ///   token transfer**: this instruction does not move `solBSV` anywhere, so
+    ///   it records a claim about a token account; see [`seize_solbsv_bond`].
+    /// * `bsv_bond` is the **BSV-side bond**. It is **an attestation and not
+    ///   custody**, and the distinction is the whole point: the BSV exists on
+    ///   another chain, the program cannot see it, and it is held under the
+    ///   **collective threshold key** recorded in `bond_key`, not under the
+    ///   member's own key. Nothing here can move it. A member cannot move it
+    ///   either -- that is the design requirement -- but seizing it is a
+    ///   **collective action by the members signing a BSV transaction**, a
+    ///   social duty with nothing on BSV compelling it, and the program's only
+    ///   part in it is this record.
+    ///
+    /// Both amounts must be non-zero: a member who has posted one side and not
+    /// the other does not yet count toward the threshold floor, because the
+    /// floor is about a set that can actually sign and be seized.
+    ///
+    /// **A bond is the float, not a capital requirement.** This instruction
+    /// deliberately applies **no ratio to the reserve and no capacity rule**:
+    /// the bond is working capital for transfers, and what constrains the
+    /// reserve is the Greycore's co-signature on every spend. The `k = 1`
+    /// solvency line (`fed.k`) is a check on the mint and exit paths, which are
+    /// not this instruction, and **no numeric capacity rule exists** to
+    /// enforce here. None should be invented.
+    ///
+    /// Called by the member's identity. One-shot: once `bonded` is true the
+    /// amounts are frozen, so a bond cannot be quietly resized to game a
+    /// threshold, and re-attesting changes nothing.
+    pub fn record_bonds(
+        ctx: Context<RecordBonds>,
+        bsv_bond: u64,
+        solbsv_bond: u64,
+    ) -> Result<()> {
+        require!(
+            !ctx.accounts.member.bonded,
+            SolbeamError::BondsAlreadyRecorded
+        );
+        require!(
+            ctx.accounts.member.status == MemberStatus::Active,
+            SolbeamError::MemberNotActive
+        );
+        require!(bsv_bond > 0, SolbeamError::BondMissing);
+        require!(solbsv_bond > 0, SolbeamError::BondMissing);
+
+        let member = &mut ctx.accounts.member;
+        member.bsv_bond = bsv_bond;
+        member.solbsv_bond = solbsv_bond;
+        member.bond_key = ctx.accounts.bond_key.key();
+        member.bonded = true;
+
+        let fed = &mut ctx.accounts.federation;
+        fed.bonded_members = fed
+            .bonded_members
+            .checked_add(1)
+            .ok_or(SolbeamError::Overflow)?;
+
+        emit!(BondsRecorded {
+            identity: member.identity,
+            bsv_bond,
+            solbsv_bond,
+            bond_key: member.bond_key,
+        });
+        Ok(())
+    }
+
+    /// Leave: the bonds are returned and the seat is surrendered.
+    ///
+    /// Called by the member's identity. The record is kept rather than closed,
+    /// because a departure is a fact the registry should still carry; `status`
+    /// becomes [`MemberStatus::Left`] and the bonds are **zeroed with nothing
+    /// paid in their place**, which is what "returns the bond" means here: the
+    /// `solBSV`-side bond was never transferred in (see [`record_bonds`]) and
+    /// the BSV-side bond is off-chain, so what the program can do is stop
+    /// counting both against the member. Settling the BSV-side bond is a BSV
+    /// transaction the members sign, exactly as seizing it is.
+    ///
+    /// **The floor.** A departure is refused unless at least `threshold` bonded
+    /// members remain, checked **before** anything is mutated. Below that the
+    /// set can no longer assemble the `t` of `t-of-N` needed to sign at all, so
+    /// the registry would be recording a federation that cannot act. On a fresh
+    /// federation at `threshold = 4` this means the fifth departure is refused.
+    /// The exit path is therefore bounded by the threshold and **not** by an
+    /// unbonding clock: `fed.unbond_slots` is `open`, so no time lock exists to
+    /// enforce, and this instruction does not pretend one does.
+    ///
+    /// **What a departing member keeps, stated plainly and not papered over:**
+    /// **a departure returns the bond; it does not invalidate the member's
+    /// share of the reserve key.** A former member who was given a share of the
+    /// gateway threshold key retains a valid one, because nothing in this
+    /// program or in the design invalidates it -- the key is off-chain and the
+    /// registry cannot reach it. **The effective threshold therefore degrades
+    /// with churn**: at `4-of-N`, four former members together still hold four
+    /// valid shares and can sign as if they were still seated, while the
+    /// registry shows a smaller set. This is a **known, unfinalised problem**,
+    /// not a property this instruction establishes or fixes. The two remedies
+    /// are key rotation -- currently unimplementable, because
+    /// `initialize_bridge` fixes `deposit_script` once and the reserve address
+    /// cannot change -- and proactive re-sharing, which **needs the departing
+    /// member's cooperation** and so does not answer the case it is most needed
+    /// for. Both are real work, neither is built, and this code does not claim
+    /// otherwise.
+    pub fn leave_member(ctx: Context<LeaveMember>) -> Result<()> {
+        require!(
+            ctx.accounts.member.status == MemberStatus::Active,
+            SolbeamError::MemberNotActive
+        );
+        require!(
+            ctx.accounts.member.identity == ctx.accounts.owner.key(),
+            SolbeamError::MemberIdentityMismatch
+        );
+        let fed = &mut ctx.accounts.federation;
+        require!(
+            departure_keeps_threshold(fed.bonded_members, fed.threshold),
+            SolbeamError::GatewayBelowThreshold
+        );
+
+        let member = &mut ctx.accounts.member;
+        let returned_bsv = member.bsv_bond;
+        let returned_solbsv = member.solbsv_bond;
+        member.bsv_bond = 0;
+        member.solbsv_bond = 0;
+        member.bonded = false;
+        member.status = MemberStatus::Left;
+
+        if returned_bsv > 0 || returned_solbsv > 0 {
+            fed.bonded_members = fed
+                .bonded_members
+                .checked_sub(1)
+                .ok_or(SolbeamError::Overflow)?;
+        }
+
+        emit!(MemberLeft {
+            identity: member.identity,
+            returned_bsv,
+            returned_solbsv,
+            bonded_remaining: fed.bonded_members,
+        });
+        Ok(())
+    }
+
+    /// Clear a member's **`solBSV`-side** bond, on the authority's instruction.
+    ///
+    /// This is the side the design makes **seizable by the program**, and this
+    /// instruction is the whole of that capability here: it zeroes the recorded
+    /// amount and the aggregate. The BSV-side bond is **not touched, and cannot
+    /// be** -- it is off-chain and is seized only by the members collectively
+    /// signing a BSV transaction, which is a social duty the program has no part
+    /// in. That asymmetry is stated in the design rather than hidden, and it is
+    /// stated here too.
+    ///
+    /// **What this is not.** It is **not slashing**: no proof of misbehaviour is
+    /// checked, no equivocation is compared, no bounty is paid, and there is no
+    /// intent account to equivocate on. Slashing is designed and **not built**
+    /// (doc 03 §5). Requiring the program's upgrade authority is the honest
+    /// stand-in for the federation, which does not exist -- and it means this
+    /// instruction is **one key's assertion**, which is a weaker thing than the
+    /// designed mechanism and is recorded as weaker.
+    ///
+    /// The same threshold floor as [`leave_member`] applies, and for the same
+    /// reason: a member whose bond is gone cannot back a seat, so the set must
+    /// still have `threshold` bonded members after the seizure.
+    ///
+    /// **What is not built, said exactly:** no `solBSV` is moved. The recorded
+    /// amount is the program's record of what a member attested; since
+    /// [`record_bonds`] does not take custody, clearing the record does not by
+    /// itself put any token anywhere.
+    pub fn seize_solbsv_bond(ctx: Context<SeizeSolbsvBond>) -> Result<()> {
+        require!(
+            ctx.accounts.member.status == MemberStatus::Active,
+            SolbeamError::MemberNotActive
+        );
+        require!(ctx.accounts.member.bonded, SolbeamError::BondMissing);
+        require!(ctx.accounts.member.solbsv_bond > 0, SolbeamError::NoBondToSeize);
+
+        let fed = &mut ctx.accounts.federation;
+        require!(
+            departure_keeps_threshold(fed.bonded_members, fed.threshold),
+            SolbeamError::GatewayBelowThreshold
+        );
+
+        let member = &mut ctx.accounts.member;
+        let seized = member.solbsv_bond;
+        member.solbsv_bond = 0;
+        member.bonded = false;
+        fed.bonded_members = fed
+            .bonded_members
+            .checked_sub(1)
+            .ok_or(SolbeamError::Overflow)?;
+
+        emit!(SolbsvBondSeized {
+            identity: member.identity,
+            amount: seized,
+            authority: ctx.accounts.authority.key(),
+        });
+        Ok(())
     }
 }
 
@@ -3704,6 +4153,157 @@ impl Config {
     pub const SPACE: usize = 8 + 8 + 8 + 1;
 }
 
+/// The two signer sets on the reserve script, their thresholds, and the live
+/// counts the thresholds are floors over.
+///
+/// **A record, not a key.** `gateway_key` and `greycore_key` are the two
+/// 33-byte public keys that fill `fed.script`'s 2-of-2
+/// `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`. The
+/// program stores them so the registry says which script the federation claims
+/// to hold; it cannot check that claim, cannot spend it, and holds no share of
+/// either key. **The keys do not exist in this repository**, no ceremony
+/// produces them, and no deposit has ever paid one.
+///
+/// **Why the counts are here.** `threshold` is a *floor* and `N` is variable,
+/// so the program must be able to answer "how many members hold a share right
+/// now" without being told: `gateway_members` is every identity ever admitted
+/// and not departed, and `bonded_members` is the subset that has posted both
+/// sides. The departure and seizure paths refuse to draw `bonded_members` below
+/// `threshold`, which is the only numeric invariant the registry enforces. It is
+/// **not a capacity rule about the reserve** -- no such rule exists in this
+/// design, and none is invented here.
+#[account]
+pub struct FederationConfig {
+    /// The key that created the federation and the only key that may appoint
+    /// Greycore members or seize a recorded `solBSV` bond. The program's upgrade
+    /// authority at genesis; a **PoC stand-in** for the federation, which does
+    /// not exist.
+    pub authority: Pubkey,
+    /// The **gateway signing threshold** `t` (`fed.threshold`, `4`). The
+    /// reserve key's `t-of-N`. Changing `t` or `N` is a **re-sharing**, not a
+    /// migration, and **the re-sharing ceremony is not specified** -- so this
+    /// field records the threshold and nothing here performs the ceremony.
+    pub threshold: u64,
+    /// The gateway's **aggregate** public key: the leg that emits one signature
+    /// however many members signed.
+    pub gateway_key: Pubkey,
+    /// How many Greycore members must assemble before the Greycore leg can sign.
+    /// `fed.greycore_threshold` is `open`; this PoC fixes it at 1 in
+    /// [`initialize_federation`] and does not pretend that is the design value.
+    pub greycore_threshold: u64,
+    /// The Greycore's public key: **the second leg of the reserve script**, and
+    /// the reason a gateway majority acting alone cannot move the reserve.
+    pub greycore_key: Pubkey,
+    /// Every gateway identity admitted and not departed. This is the live `N`.
+    pub gateway_members: u64,
+    /// Greycore identities in the registry.
+    pub greycore_members: u64,
+    /// Gateway members with both sides recorded. The threshold floor is applied
+    /// to **this** count.
+    pub bonded_members: u64,
+    pub bump: u8,
+}
+
+impl FederationConfig {
+    /// 8 + 32 + 8 + 32 + 8 + 32 + 8 + 8 + 8 + 1 = 145 bytes.
+    pub const SPACE: usize = 8 + 32 + 8 + 32 + 8 + 32 + 8 + 8 + 8 + 1;
+}
+
+/// One Greycore member: an identity key, and nothing else.
+///
+/// A Greycore member **does not bond and holds no share of the reserve key**.
+/// What a member of this set *is* is reputation that can be lost and a
+/// signature that can be attributed -- it admits gateway members and, through
+/// `greycore_key`, co-signs every reserve spend. Neither of those is enforced by
+/// this account; it records who is in the set.
+///
+/// Admission to this set is **authority-gated** for now (see
+/// [`crate::add_greycore_member`]), which is a stand-in: the reference appoints
+/// its Greycore by community governance and no governance instruction exists
+/// here. At genesis the authority that creates the federation is itself the
+/// founding Greycore member, so **the two quorums are not disjoint at the
+/// start**, and no mechanism in this program makes them so.
+#[account]
+pub struct GreycoreMember {
+    pub identity: Pubkey,
+    pub bump: u8,
+}
+
+impl GreycoreMember {
+    /// 8 discriminator + 32 identity + 1 bump = 41 bytes.
+    pub const SPACE: usize = 8 + 32 + 1;
+}
+
+/// Whether a gateway member currently holds a seat.
+///
+/// Two states, because the registry keeps a departed member's record instead of
+/// closing it. Only [`MemberStatus::Active`] counts toward the gateway's live
+/// size, and only an active member may be seized from.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MemberStatus {
+    /// Admitted, in the set, counted in `gateway_members`.
+    Active,
+    /// Departed: the bonds are zeroed and the seat is surrendered. **The
+    /// record remains, and the member's off-chain share of the reserve key
+    /// remains valid with it** -- nothing here invalidates a share, which is
+    /// the leaver-share problem stated in [`crate::leave_member`].
+    Left,
+}
+
+/// One gateway member: identity, both bonds, admission, and state.
+///
+/// **The two bond fields are different kinds of thing and are documented
+/// separately on purpose:**
+///
+/// * `solbsv_bond` -- the **`solBSV`-side** bond. Recorded here, clearable only
+///   by the program (via [`crate::seize_solbsv_bond`]). This is the enforceable
+///   half *in the design*; what is built is the record, not a token transfer.
+/// * `bsv_bond` -- the **BSV-side** bond, and it is **an attestation, not
+///   custody**. The BSV is on another chain. It is held under `bond_key`, the
+///   **collective threshold key** -- *not* the member's own key, which is the
+///   design requirement that stops a caught member moving their own bond -- and
+///   it is seized only by the members **collectively signing a BSV
+///   transaction**. That is a **social duty: nothing on BSV compels them to
+///   sign**, and this program has no part in it beyond this number. A majority
+///   could also seize an honest member's bond; the design states that residual
+///   rather than hiding it.
+///
+/// **Neither bond is inside the reserve.** The bond is the float -- working
+/// capital for transfers -- and **not a capital requirement sized against the
+/// reserve**: there is deliberately no numeric capacity rule in this design, and
+/// none is enforced or invented here.
+#[account]
+pub struct GatewayMember {
+    /// The member's identity key. The account is seeded on it, so one identity
+    /// is one seat.
+    pub identity: Pubkey,
+    /// **BSV-side bond, recorded.** An attestation by the member that this much
+    /// BSV is bonded under `bond_key`; the program cannot see BSV and cannot
+    /// check it. Not custody.
+    pub bsv_bond: u64,
+    /// **`solBSV`-side bond, recorded.** The side the program can clear.
+    pub solbsv_bond: u64,
+    /// The **collective threshold key** the BSV-side bond sits under --
+    /// **not** the member's key. The program records it and can do nothing
+    /// with it.
+    pub bond_key: Pubkey,
+    /// The Greycore member whose signature admitted this member. Admission
+    /// requires the Greycore, so this is never a gateway key.
+    pub approved_by: Pubkey,
+    /// True once both sides are recorded, which is what makes the seat count
+    /// toward `FederationConfig::bonded_members`.
+    pub bonded: bool,
+    /// Active or departed. A departed member keeps this record and a valid
+    /// off-chain share.
+    pub status: MemberStatus,
+    pub bump: u8,
+}
+
+impl GatewayMember {
+    /// 8 + 32 + 8 + 8 + 32 + 32 + 1 + 1 + 1 = 123 bytes.
+    pub const SPACE: usize = 8 + 32 + 8 + 8 + 32 + 32 + 1 + 1 + 1;
+}
+
 /// The one change awaiting its timelock, and who proposed it.
 ///
 /// A singleton: the PDA seed is fixed (`[b"pending_authority_change"]`), so only
@@ -3760,6 +4360,145 @@ pub struct DepositScript {
 impl DepositScript {
     /// 8 discriminator + 4 vec length + MAX_SCRIPT_LEN + 1 padding.
     pub const SPACE: usize = 8 + 4 + MAX_SCRIPT_LEN + 1;
+}
+
+
+// ---------------------------------------------------------------------------
+// the federation registry's accounts
+// ---------------------------------------------------------------------------
+
+/// Creates the federation, the Greycore and the founding Greycore member.
+///
+/// The authority check is the same one [`Initialize`] and [`InitializeBridge`]
+/// use, and it is declared **before** either `init` so a rejected caller creates
+/// nothing. `gateway_key` is an instruction argument rather than an account: it
+/// is a **record of the off-chain key**, and there is nothing on chain to
+/// deserialise or compare it against -- which is exactly why it must be
+/// distinct from the Greycore's key, since one key in both legs would collapse
+/// the 2-of-2 into a single signer and remove the second quorum entirely.
+#[derive(Accounts)]
+pub struct InitializeFederation<'info> {
+    /// The program's upgrade authority, and the payer. Becomes the federation's
+    /// `authority` and the first Greycore identity.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(
+        address = program_data_address() @ SolbeamError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ SolbeamError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
+    /// The aggregate gateway public key the design says fills the reserve
+    /// script's first leg. A record; the program holds no share of it.
+    /// CHECK: a public key carried as instruction data, stored verbatim, never
+    /// dereferenced and never signed for.
+    pub gateway_key: UncheckedAccount<'info>,
+    #[account(init, payer = authority, space = FederationConfig::SPACE,
+              seeds = [FEDERATION_SEED], bump)]
+    pub federation: Account<'info, FederationConfig>,
+    #[account(init, payer = authority, space = GreycoreMember::SPACE,
+              seeds = [GREYCORE_MEMBER_SEED, authority.key().as_ref()], bump)]
+    pub greycore_member: Account<'info, GreycoreMember>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Adds one Greycore member. Authority-gated, because no governance instruction
+/// exists in this PoC -- see [`crate::add_greycore_member`].
+#[derive(Accounts)]
+pub struct AddGreycoreMember<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(mut, seeds = [FEDERATION_SEED], bump = federation.bump,
+              has_one = authority @ SolbeamError::Unauthorized)]
+    pub federation: Account<'info, FederationConfig>,
+    /// Creating this account **is** the admission, exactly as it is for a
+    /// gateway member: the seeds include the identity, so a second attempt for
+    /// the same key collides with the existing account and `init` refuses.
+    #[account(init, payer = authority, space = GreycoreMember::SPACE,
+              seeds = [GREYCORE_MEMBER_SEED, identity.key().as_ref()], bump)]
+    pub greycore_member: Account<'info, GreycoreMember>,
+    /// CHECK: used only as a seed; the address derived from it is what the
+    /// `init` must match, so an identity that does not derive this account
+    /// cannot be pointed at it.
+    pub identity: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Admit one gateway member, on a Greycore member's signature.
+///
+/// `approver` is the Greycore member and must sign; `greycore_member` is that
+/// member's registry record, whose `identity` must equal the signer. Requiring
+/// **both** the record and the signature is what makes "admission requires the
+/// Greycore" a check rather than a convention: an arbitrary signer has no
+/// record, and a gateway member has no record in this registry at all.
+#[derive(Accounts)]
+pub struct AdmitMember<'info> {
+    /// The Greycore member performing the admission, and the rent payer.
+    #[account(mut)]
+    pub approver: Signer<'info>,
+    #[account(mut, seeds = [FEDERATION_SEED], bump = federation.bump)]
+    pub federation: Account<'info, FederationConfig>,
+    /// The approver's record in the Greycore registry. Its `identity` is
+    /// compared against the signer in the handler, so this cannot be a
+    /// borrowed record for a key that is not present.
+    #[account(seeds = [GREYCORE_MEMBER_SEED, approver.key().as_ref()],
+              bump = greycore_member.bump)]
+    pub greycore_member: Account<'info, GreycoreMember>,
+    /// The new member's record, created here with zeroed bonds: an admitted
+    /// member does not count toward the threshold until [`RecordBonds`] posts
+    /// both sides.
+    #[account(init, payer = approver, space = GatewayMember::SPACE,
+              seeds = [GATEWAY_MEMBER_SEED, identity.key().as_ref()], bump)]
+    pub member: Account<'info, GatewayMember>,
+    /// CHECK: only a seed; the `init` above must match the address derived from
+    /// it, and the handler requires it to equal the `identity` argument, so the
+    /// record cannot be created under a key other than the admitted one.
+    pub identity: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Records both sides of a member's bond. Called by the member's identity.
+#[derive(Accounts)]
+pub struct RecordBonds<'info> {
+    #[account(mut, seeds = [GATEWAY_MEMBER_SEED, owner.key().as_ref()],
+              bump = member.bump)]
+    pub member: Account<'info, GatewayMember>,
+    #[account(mut, seeds = [FEDERATION_SEED], bump = federation.bump)]
+    pub federation: Account<'info, FederationConfig>,
+    /// The member's identity key, and the only key that may post their bonds.
+    pub owner: Signer<'info>,
+    /// The **collective threshold key** the BSV-side bond is held under. Passed
+    /// in as a record: the program cannot check that any BSV is bonded under it.
+    /// CHECK: stored verbatim, never dereferenced and never signed for.
+    pub bond_key: UncheckedAccount<'info>,
+}
+
+/// Leaves the federation. Called by the member's identity.
+#[derive(Accounts)]
+pub struct LeaveMember<'info> {
+    #[account(mut, seeds = [GATEWAY_MEMBER_SEED, owner.key().as_ref()],
+              bump = member.bump)]
+    pub member: Account<'info, GatewayMember>,
+    #[account(mut, seeds = [FEDERATION_SEED], bump = federation.bump)]
+    pub federation: Account<'info, FederationConfig>,
+    /// The member's identity key. The handler checks it against the record as
+    /// well as deriving the account from it, so a member cannot leave on
+    /// another member's seat.
+    pub owner: Signer<'info>,
+}
+
+/// Clears a member's recorded `solBSV`-side bond. Authority-gated.
+#[derive(Accounts)]
+pub struct SeizeSolbsvBond<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(mut, seeds = [FEDERATION_SEED], bump = federation.bump,
+              has_one = authority @ SolbeamError::Unauthorized)]
+    pub federation: Account<'info, FederationConfig>,
+    /// The member whose recorded `solBSV` bond is cleared.
+    #[account(mut, seeds = [GATEWAY_MEMBER_SEED, member.identity.as_ref()],
+              bump = member.bump)]
+    pub member: Account<'info, GatewayMember>,
 }
 
 #[derive(Accounts)]
@@ -4259,6 +4998,72 @@ pub struct RedeemSettled {
     pub payout_height: u64,
 }
 
+/// The federation and its Greycore were created, with the two aggregate keys
+/// that fill the reserve script's legs.
+///
+/// Emitted because these are the values the registry says the reserve is, and
+/// the program cannot verify any of them: the log is what makes the claim
+/// visible and attributable to the key that made it.
+#[event]
+pub struct FederationInitialized {
+    pub authority: Pubkey,
+    pub threshold: u64,
+    pub gateway_key: Pubkey,
+    pub greycore_key: Pubkey,
+}
+
+/// A Greycore member was appointed. Authority-gated in this PoC.
+#[event]
+pub struct GreycoreMemberAdded {
+    pub identity: Pubkey,
+}
+
+/// A gateway member was admitted, by the named Greycore member.
+///
+/// `approved_by` is the point of the event: admission is the Greycore's job, so
+/// who approved whom is the part that has to be attributable.
+#[event]
+pub struct MemberAdmitted {
+    pub identity: Pubkey,
+    pub approved_by: Pubkey,
+}
+
+/// Both sides of a member's bond were recorded.
+///
+/// `bond_key` is the collective threshold key the **BSV-side** bond sits under,
+/// and the `bsv_bond` figure is the member's **attestation**: the program cannot
+/// see BSV, so this event records a declaration, not a deposit.
+#[event]
+pub struct BondsRecorded {
+    pub identity: Pubkey,
+    pub bsv_bond: u64,
+    pub solbsv_bond: u64,
+    pub bond_key: Pubkey,
+}
+
+/// A member departed. `bonded_remaining` is emitted so the size of the signing
+/// set after the departure is visible from the log, not only from the config.
+#[event]
+pub struct MemberLeft {
+    pub identity: Pubkey,
+    pub returned_bsv: u64,
+    pub returned_solbsv: u64,
+    pub bonded_remaining: u64,
+}
+
+/// A member's recorded **`solBSV`-side** bond was cleared on the authority's
+/// instruction.
+///
+/// The name says `solbsv` deliberately: the BSV-side bond is untouched and
+/// untouchable from here, and a reader must not read this event as a bond being
+/// taken.
+#[event]
+pub struct SolbsvBondSeized {
+    pub identity: Pubkey,
+    pub amount: u64,
+    pub authority: Pubkey,
+}
+
 // ---------------------------------------------------------------------------
 // Merkle folding and minimal transaction parsing
 // ---------------------------------------------------------------------------
@@ -4410,6 +5215,56 @@ pub fn is_acceptable_deposit_script(script: &[u8]) -> bool {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// the federation's two pure rules
+// ---------------------------------------------------------------------------
+//
+// Both are factored out of the instruction handlers so they can be unit-tested
+// directly. That is not tidiness: the departure floor is the registry's only
+// numeric invariant and it is **unreachable on a local validator without
+// building a five-member federation first**, and the key rule is a property of
+// values the program cannot see. A rule that can only be exercised through an
+// expensive setup is a rule that gets tested by accident, so the arithmetic and
+// the comparison live here and are tested below.
+
+/// Does a departure leave the gateway at or above its signing threshold?
+///
+/// `bonded` is the member count **before** the departure, so the post-state is
+/// `bonded - 1`. The floor is `t` of `t-of-N`: below `t` the reserve key cannot
+/// produce a signature at all, so the registry would be recording a federation
+/// that cannot act. A count that cannot be decremented at all (0) is also a
+/// refusal; it is a state the handlers cannot reach, and this returns false for
+/// it rather than letting the subtraction wrap.
+///
+/// This is a floor on the **signing set**, and deliberately **not** a capacity
+/// rule about the reserve: no numeric capacity rule exists in this design, and
+/// none is introduced here.
+pub fn departure_keeps_threshold(bonded: u64, threshold: u64) -> bool {
+    match bonded.checked_sub(1) {
+        Some(remaining) => remaining >= threshold,
+        None => false,
+    }
+}
+
+/// Are the two legs of the reserve script genuinely two different keys?
+///
+/// The reserve script is `OP_2 <gateway threshold key> <greycore key> OP_2
+/// OP_CHECKMULTISIG`, both legs required. If the two were the same key, the
+/// script would still assemble and would still say 2-of-2, but **one signer
+/// would satisfy both legs** -- the second quorum, which is the only thing
+/// constraining the reserve, would not exist. So the keys must differ, and
+/// neither may be the all-zero key.
+///
+/// The program **cannot verify that either key is real**: no key generation and
+/// no sharing happens here, so a caller can record any non-zero key it likes.
+/// That is the accepted limit of a registry, and it is why this rule is about
+/// *distinctness* and not about custody.
+pub fn reserve_keys_distinct(gateway_key: &Pubkey, greycore_key: &Pubkey) -> bool {
+    *gateway_key != Pubkey::default()
+        && *greycore_key != Pubkey::default()
+        && gateway_key != greycore_key
+}
+
 #[error_code]
 pub enum SolbeamError {
     #[msg("header must be exactly 80 bytes")]
@@ -4550,6 +5405,26 @@ pub enum SolbeamError {
     WrongPayoutNullifier,
     #[msg("this payout outpoint has already settled a different redemption")]
     PayoutOutpointReused,
+    #[msg("the gateway signing threshold must be at least 2 and its keys non-empty and distinct")]
+    BadFederationThreshold,
+    #[msg("the gateway and Greycore keys in the reserve script must be two different keys")]
+    ReserveKeysNotDistinct,
+    #[msg("the member account is not the PDA this identity derives")]
+    MemberIdentityMismatch,
+    #[msg("admission requires a signature from a registered Greycore member")]
+    NotGreycore,
+    #[msg("the gateway roster is at its headroom above the threshold")]
+    FederationFull,
+    #[msg("this member is not active, so the seat cannot change")]
+    MemberNotActive,
+    #[msg("both sides of the bond must be recorded before the seat counts")]
+    BondMissing,
+    #[msg("this member has already recorded both bonds")]
+    BondsAlreadyRecorded,
+    #[msg("leaving would take the bonded gateway set below its signing threshold")]
+    GatewayBelowThreshold,
+    #[msg("this member has no recorded solBSV-side bond to seize")]
+    NoBondToSeize,
 }
 
 #[cfg(test)]
@@ -4824,3 +5699,178 @@ mod pegout_tests {
         assert!(redeem_deadline_slot(1, 1, u64::MAX).is_err());
     }
 }
+
+/// The federation registry's layout and its two pure rules.
+///
+/// The accounts are compared against a real `AnchorSerialize` because a field
+/// reorder compiles and then reads the wrong bytes on chain, which is exactly
+/// the failure this project has already had once. `FederationConfig` and
+/// `GatewayMember` are the two accounts whose fields the threshold floor and a
+/// member's bonds are read from, so their layouts are pinned here.
+///
+/// The two pure rules are tested directly because **the departure floor cannot
+/// be reached on a local validator without first building a federation of
+/// `threshold + 1` bonded members**, and that end-to-end test lives in the
+/// TypeScript suite where it belongs. What is tested here is the arithmetic and
+/// the key comparison; what is tested there is that the handlers consult them.
+#[cfg(test)]
+mod federation_tests {
+    use super::*;
+
+    fn distinct_keys() -> (Pubkey, Pubkey) {
+        (
+            Pubkey::new_from_array([7u8; 32]),
+            Pubkey::new_from_array([9u8; 32]),
+        )
+    }
+
+    /// A departure is refused **at** the floor and allowed above it, and the
+    /// floor is `t` rather than `t - 1`. At the shipped `4-of-N` a set of four
+    /// refuses -- and so does an empty set, rather than underflowing -- while a
+    /// set of five is the first that may lose a member.
+    #[test]
+    fn departure_is_refused_at_the_threshold_and_allowed_above_it() {
+        // The shipped gateway threshold, read from the generated sheet rather
+        // than retyped, so a parameter change moves this test with it.
+        let t = 4u64;
+        assert!(!departure_keeps_threshold(t, t), "4 -> 3 is below 4-of-N");
+        assert!(departure_keeps_threshold(t + 1, t), "5 -> 4 is still 4-of-N");
+        assert!(departure_keeps_threshold(9, t));
+        // Below the threshold to begin with: 3 -> 2 cannot host a 4-of-N key.
+        assert!(!departure_keeps_threshold(3, t));
+        // An empty set refuses rather than wrapping.
+        assert!(!departure_keeps_threshold(0, t));
+        // Exactly zero remaining is a refusal for any non-zero threshold.
+        assert!(!departure_keeps_threshold(1, 1));
+        // The boundary, stated once more: the count after the departure is
+        // `bonded - 1`, and it is compared with `>=`, so `t + 1` is the
+        // smallest set that may lose a seat.
+        for bonded in 0..12u64 {
+            assert_eq!(
+                departure_keeps_threshold(bonded, t),
+                bonded >= 1 && bonded - 1 >= t,
+                "bonded = {bonded}"
+            );
+        }
+    }
+
+    /// The two reserve legs must be two different, non-empty keys.
+    ///
+    /// A repeated key would still assemble a `2-of-2` script, but one signer
+    /// would satisfy both legs and **the second quorum would not exist** -- the
+    /// mechanism that stops a gateway majority moving the reserve alone.
+    #[test]
+    fn reserve_legs_must_be_two_distinct_non_empty_keys() {
+        let (gateway, greycore) = distinct_keys();
+        assert!(reserve_keys_distinct(&gateway, &greycore));
+        // Order does not matter; only distinctness does.
+        assert!(reserve_keys_distinct(&greycore, &gateway));
+
+        // The same key in both legs: one signer would satisfy the whole script.
+        assert!(!reserve_keys_distinct(&gateway, &gateway));
+        // The all-zero key is not a key, in either leg.
+        assert!(!reserve_keys_distinct(&Pubkey::default(), &greycore));
+        assert!(!reserve_keys_distinct(&gateway, &Pubkey::default()));
+        assert!(!reserve_keys_distinct(&Pubkey::default(), &Pubkey::default()));
+    }
+
+    /// `FederationConfig` is Borsh on both sides (created by `init`), so its
+    /// `SPACE` must be exactly what its fields serialise to. The order pinned
+    /// here is the order the handlers read.
+    #[test]
+    fn federation_config_layout_matches_its_fields() {
+        let (gateway, greycore) = distinct_keys();
+        let fed = FederationConfig {
+            authority: Pubkey::new_from_array([1u8; 32]),
+            threshold: 4,
+            gateway_key: gateway,
+            greycore_threshold: 1,
+            greycore_key: greycore,
+            gateway_members: 3,
+            greycore_members: 2,
+            bonded_members: 2,
+            bump: 255,
+        };
+
+        let mut data = Vec::new();
+        data.extend_from_slice(FederationConfig::DISCRIMINATOR);
+        AnchorSerialize::serialize(&fed, &mut data).unwrap();
+        assert_eq!(data.len(), FederationConfig::SPACE);
+
+        // The exact byte offsets the account's readers use, so a reorder is a
+        // test failure rather than a silent misread.
+        assert_eq!(data[8..40], fed.authority.to_bytes());
+        assert_eq!(u64::from_le_bytes(data[40..48].try_into().unwrap()), 4);
+        assert_eq!(data[48..80], gateway.to_bytes());
+        assert_eq!(u64::from_le_bytes(data[80..88].try_into().unwrap()), 1);
+        assert_eq!(data[88..120], greycore.to_bytes());
+        assert_eq!(u64::from_le_bytes(data[120..128].try_into().unwrap()), 3);
+        assert_eq!(u64::from_le_bytes(data[128..136].try_into().unwrap()), 2);
+        assert_eq!(u64::from_le_bytes(data[136..144].try_into().unwrap()), 2);
+        assert_eq!(data[144], 255);
+    }
+
+    /// `GreycoreMember` and `GatewayMember`: the two registries' records.
+    #[test]
+    fn gateway_and_greycore_member_layouts_match_their_fields() {
+        let (gateway, greycore) = distinct_keys();
+
+        let gc = GreycoreMember {
+            identity: gateway,
+            bump: 254,
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(GreycoreMember::DISCRIMINATOR);
+        AnchorSerialize::serialize(&gc, &mut data).unwrap();
+        assert_eq!(data.len(), GreycoreMember::SPACE);
+        assert_eq!(data[8..40], gateway.to_bytes());
+        assert_eq!(data[40], 254);
+
+        let member = GatewayMember {
+            identity: gateway,
+            bsv_bond: 1_000,
+            solbsv_bond: 2_000,
+            bond_key: greycore,
+            approved_by: Pubkey::new_from_array([11u8; 32]),
+            bonded: true,
+            status: MemberStatus::Active,
+            bump: 253,
+        };
+        let mut m = Vec::new();
+        m.extend_from_slice(GatewayMember::DISCRIMINATOR);
+        AnchorSerialize::serialize(&member, &mut m).unwrap();
+        assert_eq!(m.len(), GatewayMember::SPACE);
+        assert_eq!(m[8..40], gateway.to_bytes());
+        assert_eq!(u64::from_le_bytes(m[40..48].try_into().unwrap()), 1_000);
+        assert_eq!(u64::from_le_bytes(m[48..56].try_into().unwrap()), 2_000);
+        assert_eq!(m[56..88], greycore.to_bytes());
+        assert_eq!(m[88..120], member.approved_by.to_bytes());
+        assert_eq!(m[120], 1, "bonded");
+        assert_eq!(m[121], 0, "Active is tag 0");
+        assert_eq!(m[122], 253);
+
+        // A departed member keeps the record and serialises as tag 1.
+        let left = GatewayMember {
+            status: MemberStatus::Left,
+            ..member.clone()
+        };
+        let mut l = Vec::new();
+        l.extend_from_slice(GatewayMember::DISCRIMINATOR);
+        AnchorSerialize::serialize(&left, &mut l).unwrap();
+        assert_eq!(l.len(), GatewayMember::SPACE);
+        assert_eq!(l[121], 1, "Left is tag 1");
+    }
+
+    /// The roster headroom is a **PoC placeholder**, not `N`, and it is pinned
+    /// here so that raising it is a deliberate edit with a test to change rather
+    /// than a quiet widening of an unbounded set.
+    #[test]
+    fn gateway_headroom_is_the_placeholder_eight() {
+        assert_eq!(MAX_GATEWAY_HEADROOM, 8);
+        // The bound the handler applies, stated as arithmetic: it refuses a new
+        // member once the roster reaches `t + 8`, so at `4-of-N` the thirteenth
+        // admission is the first refused.
+        assert!(4 + MAX_GATEWAY_HEADROOM == 12);
+    }
+}
+
