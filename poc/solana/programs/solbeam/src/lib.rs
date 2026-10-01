@@ -3233,9 +3233,11 @@ fn redeem_fee(amount: u64) -> Result<u64> {
 /// from an omitted add. The call site passes `CANCEL_GRACE_SLOTS`, so the
 /// parameter still governs behaviour.
 fn redeem_deadline_slot(now: u64, policy_slots: u64, grace_slots: u64) -> Result<u64> {
-    now.checked_add(policy_slots)
+    let deadline = now
+        .checked_add(policy_slots)
         .and_then(|s| s.checked_add(grace_slots))
-        .ok_or(SolbeamError::Overflow)
+        .ok_or(SolbeamError::Overflow)?;
+    Ok(deadline)
 }
 
 /// True while a staged payout claim is still **provable**: a claim was made and

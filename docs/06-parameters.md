@@ -9,7 +9,7 @@ are still provisional.
 and the tables below are its two human projections, and `config/gen.py` fails if either disagrees with
 the JSON on any ID, name, value, status or provenance — the three cannot drift.
 > **Almost all of this is a specification, not shipped behaviour.** The built set is 21 instructions
-> and 64 passing / 0 failing. The only parameters actually settable in the built program are
+> and 66 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, shipped at **0**) and the authority timelock
 > (`TIMELOCK_SLOTS = 32`, a constant). **`FLOOR` is not a parameter in code** — it is the constant
 > `MIN_CONFIRMATIONS = 12`. Nothing else here is settable at runtime.

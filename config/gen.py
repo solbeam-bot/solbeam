@@ -351,6 +351,9 @@ def check_doc_legend(params: dict) -> None:
                 f"{', '.join(words)}")
         counts: dict[str, int] = {w: 0 for w in words}
         for param in params["parameters"]:
+            if param[axis] not in counts:
+                die(f"{param['id']}: {axis} {param[axis]!r} is not one of "
+                    f"{', '.join(words)}")
             counts[param[axis]] += 1
         for name, count in rows:
             if str(counts[name]) != count:
