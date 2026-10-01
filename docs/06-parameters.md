@@ -35,7 +35,7 @@ was chosen*.
 | **`built-frozen`** | In the program as a compiled constant; changing it needs a **redeploy** | **22** |
 | **`built-shape`** | The shape is enforced by the built program; the keys (or the authority) behind it are not | **2** |
 | **`designed`** | **Not in the program.** A specification row: decided policy, an external measurement, or a derived quantity the program does not carry | **30** |
-| **`open`** | **No value yet.** This is work to do, not a decision deferred | **2** |
+| **`open`** | **No value yet.** This is work to do, not a decision deferred | **6** |
 | **`superseded`** | Recorded for history only | **2** |
 <!-- END GENERATED: status-legend -->
 
@@ -46,7 +46,7 @@ was chosen*.
 |---|---|---|
 | **`measured`** | From the chain, the code or the toolchain. Do not change without re-measuring | **11** |
 | **`decided`** | A settled design choice | **31** |
-| **`placeholder`** | A starting value — or no value yet — expected to move | **12** |
+| **`placeholder`** | A starting value — or no value yet — expected to move | **16** |
 | **`derived`** | Computed from other parameters; changing it directly is a bug | **6** |
 <!-- END GENERATED: provenance-legend -->
 
@@ -123,6 +123,10 @@ that lives only in this sheet.
 | `fed.collusion_mitigation` | Against a colluding threshold | **transparency** | `designed` | `decided` | **Stated risk, not a mechanism.** No on-chain predicate proves who signed an off-chain threshold signature. The maximum loss is the whole **non-member supply**. Publishing the reserve and supply converts a hidden theft into a visible one; the unchallenged-spend case is separately addressed by the **reported spent-outpoint record** |
 | `fed.k` | Bond coverage floor | **1** | `designed` | `decided` | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, checked on mint and exit. **A solvency check, not a capacity ceiling.** The capacity arithmetic built on `k` and `n/t` is **withdrawn**. Capital inefficiency accepted |
 | `fed.threshold` | Gateway signing threshold | **4-of-N, `N` open** | `designed` | `decided` | `t` of `n` for the gateway **threshold ECDSA** key. **`N` is a variable; the number is arbitrary and deferred.** The key emits **one** signature and is one leg of the reserve's 2-of-2 script. Changing `t` or `n` is a **re-sharing**, not a migration |
+| `fed.roster_size` | Gateway roster size (N) | **open** | `open` | `placeholder` | The `N` of `4-of-N`: how many members hold a share of the gateway threshold key. **The shape is settled and the number is deferred**, so the registry stores a **floor and never an `N`**. The program reads the live roster from the member records and refuses any departure that would take the bonded set below `fed.threshold`. |
+| `fed.admission_ceremony` | Re-sharing ceremony | **open** | `open` | `placeholder` | How a newly admitted member is given a share of the **live** gateway key: generation, distribution and verification. **Not specified anywhere.** `admit_member` records the admission and does **not** perform the ceremony, so the registry names a member the key does not yet know. |
+| `fed.leaver_share` | Leaver-share invalidation | **open** | `open` | `placeholder` | **Nothing invalidates a departing member's share.** `leave_member` returns the bonds and records `MemberStatus::Left`; the share stays valid off chain, so the **effective threshold degrades with churn** — at `4-of-N` four former members together still hold four valid shares. A **known unfinalised problem**, not a mechanism. |
+| `fed.removal` | Removal and compelled exit | **open** | `open` | `placeholder` | Whether a member can be **removed without leaving**, who may do it, and whether a member can be **compelled to stay**. **Not specified.** No instruction removes a member: the registry has admission, `record_bonds`, `leave_member` and a `solBSV`-side seizure, and **none of the four removes a seat without the member's own signature**. |
 | `fed.greycore_size` | Greycore size | **open** | `designed` | `placeholder` | The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose, who do not run the reserve. The Greycore **finds and admits replacement members** |
 | `fed.greycore_threshold` | Greycore threshold | **open** | `designed` | `placeholder` | How many Greycore keys must sign alongside the gateway. The Greycore **co-signs every reserve spend**, which is what constrains the reserve. 4-of-5 was an earlier proposal and is not settled |
 | `fed.shards` | Shard count | **open** | `designed` | `placeholder` | One key or several groups. Affects blast radius and latency. **There is no sharding today: blast radius is 100%** |
