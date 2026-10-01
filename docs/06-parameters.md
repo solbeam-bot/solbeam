@@ -5,9 +5,14 @@
 the on-chain program and the node software read, so a specification can be correct while the numbers
 are still provisional.
 
-**The sheet is driven by [`config/params.json`](../config/params.json).** [`parameters.csv`](parameters.csv)
-and the tables below are its two human projections, and `config/gen.py` fails if either disagrees with
-the JSON on any ID, name, value, status or provenance — the three cannot drift.
+**The sheet is driven by [`config/params.json`](../config/params.json).** A maintainer edits that one
+file and runs one command — `python3 config/gen.py` — which rewrites every projection: the Rust
+constants in `programs/solbeam/src/params.rs`, the suite mirror in `tests/params.json`,
+[`parameters.csv`](parameters.csv) and the fenced tables and legend below. Nothing in them is
+retyped, and `python3 config/gen.py --check` fails if any projection is stale. The tables are fenced
+by `BEGIN/END GENERATED` comments; **everything outside those fences is hand-written prose**, and the
+generator leaves it alone. A value that has to appear in a projection is a `%v%`/`%V%` template over
+the row's machine `value`, so changing the JSON alone moves the code, the CSV and this page together.
 > **Almost all of this is a specification, not shipped behaviour.** The built set is 21 instructions
 > and 66 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, shipped at **0**) and the authority timelock
@@ -23,6 +28,7 @@ was chosen*.
 
 **Status — where the value lives.**
 
+<!-- BEGIN GENERATED: status-legend -- edit config/params.json and run `python3 config/gen.py` -->
 | Status | Meaning | Count |
 |---|---|---|
 | **`built-mutable`** | In the program, in a runtime account, changeable through the timelocked authority | **2** |
@@ -31,15 +37,18 @@ was chosen*.
 | **`designed`** | **Not in the program.** A specification row: decided policy, an external measurement, or a derived quantity the program does not carry | **30** |
 | **`open`** | **No value yet.** This is work to do, not a decision deferred | **2** |
 | **`superseded`** | Recorded for history only | **2** |
+<!-- END GENERATED: status-legend -->
 
 **Provenance — how it was chosen.**
 
+<!-- BEGIN GENERATED: provenance-legend -- edit config/params.json and run `python3 config/gen.py` -->
 | Provenance | Meaning | Count |
 |---|---|---|
 | **`measured`** | From the chain, the code or the toolchain. Do not change without re-measuring | **11** |
 | **`decided`** | A settled design choice | **30** |
 | **`placeholder`** | A starting value — or no value yet — expected to move | **13** |
 | **`derived`** | Computed from other parameters; changing it directly is a bug | **6** |
+<!-- END GENERATED: provenance-legend -->
 
 So **`lc.seconds_per_block = 600`** is **`built-frozen` + `measured`** — a compiled constant holding a
 fact about BSV — while **`lc.window_hours = 32`** is **`built-frozen` + `decided`** — a compiled
@@ -61,9 +70,10 @@ that lives only in this sheet.
 
 ---
 
+<!-- BEGIN GENERATED: parameter-tables -- edit config/params.json and run `python3 config/gen.py` -->
 ## Light client
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `lc.window_hours` | Window length (hours) | **32** | `built-frozen` | `decided` | How much BSV history the client keeps. Sets the deposit deadline |
 | `lc.window` | Window length (records) | **192** | `built-frozen` | `derived` | `window_hours × 3600 / seconds_per_block`. Bounded above by the account cap |
@@ -82,7 +92,7 @@ that lives only in this sheet.
 
 ## Vault
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `v.maturity_blocks` | Maturity | **0** | `built-mutable` | `placeholder` | Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks** |
 | `v.reorg_margin` | Detection margin | **48 blocks** at the *designed* values | `designed` | `derived` | `window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth |
@@ -90,7 +100,7 @@ that lives only in this sheet.
 
 ## Federation
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `fed.bond_mint` | Mint-side bond — BSV side (**the float**) | **1,000 BSV** | `designed` | `decided` | Held **outside the reserve**. **The bond is the float** — working capital for transfers — **not a capital requirement sized against the reserve**, and not a capacity ceiling. The `k × (BSV held)` line is a solvency check on mint and exit. **Held under the collective (threshold ECDSA) key, not the member's own**, and seized by the **members collectively**; slashing pays the slashers from it. A collective action by the majority, not an automatic rule |
 | `fed.bond_key` | Mint-side bond custody | **collective (threshold ECDSA) key** | `designed` | `decided` | **The design requirement the mechanism rests on.** If a member controls their own bond they move it the moment they are caught. *Residuals:* a majority could seize an honest member's bond; nothing on BSV compels signing, so the duty to slash is **social** |
@@ -113,7 +123,7 @@ that lives only in this sheet.
 
 ## Governance
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `gov.threshold` | Pass threshold | **85%** | `designed` | `placeholder` | Share of pledged coins required |
 | `gov.delay` | Delay before effect | **30 days** | `designed` | `placeholder` | **Reducible** by governance, but never below `gov.delay_min`. Redemptions run throughout |
@@ -127,7 +137,7 @@ that lives only in this sheet.
 
 ## Fees
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `fee.mint_bp` | Peg-in fee (**gross**) | **30 bp** | `designed` | `decided` | Covers all transaction fees; the remainder is member income. **Its physical location is unspecified — N1** |
 | `fee.redeem_bp` | Peg-out fee (**gross**) | **30 bp** | `built-frozen` | `decided` | As above |
@@ -135,7 +145,7 @@ that lives only in this sheet.
 
 ## Peg-in
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `pi.min_peg_in` | Minimum deposit | **1 BSV** | `designed` | `decided` | Prices out dust griefing. Decided; **enforcement is not in code** |
 | `pi.max_used` | Legacy replay-list cap | **200** | `superseded` | `derived` | Replaced by a **nullifier PDA per deposit**, which is **built**. There is no list and no ceiling |
@@ -143,7 +153,7 @@ that lives only in this sheet.
 
 ## Peg-out
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `po.payout_confirmations` | Payout depth | **6 BSV blocks** | `built-frozen` | `decided` | BSV confirmations before a payout is provable. `C_payout` |
 | `po.challenge_window` | Challenge window | **144 BSV blocks** | `built-frozen` | `decided` | `W`. Confirmations a payout needs before settling |
@@ -154,12 +164,13 @@ that lives only in this sheet.
 
 ## Measured constants — do not change without re-measuring
 
-| ID | Name | Value | Status | Provenance | Description |
+| id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
 | `m.rent_per_byte` | Solana rent | **5,080 lamports/byte** | `designed` | `measured` | `(bytes + 128) × 5,080`. **The 128-byte overhead is inside this rate.** 6,960 is an older toolchain's constant and overstates by ~37%. Measured: `solana rent 0` = 650,240 lamports; `solana rent 165` = 1,488,440 |
 | `m.signature_fee` | Solana base fee | **5,000 lamports** | `designed` | `measured` | Per signature |
 | `m.token_decimals` | `solBSV` decimals | **8** | `built-frozen` | `measured` | — |
 | `m.blob_max` | Transaction size | **1,232 bytes** | `designed` | `measured` | Solana limit; drives `lc.max_fork_batch` |
+<!-- END GENERATED: parameter-tables -->
 
 ---
 
