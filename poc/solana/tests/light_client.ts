@@ -183,6 +183,29 @@ async function waitForSlot(
   }
 }
 
+/**
+ * Run an instruction that must be refused, and assert the program's **own**
+ * error code.
+ *
+ * Deliberately not a substring match on the whole error: the point of these
+ * tests is *which guard fired*, and a loose match lets a refusal from a
+ * different check pass for the named one. The code is extracted exactly as the
+ * rest of the suite extracts it, so a failure that is not an Anchor program
+ * error fails the equality rather than quietly matching.
+ */
+async function expectRefusal(
+  code: string, run: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (e: any) {
+    const m = String(e).match(/Error Code: (\w+)/);
+    expect(m ? m[1] : String(e), `expected the refusal to be ${code}`).to.equal(code);
+    return;
+  }
+  expect.fail(`expected ${code}; the instruction was accepted instead`);
+}
+
 /** The PDAs and provider every timelocked call needs. */
 type GovCtx = {
   program: any;
@@ -526,6 +549,11 @@ describe("solbeam — verify a deposit against the window", () => {
     [Buffer.from("config")], program.programId);
   const [vault] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("vault")], program.programId);
+  // The timelocked authority path, used at the end of the deposit test to put
+  // the shared client back where the blocks after this one expect it.
+  const gov: GovCtx = {
+    program, provider, lightClient, pending: pendingChangePda(program.programId),
+  };
 
   // The replay nullifier for the one fixture deposit. Derived from the claim's
   // (txid, vout) exactly as the program derives it — there is no list account
@@ -719,10 +747,13 @@ describe("solbeam — verify a deposit against the window", () => {
       fixture.headers.findIndex((h: any) => h.height === fixture.proof.height)];
     expect(Buffer.from(item.depositHash).toString("hex"))
       .to.equal(doubleSha256(depositRaw).toString("hex"));
-    // The default maturity is 0, and this is the deposit that proves the
-    // pass-through: the value the parameter had when the deposit was verified is
-    // what is recorded, not the config's value at release time.
+    // The value the parameter had when the deposit was verified is what is
+    // recorded, not the config's value at release time. It ships at 144, so the
+    // item matures at 117 + 144 = 261 — far past the fixture's tip of 128.
     expect(item.maturityAtDeposit.toNumber()).to.equal(DEFAULT_MATURITY_BLOCKS);
+    // If this ever holds at or below `lc.floor` the gate below stops being
+    // reachable and the assertion that follows would be vacuous.
+    expect(DEFAULT_MATURITY_BLOCKS).to.be.greaterThan(MIN_CONFIRMATIONS);
 
     // No recipient token account was created: nothing was minted to the
     // depositor on this path.
@@ -735,7 +766,48 @@ describe("solbeam — verify a deposit against the window", () => {
     expect(vaultInfo, "the vault should hold the minted tokens").to.not.equal(null);
     expect(tokenAmount(vaultInfo!.data)).to.equal(fixture.proof.amount);
 
-    // --- and release_mint delivers it, permissionlessly ------------------------
+    // --- the vault HOLDS: release is refused until the item matures -------------
+    // This is the whole difference the 144-block maturity makes. At the
+    // fixture's tip the deposit already has its `lc.floor` confirmations, so
+    // this cannot be an `InsufficientConfirmations` refusal: the one condition
+    // still unsatisfied is maturity, and the refusal has to name it.
+    const matureAt = fixture.proof.height + DEFAULT_MATURITY_BLOCKS; // 261
+    const tipAtDeposit = (await program.account.lightClient.fetch(lightClient))
+      .tipHeight.toNumber();
+    expect(tipAtDeposit - fixture.proof.height + 1)
+      .to.be.at.least(MIN_CONFIRMATIONS);
+    expect(tipAtDeposit).to.be.lessThan(matureAt);
+    await expectRefusal("NotMatured", () => program.methods
+      .releaseMint(Array.from(displayToInternal(fixture.proof.txid)), fixture.proof.vout)
+      .accounts(releaseAccounts())
+      .rpc());
+    // A refused release moves nothing: still no ATA, the vault unchanged, the
+    // item still staged.
+    expect(await provider.connection.getAccountInfo(recipientAta)).to.equal(null);
+    expect(tokenAmount((await provider.connection.getAccountInfo(vault))!.data))
+      .to.equal(fixture.proof.amount);
+    expect(await provider.connection.getAccountInfo(staged)).to.not.equal(null);
+
+    // --- wait the maturity out, then release it --------------------------------
+    // The deposit is the fixture's, so the chain is extended from the fixture's
+    // tip with fabricated regtest blocks. Every header declares regtest's bits,
+    // the chain does not retarget, and `forkFrom` re-mines each one, so linkage
+    // and proof of work are the only rules to satisfy.
+    let parent = raws[raws.length - 1];
+    for (let h = tipAtDeposit + 1; h <= matureAt; h++) {
+      parent = forkFrom(raws[raws.length - 1], parent, h);
+      await program.methods.pushHeader(Array.from(parent))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    }
+    // 148 records, from 114 to 261, under the 192-record window, so the
+    // deposit's own block is still held and the release can check it. The
+    // checkpoint header itself is not a record: `anchor_checkpoint` empties the
+    // window and the *first push* becomes `window_start`, so 114 and not 113.
+    const atMaturity = await program.account.lightClient.fetch(lightClient);
+    expect(atMaturity.tipHeight.toNumber()).to.equal(matureAt);
+    expect(atMaturity.windowStart.toNumber())
+      .to.equal(fixture.checkpoint.height + 1);
+
     await program.methods
       .releaseMint(Array.from(displayToInternal(fixture.proof.txid)), fixture.proof.vout)
       .accounts(releaseAccounts())
@@ -745,13 +817,33 @@ describe("solbeam — verify a deposit against the window", () => {
     expect(delivered, "release_mint should create and fund the recipient's ATA")
       .to.not.equal(null);
     expect(tokenAmount(delivered!.data)).to.equal(fixture.proof.amount);
-    // The vault is empty again — this is the maturity-0 pass-through.
+    // The vault is empty — but only after the item reached its recorded
+    // maturity. It is not a pass-through.
     expect(tokenAmount((await provider.connection.getAccountInfo(vault))!.data)).to.equal(0);
     // The staged item is closed: released exactly once.
     expect(await provider.connection.getAccountInfo(staged)).to.equal(null);
     // The replay record is NOT closed by the release. It must outlive the item
     // or the deposit could be staged again.
     expect(await provider.connection.getAccountInfo(nullifier)).to.not.equal(null);
+  });
+
+  // Put the shared client back where the blocks that follow expect it. This is
+  // an `after` hook rather than the tail of the test above on purpose: the test
+  // pushes the chain to 261, and if any assertion before the restore fails, a
+  // restore inside the test never runs — the hostile-advancer and reorg blocks
+  // then fail for an unrelated reason (one of them with an out-of-memory panic,
+  // because a 148-record window is what it has to serialise). A safety net that
+  // runs on failure is worth the one extra checkpoint on the happy path.
+  after(async () => {
+    await timelockedCheckpoint(gov, fixture.checkpoint.height, raws[0]);
+    for (const raw of raws.slice(1)) {
+      await program.methods.pushHeader(Array.from(raw))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+    }
+    const restored = await program.account.lightClient.fetch(lightClient);
+    expect(restored.tipHeight.toNumber()).to.equal(fixture.tip_height);
+    expect(Buffer.from(restored.tipHash).toString("hex"))
+      .to.equal(doubleSha256(raws[raws.length - 1]).toString("hex"));
   });
 
   it("refuses the same deposit twice", async () => {
@@ -2106,28 +2198,33 @@ describe("solbeam — the authority timelock (F4)", () => {
 /**
  * The vault at **non-zero** maturity, and the burn path.
  *
- * This is the suite doc 31 §5 exists for. At the default `maturity_blocks = 0`
- * the release gate is satisfied the moment the deposit has its twelve
- * confirmations, so `burn_staged`'s *maturity* half is vacuous; the parameter is
- * a parameter precisely so the burn can be **proven by test rather than
- * asserted**.
+ * This is the suite doc 31 §5 exists for, and its shape follows
+ * `v.maturity_blocks` shipping at 144. `MATURITY = 15` is a **lowering** from
+ * that shipped default, through the existing timelocked path — not a raise.
+ * Lowering is what makes the gate *testable*: at 12 or less the gate would
+ * already be satisfied by the time a deposit had `MIN_CONFIRMATIONS`, so
+ * `NotMatured` could never be reached and the condition would be untested. At
+ * 15 it binds for three blocks after the twelfth confirmation, while
+ * `NotMatured` is still reachable within a handful of fabricated blocks rather
+ * than the 144 a default-maturity test would have to mine.
  *
- * The two deposits here are **synthetic**, not the fixture's: the fixture's one
- * `(txid, vout)` was consumed and released by the second describe block, and its
- * nullifier is the replay record, so it can never be staged twice. Building the
- * transactions is straightforward because a one-transaction block's Merkle root
- * *is* that transaction's id — so a claim has an empty branch, which the program
- * folds to the root it reads out of the header.
+ * The deposits are staged while the config says 15, and the config is then
+ * moved to 30. A deposit carries the value that applied when it was verified,
+ * so the suite also proves the recorded `maturity_at_deposit` is what the
+ * release and the burn use rather than the config's value at release time.
  *
- * `MATURITY = 15` rather than something smaller is deliberate. At 12 or less the
- * maturity gate would already be satisfied by the time a deposit had
- * `MIN_CONFIRMATIONS`, so `NotMatured` could never be reached and the condition
- * would be untested. At 15 it binds for three blocks after the twelfth
- * confirmation, which is what the negative test below exercises.
+ * **What separates "the gate worked" from "the gate was already open".** A
+ * deposit has `MIN_CONFIRMATIONS` at tip `height + 11`; A is at 127, so A is
+ * twelve confirmations deep at tip 139 while its recorded maturity runs to 142.
+ * The `NotMatured` at 139 is therefore a maturity refusal and not an
+ * `InsufficientConfirmations` one, and the release at 142 is one that a
+ * config-based check (157 under the config's 30) would still refuse — which is
+ * what makes the recorded field load-bearing. One assertion below cannot
+ * distinguish and says so where it occurs: B's `NotMatured` at 142 holds under
+ * both readings (143 recorded, 158 under the config's 30).
  *
- * It runs last, re-anchors the client, and leaves `maturity_blocks` at 30: the
- * deposits are staged at 15 and the config is then raised, so the suite also
- * proves the recorded `maturity_at_deposit` is what the release and the burn use.
+ * It runs last among the regtest blocks, re-anchors the client, and leaves
+ * `maturity_blocks` at 30.
  */
 describe("solbeam — the vault at non-zero maturity (release and burn)", () => {
   const provider = anchor.AnchorProvider.env();
@@ -2158,9 +2255,14 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
     "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
   const DEPOSIT_SCRIPT = Buffer.from(fixture.deposit_script, "hex");
-  // A test input, not a parameter: 15 is chosen so the maturity gate still binds
-  // after MIN_CONFIRMATIONS has been satisfied (see the block doc above).
+  // A test input, not a parameter, and a **lowering** from the shipped 144.
+  // 15 is chosen so the maturity gate still binds after MIN_CONFIRMATIONS has
+  // been satisfied (see the block doc above) while staying reachable quickly.
   const MATURITY = 15;
+  // The config value the two deposits are then moved to. Still below the shipped
+  // default, and above MATURITY, so the recorded field and the live field
+  // disagree at the release below.
+  const RAISED_MATURITY = MATURITY * 2; // 30
   // Derived from the sheet rather than retyped. The deposits land at 127 (A) and
   // 128 (B); the tip must reach 128 + MIN_CONFIRMATIONS - 1 for B to have its
   // confirmations, and each deposit matures at its own height + MATURITY.
@@ -2313,11 +2415,16 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
     await timelockedCheckpoint(gov, 115, rawAt(115));
     await push(rawAt(116));
 
-    // Raise the maturity **through the existing timelocked path**. No new
-    // authority mechanism: the same propose/execute the checkpoint uses.
+    // **Lower** the maturity from the shipped 144 to 15 through the existing
+    // timelocked path. No new authority mechanism: the same propose/execute the
+    // checkpoint uses. 15 keeps the gate closed for three blocks after the
+    // twelfth confirmation, so `NotMatured` is reachable; deriving it from
+    // `DEFAULT_MATURITY_BLOCKS` would instead make this block depend on the
+    // generated projections agreeing with the compiled program.
     await setMaturity(MATURITY);
     expect((await program.account.config.fetch(config)).maturityBlocks.toNumber())
       .to.equal(MATURITY);
+    expect(MATURITY).to.be.lessThan(DEFAULT_MATURITY_BLOCKS);
 
     // Filler 117..126, then the two deposit blocks at 127 and 128.
     let parent = rawAt(116);
@@ -2369,9 +2476,11 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
     expect(Buffer.from(b.depositHash).toString("hex"))
       .to.equal(doubleSha256(blockB).toString("hex"));
     // Read from `Config` at verify time, not from a constant and not from the
-    // config later: this is the field that makes a later raise harmless.
+    // config later: this is the field that makes a later change harmless. It is
+    // the *lowered* 15, not the shipped 144.
     expect(a.maturityAtDeposit.toNumber()).to.equal(MATURITY);
     expect(b.maturityAtDeposit.toNumber()).to.equal(MATURITY);
+    expect(MATURITY).to.be.lessThan(DEFAULT_MATURITY_BLOCKS);
 
     // The vault holds both.
     expect(tokenAmount((await provider.connection.getAccountInfo(vault))!.data))
@@ -2380,25 +2489,28 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
 
   it("refuses a release before the recorded maturity, and allows it after", async () => {
     // Tip 139, maturity 15: A matures at 142. The condition is live, not
-    // vacuously satisfied by the twelve confirmations.
-    try {
-      await program.methods.releaseMint(Array.from(txidA), 0)
-        .accounts(releaseAccounts(stagedA, ownerA, ataA)).rpc();
-      expect.fail("must not release before deposit_height + maturity");
-    } catch (e: any) {
-      expect(String(e)).to.contain("NotMatured");
-    }
+    // vacuously satisfied by the twelve confirmations — which is asserted here
+    // rather than assumed, because if the confirmations were not yet satisfied
+    // the refusal below would be `InsufficientConfirmations` for a reason that
+    // has nothing to do with maturity.
+    const tipNow = (await program.account.lightClient.fetch(lightClient))
+      .tipHeight.toNumber();
+    expect(tipNow - 127 + 1).to.be.at.least(MIN_CONFIRMATIONS);
+    expect(tipNow).to.be.lessThan(127 + MATURITY);
+    await expectRefusal("NotMatured", () => program.methods
+      .releaseMint(Array.from(txidA), 0)
+      .accounts(releaseAccounts(stagedA, ownerA, ataA)).rpc());
     expect(await provider.connection.getAccountInfo(ataA)).to.equal(null);
 
-    // **A later raise must not trap funds already in flight.** Both deposits are
-    // already staged with `maturity_at_deposit = 15`, so raise the config to 30
-    // through the same timelocked path and then release A at 142 — which is
-    // 127 + 15, and would be 157 under the *current* config. If the release used
-    // the config rather than the item's recorded maturity, this would fail
-    // NotMatured. The burn below lands on the same field the same way.
-    await setMaturity(MATURITY * 2);
+    // **A later config change must not trap funds already in flight.** Both
+    // deposits are already staged with `maturity_at_deposit = 15`, so move the
+    // config to 30 through the same timelocked path and then release A at 142 —
+    // which is 127 + 15, and would be 157 under the *current* config. If the
+    // release used the config rather than the item's recorded maturity, this
+    // would fail NotMatured. The burn below lands on the same field the same way.
+    await setMaturity(RAISED_MATURITY);
     expect((await program.account.config.fetch(config)).maturityBlocks.toNumber())
-      .to.equal(MATURITY * 2);
+      .to.equal(RAISED_MATURITY);
     expect((await program.account.stagedMint.fetch(stagedA)).maturityAtDeposit.toNumber())
       .to.equal(MATURITY);
     expect((await program.account.stagedMint.fetch(stagedB)).maturityAtDeposit.toNumber())
@@ -2412,7 +2524,9 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
     tipRaw = parent;
 
     // A_MATURE == 127 + MATURITY: A's own maturity has elapsed, though the
-    // config now says MATURITY * 2. The stored field is what is used.
+    // config now says RAISED_MATURITY. The stored field is what is used, and
+    // this release is the assertion that proves it: under the config's 30 it
+    // would still be NotMatured until tip 157.
     await program.methods.releaseMint(Array.from(txidA), 0)
       .accounts(releaseAccounts(stagedA, ownerA, ataA)).rpc();
 
@@ -2422,33 +2536,38 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
       .to.equal(AMOUNT_B);
     // Released exactly once.
     expect(await provider.connection.getAccountInfo(stagedA)).to.equal(null);
+
     // And B, at 128 + MATURITY = B_MATURE, is still NotMatured at A_MATURE.
-    try {
-      await program.methods.releaseMint(Array.from(txidB), 0)
-        .accounts(releaseAccounts(stagedB, ownerB, ataB)).rpc();
-      expect.fail("B must not release before its own maturity");
-    } catch (e: any) {
-      expect(String(e)).to.contain("NotMatured");
-    }
+    // **This assertion cannot distinguish** the recorded field from the live
+    // config: at tip 142 B refuses under either reading (143 recorded, 158 under
+    // the config's 30). A's release above, at a tip the config's 30 would have
+    // refused, is what proves the recorded value governs. What B's refusal does
+    // prove is that maturity is per item — a single global check against A's
+    // height would let B through here.
+    await expectRefusal("NotMatured", () => program.methods
+      .releaseMint(Array.from(txidB), 0)
+      .accounts(releaseAccounts(stagedB, ownerB, ataB)).rpc());
   });
 
   it("burns B after a followed reorg, and refuses to release it", async () => {
     // B_MATURE == 128 + MATURITY: B is matured. Nothing has moved against it
     // yet, so the burn must be refused — this is the "no transient fork burns a
-    // good mint" half of the predicate.
+    // good mint" half of the predicate. Pinning the code to
+    // `DepositHashUnchanged` also says something about which maturity is read:
+    // at tip 143 the recorded 15 has just run out (143), while the config's 30
+    // would need 158, so a config-based check would have refused `NotMatured`
+    // before reaching the hash comparison at all.
     let parent = forkFrom(rawAt(B_MATURE), tipRaw, B_MATURE);
     await push(parent);
     tipRaw = parent;
     expect((await program.account.lightClient.fetch(lightClient)).tipHeight.toNumber())
       .to.equal(B_MATURE);
+    expect(B_MATURE).to.equal(128 + MATURITY);
+    expect(B_MATURE).to.be.lessThan(128 + RAISED_MATURITY);
 
-    try {
-      await program.methods.burnStaged(Array.from(txidB), 0)
-        .accounts(burnAccounts(stagedB)).rpc();
-      expect.fail("must not burn while the stored hash still matches");
-    } catch (e: any) {
-      expect(String(e)).to.contain("DepositHashUnchanged");
-    }
+    await expectRefusal("DepositHashUnchanged", () => program.methods
+      .burnStaged(Array.from(txidB), 0)
+      .accounts(burnAccounts(stagedB)).rpc());
 
     // Now the reorg. The incumbent runs 116..143 (28 headers from the re-anchor
     // baseline); a branch of 28 headers off 116 carries strictly more work, so
@@ -2489,16 +2608,18 @@ describe("solbeam — the vault at non-zero maturity (release and burn)", () => 
 
     // The stored hash at 128 is now the branch's block. Release must refuse —
     // this is the condition that makes `burn_staged` the correct answer rather
-    // than a convenience.
-    try {
-      await program.methods.releaseMint(Array.from(txidB), 0)
-        .accounts(releaseAccounts(stagedB, ownerB, ataB)).rpc();
-      expect.fail("must not release a reorged deposit");
-    } catch (e: any) {
-      expect(String(e)).to.contain("DepositHashChanged");
-    }
+    // than a convenience. The tip here (144) is past B's recorded maturity (143)
+    // so the refusal is the hash and not maturity; pinning the code says so.
+    expect(after.tipHeight.toNumber()).to.be.at.least(128 + MATURITY);
+    await expectRefusal("DepositHashChanged", () => program.methods
+      .releaseMint(Array.from(txidB), 0)
+      .accounts(releaseAccounts(stagedB, ownerB, ataB)).rpc());
 
     // And the burn succeeds. Anyone may call it; the item's rent is the reward.
+    // This is the burn-side proof that the *recorded* maturity governs: tip 144
+    // has cleared B's recorded 143, but the config's RAISED_MATURITY would have
+    // required 158 and refused `NotMatured`.
+    expect(after.tipHeight.toNumber()).to.be.lessThan(128 + RAISED_MATURITY);
     await program.methods.burnStaged(Array.from(txidB), 0)
       .accounts(burnAccounts(stagedB)).rpc();
 
@@ -2573,6 +2694,19 @@ describe("solbeam — the reported spent-outpoint record, and the vault's hard g
   // E lands at 127 and G at 128, so the tip must reach 128 +
   // MIN_CONFIRMATIONS - 1 for both to have their confirmations.
   const BURY_TIP = 128 + MIN_CONFIRMATIONS - 1; // 139
+  // The height the two out-of-window tests park the client at. Above E's block
+  // (127) and above E's recorded maturity, so the only guard left standing is
+  // the window.
+  const PARKED_HEIGHT = 190;
+  // **A test input, not the shipped parameter.** E is staged with this recorded
+  // maturity, so `127 + OUT_OF_WINDOW_MATURITY = 142 <= PARKED_HEIGHT`: the
+  // maturity gate is *satisfied* when the out-of-window tests run, and the
+  // refusal they assert is provably the window and not `NotMatured`. The shipped
+  // default is 144, which would put E's maturity at 271 and make `NotMatured`
+  // fire first — the tests would then be passing for the wrong reason (or, as
+  // observed, failing). The value is set through the same timelocked path and is
+  // a lowering, like the vault block's.
+  const OUT_OF_WINDOW_MATURITY = 15;
 
   // E is staged and never released: it drives `AlreadyStaged` and both
   // `DepositHeightNotInWindow` paths. G is never staged: it drives
@@ -2708,11 +2842,16 @@ describe("solbeam — the reported spent-outpoint record, and the vault's hard g
   before(async () => {
     await rebuildChain();
     // Make E's recorded maturity independent of what earlier blocks left in
-    // `Config` — the vault block raises it to 30. At 0 the later forward
-    // re-anchor to 190 leaves `mature_at = 127` well satisfied, so the guard
-    // that fires in the out-of-window tests is `DepositHeightNotInWindow` and
-    // not `NotMatured`.
-    await setMaturity(DEFAULT_MATURITY_BLOCKS);
+    // `Config` (the vault block leaves it at 30) — and, more importantly, small
+    // enough that it is *satisfied* at `PARKED_HEIGHT`. The shipped default of
+    // 144 would put E's maturity at 127 + 144 = 271, so `NotMatured` would fire
+    // before `DepositHeightNotInWindow` ever could. This is a **lowering**
+    // through the same timelocked path, and the inequality is asserted below
+    // rather than assumed.
+    await setMaturity(OUT_OF_WINDOW_MATURITY);
+    expect((await program.account.config.fetch(config)).maturityBlocks.toNumber())
+      .to.equal(OUT_OF_WINDOW_MATURITY);
+    expect(OUT_OF_WINDOW_MATURITY).to.be.lessThan(DEFAULT_MATURITY_BLOCKS);
     // Stage E, and never release it: its staged item must still exist for the
     // `AlreadyStaged` and out-of-window tests. This also proves the backing
     // check passes when the record is empty, so the refusals below are about
@@ -2721,6 +2860,10 @@ describe("solbeam — the reported spent-outpoint record, and the vault's hard g
       .accounts(verifyAccounts(spentE, nullifierE, stagedE, ownerE)).rpc();
     expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
     expect(await provider.connection.getAccountInfo(spentE)).to.equal(null);
+    // The maturity E carries for the rest of this block, read back from the
+    // item. Every out-of-window refusal below depends on this number.
+    expect((await program.account.stagedMint.fetch(stagedE))
+      .maturityAtDeposit.toNumber()).to.equal(OUT_OF_WINDOW_MATURITY);
   });
 
   it("refuses a spent-outpoint report from a key that is not the program authority", async () => {
@@ -2853,9 +2996,9 @@ describe("solbeam — the reported spent-outpoint record, and the vault's hard g
     //      the staged item that still exists is what refuses the mint.
     const originalBlockE = doubleSha256(blockE).toString("hex");
 
-    await timelockedCheckpoint(gov, 190, rawAt(190));
+    await timelockedCheckpoint(gov, PARKED_HEIGHT, rawAt(PARKED_HEIGHT));
     expect((await program.account.lightClient.fetch(lightClient))
-      .windowStart.toNumber()).to.equal(190);
+      .windowStart.toNumber()).to.equal(PARKED_HEIGHT);
 
     await program.methods.pruneNullifier(Array.from(txidE), 0)
       .accounts({
@@ -2887,44 +3030,53 @@ describe("solbeam — the reported spent-outpoint record, and the vault's hard g
   });
 
   it("refuses to release a staged mint whose deposit height has left the window", async () => {
-    // Park the checkpoint above E's height. E has matured (recorded maturity
-    // 0), so the maturity check passes — the refusal is that the client no
-    // longer holds height 127 at all, so the deposit's hash cannot be checked.
-    await timelockedCheckpoint(gov, 190, rawAt(190));
+    // Park the checkpoint above E's height. E's recorded maturity (127 + 15 =
+    // 142) is **satisfied** at 190, and that is asserted rather than assumed:
+    // with the shipped 144 it would not be, `NotMatured` would fire before the
+    // hash lookup, and the test would be asserting the wrong guard. The refusal
+    // under test is that the client no longer holds height 127 at all, so the
+    // deposit's hash cannot be checked.
+    await timelockedCheckpoint(gov, PARKED_HEIGHT, rawAt(PARKED_HEIGHT));
+    const parked = await program.account.lightClient.fetch(lightClient);
+    expect(parked.tipHeight.toNumber()).to.equal(PARKED_HEIGHT);
+    expect(parked.windowStart.toNumber()).to.equal(PARKED_HEIGHT);
+    expect(parked.tipHeight.toNumber())
+      .to.be.at.least(127 + OUT_OF_WINDOW_MATURITY);
 
-    try {
-      await program.methods.releaseMint(Array.from(txidE), 0)
-        .accounts({
-          lightClient, staged: stagedE, mint, vault,
-          recipientTokenAccount: ataE, recipientOwner: ownerE,
-          submitter: provider.wallet.publicKey,
-        })
-        .rpc();
-      expect.fail("must not release once the deposit height has left the window");
-    } catch (e: any) {
-      expect(String(e)).to.contain("DepositHeightNotInWindow");
-    }
+    await expectRefusal("DepositHeightNotInWindow", () => program.methods
+      .releaseMint(Array.from(txidE), 0)
+      .accounts({
+        lightClient, staged: stagedE, mint, vault,
+        recipientTokenAccount: ataE, recipientOwner: ownerE,
+        submitter: provider.wallet.publicKey,
+      })
+      .rpc());
     // The item and the vault are untouched, and no ATA was created.
     expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
     expect(await provider.connection.getAccountInfo(ataE)).to.equal(null);
   });
 
   it("refuses to burn a staged mint whose deposit height has left the window", async () => {
-    // The window is still parked at 190 from the release test, so this is the
-    // same condition on the other exit. `burn_staged` does not require
-    // freshness, so `DepositHeightNotInWindow` cannot be confused with
-    // `StaleClient` here.
-    try {
-      await program.methods.burnStaged(Array.from(txidE), 0)
-        .accounts({
-          lightClient, staged: stagedE, mint, vault,
-          submitter: provider.wallet.publicKey,
-        })
-        .rpc();
-      expect.fail("must not burn once the deposit height has left the window");
-    } catch (e: any) {
-      expect(String(e)).to.contain("DepositHeightNotInWindow");
-    }
+    // Park the window here rather than inheriting it from the release test: the
+    // two are separate guards on separate exits, and a burn test that only works
+    // because its neighbour ran first is order-dependent. Re-anchoring to the
+    // same height is a no-op on state and costs only the timelock. This is the
+    // same condition on the other exit; `burn_staged` does not require freshness,
+    // so `DepositHeightNotInWindow` cannot be confused with `StaleClient` here.
+    await timelockedCheckpoint(gov, PARKED_HEIGHT, rawAt(PARKED_HEIGHT));
+    const parked = await program.account.lightClient.fetch(lightClient);
+    expect(parked.tipHeight.toNumber()).to.equal(PARKED_HEIGHT);
+    expect(parked.windowStart.toNumber()).to.equal(PARKED_HEIGHT);
+    expect(parked.tipHeight.toNumber())
+      .to.be.at.least(127 + OUT_OF_WINDOW_MATURITY);
+
+    await expectRefusal("DepositHeightNotInWindow", () => program.methods
+      .burnStaged(Array.from(txidE), 0)
+      .accounts({
+        lightClient, staged: stagedE, mint, vault,
+        submitter: provider.wallet.publicKey,
+      })
+      .rpc());
     expect(await provider.connection.getAccountInfo(stagedE)).to.not.equal(null);
   });
 });
@@ -3224,8 +3376,10 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
     await setRedeemDeadline(SMALL_DEADLINE);
     expect((await program.account.config.fetch(config))
       .redeemDeadlineSlots.toNumber()).to.equal(SMALL_DEADLINE);
-    // The previous block left maturity at its default; the release below is
-    // immediate only if that is still 0.
+    // This block needs a released deposit to fund a redemption, and it is not
+    // testing maturity: lower the maturity to 0 through the same timelocked
+    // path so the funding release below is immediate, whatever the previous
+    // block left behind (the vault block leaves 30, the shipped default is 144).
     if ((await program.account.config.fetch(config)).maturityBlocks.toNumber() !== 0) {
       await setMaturity(0);
     }
@@ -3868,9 +4022,12 @@ describe("solbeam — the federation registry (doc 03 §2, doc 12 §1-3,5-6)", (
   // PoC headroom above the threshold, mirroring MAX_GATEWAY_HEADROOM.
   const HEADROOM = 8;
 
-  // Every identity admitted in this block, by base58 key. `leave_member` is
-  // signed by the member's own identity key, so a test that looks an account up
-  // through `all()` still needs the keypair to sign with.
+  // Every identity admitted in this block whose keypair this block holds, by
+  // base58 key. `leave_member` is signed by the member's own identity key, so a
+  // test that looks an account up through `all()` still needs the keypair to
+  // sign with. **Every member that records bonds must be added here**: `all()`
+  // is address-ordered, and the identities are randomly generated, so which
+  // member a `.find(bonded)` returns changes from run to run.
   const admitted = new Map<string, anchor.web3.Keypair>();
 
   /** A refused instruction's message, for a specific-error assertion. */
@@ -4134,6 +4291,11 @@ describe("solbeam — the federation registry (doc 03 §2, doc 12 §1-3,5-6)", (
 
   it("refuses to record one side of a bond, then records both and counts the seat", async () => {
     const identity = anchor.web3.Keypair.generate();
+    // This member records bonds below, so it is one of the members a later
+    // `.find(bonded)` can return and be asked to sign `leave_member`. It was
+    // missing from the map, which made "returns a departing member's bonds"
+    // pass or fail depending on the address order `all()` happened to return.
+    admitted.set(identity.publicKey.toBase58(), identity);
     await provider.connection.requestAirdrop(
       identity.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
 
