@@ -15,8 +15,8 @@ short version, so it can be reviewed with fresh eyes.
 **Built or designed?** Built: the **light client with cw-144**, **`solBSV`**, the **mint**, **fork
 staging**, the **nullifier**, the **timelocked authority** and **the vault** — 21 instructions, 66
 passing / 0 failing. **Designed, not built: the federation, the Greycore, peg-out and governance.**
-**The vault's protective window ships at 0**, so the reversal is available and racy rather than
-automatic.
+**The vault's protective window is a stored parameter at 144 BSV blocks (~24 hours)**, so a
+followed reorg has a window in which it can be reversed.
 
 ---
 
@@ -35,7 +35,7 @@ counterparty or back to the sender.** No failure path mints; every one returns. 
 3  DEPTH    12 confirmations (FLOOR = MIN_CONFIRMATIONS)
 4  STAGE    solBSV is minted INTO THE VAULT, not to the depositor, and a record stores
             the block hash the deposit was proven against and maturity_at_deposit
-5  MATURE   designed 144 blocks; SHIPPED 0, so the vault is a pass-through
+5  MATURE   144 BSV blocks (~24 hours), a stored parameter
 6  RELEASE  permissionless: the client is fresh, the tip has advanced past the deposit,
             AND the stored hash still matches
             → the vault releases to the recipient
@@ -79,7 +79,7 @@ proof of guilt (D13). **Redemptions are never pausable** (D11, D12).
 | **Collusion accepted, transparency is the mitigation** | A colluding threshold can take the reserve; maximum loss is the non-member supply. Continuous publication of the reserve and supply converts a hidden theft into a visible one — an **early deliverable** |
 | **Genesis** | Members post a **BSV-side bond**, so no `solBSV` needs to exist first. A capped, explicitly-unbonded first mint is a documented later option, not chosen |
 | **Confirmed by test** | 66 on-chain tests / 0 failing, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`**, and the burn path exercised at a non-zero maturity |
-| **`MIN_CONFIRMATIONS = 12` protects a deposit today** | The vault's protective window is off by parameter; the 12-confirmation delay is **prevention**, not reversal |
+| **`MIN_CONFIRMATIONS = 12` and a 144-block maturity window protect a deposit** | The 12-confirmation delay is **prevention**; the 144-block (~24 hour) window is the time in which a followed reorg can be **reversed** |
 
 ---
 

@@ -24,7 +24,7 @@ coded.
 | | |
 |---|---|
 | **Minting** | **The deposit is verified; the backing is reported.** A Solana program verifies BSV proof of work (cw-144) and Merkle inclusion directly. **The program verifies deposits. The federation reports backing** — Solana cannot read the BSV UTXO set, so the software reports **spent deposit outpoints** and the program checks mints against that record. Not a new trust assumption: the federation is already trusted with the reserve. The **upgrade authority** is the other exception — it can re-anchor the checkpoint — so production must hold it under a threshold and a timelock |
-| **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. **A reorg is a fact about headers, not a report from anyone.** The mechanism is built; its protective window ships at 0 |
+| **Reversal** | **Trustless.** The program compares its own stored header hash against the one a deposit was proven with. **A reorg is a fact about headers, not a report from anyone.** The mechanism is built; its protective window is a stored parameter set to **144 BSV blocks (~24 hours)** |
 | **The reserve** | **Trusted, and bounded.** BSV under a **2-of-2 `OP_CHECKMULTISIG`** — the federation's **threshold ECDSA** gateway key (never assembled in one place) **and** the **Greycore**'s key, and **both must sign**. No gateway majority and no Greycore can move it alone. What protects you is a **two-sided bond under the collective key** — the program seizes the `solBSV` side automatically; the members seize the BSV side by signing, which is a **collective action by the majority and a social duty, not an on-chain guarantee**, not the absence of trust |
 
 | Property | Status |
@@ -34,7 +34,7 @@ coded.
 | Membership | **Admitted by the Greycore.** Two-sided bonds, software rather than manual approval. *Designed, not built* |
 | Bonds | **Two-sided, one per direction, neither inside the reserve, and the bond is the float.** `bsv_bond ≥ k × (BSV held)` in native BSV outside the reserve; `solbsv_bond ≥ k × (solBSV held)` in `solBSV`. The BSV side is seized by the members collectively; the `solBSV` side by the program. `k = 1`; no price oracle; the `n/t` capacity arithmetic and the `~$180k`/`$300k` figures are **withdrawn**. *Designed, not built* |
 | Slashing | **Self-proving equivocation** on individually-signed payout intents. *Designed, not built* |
-| Reversibility | The vault: a program-owned account, so a staged mint can be burned or released with **no freeze authority**. *Built, shipped at maturity 0* |
+| Reversibility | The vault: a program-owned account, so a staged mint can be burned or released with **no freeze authority**. *Built; maturity is a stored parameter at 144 BSV blocks (~24 hours)* |
 | Censorship of mints | **None** — anyone can mint, for anyone |
 | Censorship of redemptions | **None by construction** — redemptions **can never be paused**. The exit window is the floor |
 | Governance | 85% of pledged coins, 30 days, live signal, holding the upgrade authority. **All parameters.** *Designed, not built* — the authority timelock is built |
@@ -88,10 +88,12 @@ stores at that height now.
 account the program owns, so it is disposing of what it holds. That is what makes a mint reversible
 **without a freeze authority** — and why a **fraudulent mint is unsellable**.
 
-**The window is the caveat.** At the shipped maturity of 0 the burn predicate is satisfied
-*instantly* rather than unreachable, so release and burn are a **race** and release normally wins.
-**What protects a deposit today is `MIN_CONFIRMATIONS = 12` — prevention, not reversal.** See
-[02. How it works §4](02-how-it-works.md#the-maturity-0-consequence-stated-up-front).
+**The window is what makes the reversal comfortable.** It shipped at 0, where the burn predicate
+was satisfied *instantly* rather than unreachable, so release and burn were a **race** and release
+normally won. It is now **144 BSV blocks (~24 hours)**, the window a followed reorg needs if the mint
+is still staged and can be burned. **Before maturity, `MIN_CONFIRMATIONS = 12` is prevention, not
+reversal.** See
+[02. How it works §4](02-how-it-works.md#why-maturity-was-raised-from-0-to-144).
 
 ---
 
@@ -150,7 +152,7 @@ needed and no watcher is needed at all.
 3. **The reserve needs a quorum.** No single member can move it — a property of a threshold key plus
    the 2-of-2 script, not of a promise. `fed.threshold` sizes nothing on-chain.
 4. **Reversibility without a freeze authority.** Every mint lands in a program-owned vault, released
-   after maturity, or **burned** if a reorg is followed. *Built; maturity ships at 0.*
+   after maturity, or **burned** if a reorg is followed. *Built; maturity is 144 BSV blocks.*
 5. **Solvency after a failed redemption.** The escrow is **returned to the holder** and supply is
    unchanged, so the redeemer is made whole **without touching the bond** — paying both would
    compensate twice. **Solvency must therefore not depend on anyone submitting a proof** — which is
@@ -214,8 +216,8 @@ rather than trying to infer guilt from an aggregate.*
 | Threat | Answer |
 |---|---|
 | Fake deposit proof | **Rejected by the light client** — proof of work under cw-144 and Merkle inclusion. The open item is X3, that the rule is hard-coded |
-| Mint staged, then a reorg is followed | The vault **burns** the staged tokens, from its own stored header hash. The depositor's BSV is reorged away with the deposit; they end where they started. *Built — but at maturity 0 the burn is a race* |
-| Reorg after the vault has released | `FLOOR` (12 blocks) and maturity are what make out-mining the honest chain cost more than the fraud is worth. Today, only `FLOOR` is doing that work |
+| Mint staged, then a reorg is followed | The vault **burns** the staged tokens, from its own stored header hash. The depositor's BSV is reorged away with the deposit; they end where they started. *Built — the 144-block maturity window is what gives the burn time to win* |
+| Reorg after the vault has released | `FLOOR` (12 blocks) and maturity (144 blocks) are what make out-mining the honest chain cost more than the fraud is worth. `FLOOR` is the prevention; the maturity window is the time available to reverse a reorg that still got through |
 | A single member — or the gateway majority — tries to move the reserve | It cannot alone: the reserve is under a **2-of-2 `OP_CHECKMULTISIG`** and **both must sign**. *Designed, not built* |
 | The gateway quorum colludes **with the Greycore** | The assumed risk, and the one the whole design is bounded against. Two-sided bonds price it, equivocation is self-proving, and continuous publication makes the theft visible. It is **not** made impossible |
 | A member signs two conflicting payout intents | **Self-proving.** Two signatures are the entire proof; anyone can submit and take the bounty |
@@ -432,7 +434,8 @@ limitations, not as features:
   capacity from our documents.**
 - **Collusion is unprevented.** A gateway quorum acting with the Greycore can take the reserve.
 - **Sharding: none.** The blast radius is 100% of the reserve, not `1/N`.
-- **The vault's protective window ships at 0.** What protects a deposit today is
-  `MIN_CONFIRMATIONS = 12` — prevention, not reversal.
+- **The vault's protective window is a stored parameter.** It shipped at 0 and is now
+  **144 BSV blocks (~24 hours)**, the value at which a followed reorg has room to be reversed.
+  `MIN_CONFIRMATIONS = 12` is still the prevention that protects a deposit before maturity.
 - **No independent audit.** The critical defects found so far were found by our own adversarial
   review, which is not the same as an audit by someone with no stake in the answer.
