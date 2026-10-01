@@ -1,8 +1,8 @@
 {
-  "_what": "Hand-published values for the /monitor/ page. Nothing in this file is fetched live: every value, including the market rates copied from public sources, is entered by hand, and each copied value names its source and the time it was read. `null` means NOT PUBLISHED — the page renders that as an explicit placeholder, never as 0 and never as a dash.",
-  "_how_to_update": "Edit the numbers, set published_at to the current UTC time in ISO-8601 (e.g. 2026-10-01T05:00:00Z), commit. No HTML or JavaScript edit is needed.",
+  "_what": "Hand-published values for the /monitor/ page. The reserve, the supply, the market rates and the rentable-market snapshot are entered by hand; each copied value names its source and the time it was read. `null` means NOT PUBLISHED — the page renders that as an explicit placeholder, never as 0 and never as a dash. The one thing this file does NOT hand-publish is the current network and market state: BSV's hashrate and the NiceHash SHA-256 markets are fetched live in the reader's browser, from the sources named here.",
+  "_how_to_update": "Edit the numbers, set published_at to the current UTC time in ISO-8601 (e.g. 2026-10-01T05:00:00Z), commit. No HTML or JavaScript edit is needed. The only value that must be re-read from its source when it is refreshed is the rentable-market snapshot (`rentable_markets.snapshot_read_at` and `rentable_markets.markets[].snapshot_h_per_s`), which is the labelled fallback for the live NiceHash fetch.",
   "_warning": "Do not put a value here that you have not actually measured or that nobody can verify. This page is a stated mitigation: the reserve and the supply are published because the protocol cannot check them, and a wrong number here is worse than a placeholder.",
-  "version": 1,
+  "version": 2,
 
   "published_at": null,
 
@@ -22,10 +22,51 @@
     "_populated_when": "By hand, from the program's mint account, once the program is deployed to a public network. It is on-chain today, but only on a local solana-test-validator, so there is no public mint to read."
   },
 
+  "rentable_markets": {
+    "_what": "The three NiceHash SHA-256 markets that together make up the rentable SHA-256 supply. NiceHash splits SHA-256 across three separate markets; the page fetches the live `algos[]` array from source_url, matches each entry on `a` (algo id) — NEVER on the name — and sums the `s` (available speed, H/s) field across exactly these three ids. Matching on the id matters: SHA256AsicBoost (35, BTC) and SHA256AsicBoost_USDT (2035, USDT) are different markets with different price units, and the legacy SHA256 market (1, BTC) is a third. All three must be added; reading only one of them understates the rentable supply by roughly 120x. The three component rows are shown on the page so a reader sees the consolidation instead of one opaque number.",
+    "_units": "H/s for every `s` figure and for the sum; 1 EH/s = 1e18 H/s. The page does the unit formatting.",
+    "source_name": "NiceHash public stats API",
+    "source_url": "https://api2.nicehash.com/main/api/v2/public/stats/global/current",
+    "_source": "NiceHash public stats API, keyless: https://api2.nicehash.com/main/api/v2/public/stats/global/current. It returns `algos[]` with `a` (algo id), `s` (available speed, H/s), `p` (price) and `o` (open orders). Read 2026-10-01T06:29:34Z.",
+    "_cors_caveat": "NiceHash answers a browser (cross-origin) request with HTTP 403 'Invalid CORS request' for every origin except its own, so a reader's browser may not be able to read this endpoint directly. When that happens the page falls back to the labelled `snapshot_h_per_s` values below, says on the page that they are a hand-published snapshot rather than a live value, and names the failure. It never renders a failed read as 0.",
+    "snapshot_read_at": "2026-10-01T06:29:34Z",
+    "_snapshot_what": "Hand-published last read of source_url, used ONLY as a labelled fallback when the browser cannot read the live source. Re-read the API and update `snapshot_h_per_s` and `snapshot_read_at` together; never update one without the other.",
+    "markets": [
+      {
+        "algo_id": 35,
+        "name": "SHA256AsicBoost",
+        "market": "BTC",
+        "snapshot_h_per_s": 2.473295030684367e19,
+        "_what": "The market virtually all modern Bitcoin SHA-256 hardware lives on, and the one crypto51 does NOT read. This is the figure that matters."
+      },
+      {
+        "algo_id": 2035,
+        "name": "SHA256AsicBoost_USDT",
+        "market": "USDT",
+        "snapshot_h_per_s": 5.629359766249697e17,
+        "_what": "The same hardware rented against USDT rather than BTC. A separate algo id with a separate price unit, so it is matched by id and added to the other two."
+      },
+      {
+        "algo_id": 1,
+        "name": "SHA256",
+        "market": "BTC",
+        "snapshot_h_per_s": 1.5059224003994218e15,
+        "_what": "The legacy standard SHA-256 market — the one crypto51 reads. It carries only a few open orders and about 0.0015 EH/s, so reading it alone is what produced the old, wrong '1 PH/s' figure."
+      }
+    ],
+    "majority_multiple": 2.0,
+    "_majority_multiple_units": "Multiple of BSV's live network hashrate. 1.0 merely MATCHES the honest chain, which is a 50% share of the total; 2.0 is 2 / (1 + 2) = about 67%, a comfortable majority.",
+    "_majority_multiple_what": "The 'comfortable majority' out-hash figure the page computes and prices at the leased rate. It is a multiple of the network estimate, not a hashrate, so it follows BSV's hashrate instead of being hard-coded.",
+
+    "price_impact_source_name": "NiceHash hash-power marketplace",
+    "price_impact_source_url": "https://www.nicehash.com/",
+    "_price_impact_source": "Qualitative guidance from NiceHash's own marketplace: large demand moves the price of the order book, so renting the whole market is not instantaneous and the flat per-EH-per-hour rate is a lower bound for a rental that size. This is a friction, not a barrier: the hashrate is available, it just costs more and takes longer to assemble. It is prose, not a measured figure."
+  },
+
   "attack_cost_assumptions": {
-    "_what": "Inputs, not measurements. The cost-to-rewrite figure on /monitor/ is computed in the reader's browser from the LIVE BSV hashrate (estimate) and the numbers below, on two independent bases: an electricity-only floor from an assumed machine and energy price, and a leased-hashrate cost at the published SHA-256 rental rate. The availability constraint — the live network hashrate against the whole rentable market — is derived from the same live hashrate and the rentable-capacity figure below. Every input is printed on the page, with units and sources, because the whole design leans on this cost. Change them here to restate the estimate; nobody should have to edit the HTML.",
+    "_what": "Inputs, not measurements. The cost-to-rewrite figure on /monitor/ is computed in the reader's browser from the LIVE BSV hashrate (estimate) and the numbers below, on two independent bases: an electricity-only floor from an assumed machine and energy price, and a leased-hashrate cost at the published SHA-256 rental rate. The rentable SHA-256 supply it is compared against is fetched live from NiceHash — see `rentable_markets`.",
     "_disclaimer": "The electricity figure is an electricity-only floor with an assumed machine. It is not a quote, it is not a measurement, and it excludes the cost of buying or renting the hardware, plus cooling, bandwidth and pool fees.",
-    "_leased_disclaimer": "The leased figure is a PUBLISHED MARKET RATE applied to BSV's live hashrate, not a quote and not an offer. It excludes the cost of buying or building the hardware. Renting SHA-256 normally costs more than raw electricity, which is why the leased figure is the larger of the two. The rate is only meaningful up to the market's listed capacity, which is a small fraction of what out-mining BSV needs — see rentable_capacity_ph_s. Beyond that fraction the hashrate has to be bought or built, which is a capital and lead-time problem, not an hourly rate.",
+    "_leased_disclaimer": "The leased figure is a PUBLISHED MARKET RATE applied to BSV's live hashrate, not a quote and not an offer. It excludes the cost of buying or building the hardware. Renting SHA-256 normally costs more than raw electricity, which is why the leased figure is the larger of the two. The rentable market is NOT the constraint it was once taken for: at this reading the three NiceHash markets together list some 25 EH/s, roughly 120x BSV's whole network, so the hashrate needed to match or out-hash BSV is available to rent. What limits a real attack is price impact, not availability — moving that much hashrate through the book is not instantaneous and NiceHash's own guidance is that large demand spikes the price. That is a friction, not a barrier, and the page does not present it as one.",
 
     "hashrate_multiple": 1.0,
     "_hashrate_multiple_units": "Multiple of the network's current estimated hashrate that an attacker assembles. 1.0 = the network's whole current hashrate, which merely MATCHES the honest hashrate (a 50% share of the total). To exceed the honest hashrate an attacker must add MORE than 1.0. 0.51 is not a majority: 0.51x added to the existing network is 0.51 / 1.51 = about 34% of the total hashrate, not 51%.",
@@ -42,12 +83,7 @@
 
     "leased_rate_usd_per_eh_hour": 1770.67,
     "_leased_rate_usd_per_eh_hour_units": "USD per 1 EH/s of rented SHA-256 hashrate, per hour (1 EH/s = 1e18 H/s). crypto51's `rentable_price_units` field names the unit 'EH' and its `rentable_price_usd_hour` field reads $1,770.67.",
-    "_leased_rate_usd_per_eh_hour_source": "NiceHash spot rental prices as published by crypto51.app: https://www.crypto51.app/about.html ('rental pricing is from NiceHash') and its API https://api.crypto51.app/coins.json (`rentable_price_usd_hour`, `rentable_price_units`). Every SHA-256 coin on that list — BTC, BCH, XEC, FB, QUAI, BC2 — reports the same $1,770.67 per EH per hour, because SHA-256 hashrate is fungible. BSV is not on the list, so this SHA-256 rate is applied to BSV's own LIVE hashrate rather than to a published BSV row. Read 2026-10-01T05:07:23Z.",
-
-    "rentable_capacity_ph_s": 1,
-    "_rentable_capacity_ph_s_units": "PH/s of SHA-256 hashrate listed for rent across the market as a whole (1 PH/s = 1e15 H/s). This is the entire rentable supply, not BSV's share of it.",
-    "_rentable_capacity_ph_s_source": "crypto51.app API https://api.crypto51.app/coins.json, field `rentable_capacity_pretty`, which the API publishes as '1 PH/s' for every SHA-256 coin. The same API's unrounded `rentable_capacity` is 1,429,412,810,479,854.5 H/s (about 1.43 PH/s); the published, rounded figure is used here so the page quotes the source as the source states itself. Read 2026-10-01T05:07:23Z. The page divides BSV's LIVE hashrate by this value in the browser, so the availability ratio follows the network instead of being hard-coded.",
-    "_rentable_capacity_ph_s_what": "The availability constraint: the whole rentable SHA-256 market is a small fraction of what out-mining BSV would need. See `_leased_disclaimer`.",
+    "_leased_rate_usd_per_eh_hour_source": "NiceHash spot rental prices as published by crypto51.app: https://www.crypto51.app/about.html ('rental pricing is from NiceHash') and its API https://api.crypto51.app/coins.json (`rentable_price_usd_hour`, `rentable_price_units`). Every SHA-256 coin on that list — BTC, BCH, XEC, FB, QUAI, BC2 — reports the same $1,770.67 per EH per hour, because SHA-256 hashrate is fungible. BSV is not on the list, so this SHA-256 rate is applied to BSV's own LIVE hashrate rather than to a published BSV row. Read 2026-10-01T05:07:23Z. This rate cross-checks against NiceHash's own marketplace example of about $42,496 per EH per day, which is about 0.472 BTC/EH/day against the marketplace's stated ~0.475 BTC/EH/day.",
 
     "bsv_target_block_seconds": 600,
     "_bsv_target_block_seconds_units": "seconds. BSV's target block interval, used to turn the live difficulty into an estimated network hashrate: hashrate = difficulty x 2^32 / this. Miners may mine faster or slower than the target; the observed spacing is published separately."

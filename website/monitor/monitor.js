@@ -28,10 +28,12 @@
     solRpc:  'https://solana-rpc.publicnode.com'
   };
 
-  /* The leased-hashrate inputs are published snapshots, not a live API call:
-     the page reads the rate and the rentable capacity from data.json, whose
-     fields cite crypto51.app and the time they were read. These URLs are the
-     citations shown on the page. */
+  /* The leased RATE is a published snapshot, not a live API call: the page
+     reads leased_rate_usd_per_eh_hour from data.json, whose source field cites
+     crypto51.app and the time it was read. This URL is the citation shown on
+     the page. The rentable SUPPLY is different: it is fetched live from
+     NiceHash, whose source URL, algo ids and market names all come from
+     data.json (`rentable_markets`), never from this file. */
   var LEASE_SRC = 'https://api.crypto51.app/coins.json';
 
   /* Fallback source links, used when a figure goes "unavailable" and the live
@@ -51,6 +53,8 @@
   var V = {
     dataLoaded: false,
     assumptions: null,
+    rentableCfg: null,
+    rentable: null,
     reserve: null,
     supply: null,
     reserveAsOf: null,
@@ -116,11 +120,10 @@
     return dec(x.v, x.v < 10 ? 2 : 1) + ' ' + x.u;
   }
 
-  /* Rentable capacity is published in whole PH/s, so print it as published. */
-  function phText(ph) {
-    return dec(ph, (Math.abs(ph - Math.round(ph)) < 1e-9) ? 0 : 2) + ' PH/s';
-  }
-
+  /* Rentable-market speeds arrive in H/s, so they are formatted by hashText()
+     like every other hashrate rather than in a fixed unit: the three markets
+     differ by four orders of magnitude, and forcing them into EH/s would round
+     the legacy SHA256 market to a fake 0.00. */
   function powerText(kw) {
     if (kw >= 1000) return dec(kw / 1000, 2) + ' MW';
     return dec(kw, 1) + ' kW';
@@ -456,8 +459,21 @@
 
   function paintAssumptions() {
     var a = V.assumptions;
-    var ids = ['a-multiple', 'a-machine', 'a-mh', 'a-power', 'a-energy', 'a-lease-rate',
-               'a-rentable', 'a-target'];
+
+    /* These two come from rentable_markets, not from attack_cost_assumptions,
+       so they are set whatever happens to the latter. paintRentable() restates
+       a-rentable once the live market read finishes. */
+    var rc = V.rentable;
+    setText('a-rentable', rc == null
+      ? 'not read \u2014 see the market note above'
+      : hashText(rc.totalH) + ' across ' + rc.rows.length + ' NiceHash markets (' +
+        (rc.live ? 'live' : 'hand-published snapshot') + ')');
+    var mm = numOrNull(V.rentableCfg && V.rentableCfg.majority_multiple);
+    setText('a-majmult', mm == null
+      ? 'not published in data.json'
+      : dec(mm, 2) + ' \u00d7 the network estimate (published)');
+
+    var ids = ['a-multiple', 'a-machine', 'a-mh', 'a-power', 'a-energy', 'a-lease-rate', 'a-target'];
     if (!a) {
       ids.forEach(function (id) {
         setText(id, V.dataLoaded ? 'missing from data.json' : 'not loaded');
@@ -477,10 +493,6 @@
     setText('a-lease-rate', lr == null
       ? 'not published in data.json'
       : '$' + dec(lr, 2) + ' per EH/s per hour (published)');
-    var rc = numOrNull(a.rentable_capacity_ph_s);
-    setText('a-rentable', rc == null
-      ? 'not published in data.json'
-      : phText(rc) + ' listed for rent, whole market (published)');
     var tg = numOrNull(a.bsv_target_block_seconds);
     setText('a-target', (tg == null ? '600' : dec(tg, 0)) + ' s');
   }
@@ -534,9 +546,96 @@
     return fetchJSON(DATA_JSON).then(function (j) {
       V.dataLoaded = true;
       V.assumptions = j.attack_cost_assumptions || null;
+      V.rentableCfg = j.rentable_markets || null;
       V.reserve = numOrNull(j.reserve && j.reserve.bsv_held);
       V.supply = numOrNull(j.supply && j.supply.solbsv_minted);
       return j;
+    });
+  }
+
+  /* --- rentable SHA-256: the three NiceHash markets, summed ----------------- */
+
+  /* The market that matters is SHA256AsicBoost (algo 35), where virtually all
+     modern Bitcoin hardware lives — NOT the legacy SHA256 (algo 1) market that
+     crypto51 reads. NiceHash splits SHA-256 across three markets and they must
+     be summed: 35 (BTC), 2035 (USDT) and 1 (BTC). The algo ids, the names, the
+     market labels and the source URL all come from data.json
+     (`rentable_markets`); this function hard-codes none of them, and it matches
+     on `a` (the algo id) rather than on the name, because 35 and 2035 are
+     different markets with different price units.
+
+     A missing algo id is treated as a FAILED read, never as a zero: summing the
+     ones that answered would silently understate the rentable supply, which is
+     the exact error this page exists to correct. On any failure the live read
+     falls back to the hand-published snapshot in data.json, labelled as a
+     snapshot and with the failure named; if there is no usable snapshot either,
+     the caller renders an explicit placeholder. */
+  function snapshotRentable(cfg, reason) {
+    var markets = (cfg && cfg.markets) || [];
+    var rows = markets.map(function (m) {
+      return {
+        id: numOrNull(m && m.algo_id),
+        name: (m && m.name) || null,
+        market: (m && m.market) || null,
+        h: numOrNull(m && m.snapshot_h_per_s),
+        live: false
+      };
+    });
+    if (!rows.length || rows.some(function (r) { return r.id == null || r.h == null; })) return null;
+    var total = rows.reduce(function (a, r) { return a + r.h; }, 0);
+    if (!(total > 0)) return null;
+    var at = cfg && cfg.snapshot_read_at ? Date.parse(cfg.snapshot_read_at) : NaN;
+    return {
+      rows: rows,
+      totalH: total,
+      live: false,
+      at: isFinite(at) ? at : null,
+      sourceName: (cfg && cfg.source_name) || null,
+      sourceUrl: (cfg && cfg.source_url) || null,
+      reason: reason || 'the live source could not be read'
+    };
+  }
+
+  function fetchRentable(cfg) {
+    if (!cfg) return Promise.resolve(null);
+    var markets = cfg.markets;
+    if (!markets || !markets.length) return Promise.resolve(null);
+    var url = cfg.source_url;
+    var live = url
+      ? fetchJSON(url)
+      : Promise.reject(new Error('no source_url published in data.json'));
+
+    return live.then(function (j) {
+      var speed = {};
+      var feed = (j && j.algos) || [];
+      feed.forEach(function (a) {
+        var s = a ? numOrNull(a.s) : null;
+        if (s != null) speed[a.a] = s;
+      });
+      var rows = markets.map(function (m) {
+        var id = numOrNull(m && m.algo_id);
+        var h = (id == null) ? null : speed[id];
+        return {
+          id: id, name: (m && m.name) || null, market: (m && m.market) || null,
+          h: (h == null ? null : h), live: h != null
+        };
+      });
+      var missing = rows.filter(function (r) { return !r.live; });
+      if (missing.length) {
+        throw new Error('the live response has no usable speed for algo ' +
+          missing.map(function (r) { return (r.id == null ? '?' : r.id); }).join(', ') +
+          ' \u2014 a partial sum would understate the market, so this read is treated as failed');
+      }
+      var total = rows.reduce(function (a, r) { return a + r.h; }, 0);
+      if (!(total > 0)) throw new Error('the live response summed to a non-positive figure');
+      return {
+        rows: rows, totalH: total, live: true, at: Date.now(),
+        sourceName: cfg.source_name || null, sourceUrl: url
+      };
+    }).catch(function (e) {
+      /* .catch, not the second argument of .then: a missing algo throws from the
+         handler above, and that has to reach the snapshot fallback too. */
+      return snapshotRentable(cfg, errMsg(e));
     });
   }
 
@@ -545,16 +644,16 @@
   /* Two independent bases, so a missing input on one does not blank the other:
        elec     — electricity-only floor from an assumed machine and energy price
        leased   — published SHA-256 market rate applied to the same hashrate
-       rentable — the availability constraint: live network vs the whole market
      `needH` is the attacker's hashrate (network estimate x multiple); at the
      default multiple of 1.0 it is the live network estimate itself. The
-     availability ratio uses the raw network hashrate, not the attacker figure. */
+     rentable market is handled separately, from its own live source: see
+     fetchRentable() and paintRentable(). */
   function computeAttack(hp, a) {
     if (!a) return null;
     var mult = numOrNull(a.hashrate_multiple);
     if (mult == null) mult = 1;
     var needH = hp * mult;
-    var out = { mult: mult, networkH: hp, needH: needH, elec: null, leased: null, rentable: null };
+    var out = { mult: mult, networkH: hp, needH: needH, elec: null, leased: null };
 
     var mh = numOrNull(a.machine_hashrate_ths);
     var pw = numOrNull(a.machine_power_kw);
@@ -572,52 +671,143 @@
       out.leased = { rate: rate, perHour: leasedPerHour, perDay: leasedPerHour * 24 };
     }
 
-    var rentablePh = numOrNull(a.rentable_capacity_ph_s);
-    if (rentablePh > 0) {
-      var rentableH = rentablePh * 1e15;
-      out.rentable = {
-        ph: rentablePh,
-        h: rentableH,
-        multiple: hp / rentableH,         /* network hashrate / rentable capacity */
-        pct: (rentableH / needH) * 100    /* rentable as a share of what the attack needs */
-      };
-    }
     return out;
   }
 
-  /* The availability constraint: the whole rentable SHA-256 market against the
-     hashrate the attack needs. The ratio is computed from the LIVE network
-     hashrate and the published rentable capacity, never hard-coded. `hp` and
-     `rentable` are passed separately so the placeholder names the missing
-     input instead of blaming the wrong source. */
-  function paintAvailability(hp, rentable, fromCache) {
-    var box = el('av-figures');
-    if (!box) return;
+  /* The rentable market, stated plainly. The consolidated figure is the sum of
+     the three NiceHash SHA-256 markets (see fetchRentable); the ratio is
+     rentable / BSV's LIVE network hashrate; the two out-hash costs are the
+     published leased rate applied to the network (1x, which merely matches the
+     honest chain) and to the majority multiple (2x). All of them are computed
+     from live values — none is hard-coded.
+
+     When the live read fails the block shows the hand-published snapshot from
+     data.json, labelled as a snapshot and with the failure named. When there is
+     no snapshot either it shows an explicit placeholder. It never shows a
+     failed read as a zero, and it never presents the snapshot as live. */
+  function paintRentable(hp, fromCache) {
+    var cfg = V.rentableCfg;
+    var r = V.rentable;
+    var tbody = el('av-rows');
+    var claim = el('av-claim');
+    var state = el('av-state');
+
+    var rate = numOrNull(V.assumptions && V.assumptions.leased_rate_usd_per_eh_hour);
+    var majMult = numOrNull(cfg && cfg.majority_multiple);
+    var ratio = (r && hp != null && hp > 0) ? (r.totalH / hp) : null;
+    var algoIds = (cfg && cfg.markets)
+      ? cfg.markets.map(function (m) { return String(m && m.algo_id); }).join(', ')
+      : 'listed in data.json';
+
     setText('d-rentablemultiple', 'not derived');
-
-    if (hp == null) {
-      box.innerHTML = 'SHA-256 rental markets list a published amount of capacity against BSV\u2019s live ' +
-        'network hashrate. The live hashrate could not be read, so the comparison cannot be computed ' +
-        'right now \u2014 this is a placeholder, not a zero.';
-      return;
-    }
-    if (!rentable) {
-      box.innerHTML = 'SHA-256 rental markets list a published amount of capacity, but ' +
-        '<a href="/monitor/data.json">data.json</a> has no usable rentable_capacity_ph_s, so the ' +
-        'comparison against the live ' + esc(hashText(hp)) + ' network is a labelled placeholder ' +
-        '\u2014 not a zero and not a guess.';
-      return;
+    if (ratio != null) {
+      setText('d-rentablemultiple',
+        (ratio >= 10 ? NF.format(Math.round(ratio)) : dec(ratio, 2)) + '\u00d7 (rentable \u00f7 network)');
     }
 
-    box.innerHTML = 'SHA-256 rental markets list roughly <strong class="av-num">' + esc(phText(rentable.ph)) +
-      '</strong> of capacity (the whole market, not BSV\u2019s share) against BSV\u2019s ' +
-      '<strong class="av-num">' + esc(hashText(hp)) + '</strong> ' +
-      (fromCache ? 'last-read' : 'live') + ' network \u2014 the network is ' +
-      '<strong class="av-num">' + esc(NF.format(Math.round(rentable.multiple))) + '\u00d7</strong> the ' +
-      'rentable supply, so the entire rentable supply is <strong class="av-num">' +
-      esc(dec(rentable.pct, 2)) + '%</strong> of what the attack needs.';
-    setText('d-rentablemultiple',
-      NF.format(Math.round(rentable.multiple)) + '\u00d7 (network \u00f7 rentable)');
+    /* The same figure in the assumptions table. paintAssumptions() runs as soon
+       as data.json arrives, before this read finishes, so restate it here. */
+    setText('a-rentable', !cfg
+      ? 'missing from data.json'
+      : (r
+        ? hashText(r.totalH) + ' across ' + r.rows.length + ' NiceHash markets (' +
+          (r.live ? 'live' : 'hand-published snapshot') + ')'
+        : 'not read \u2014 labelled placeholder, not 0'));
+
+    /* --- the component rows, so the consolidation is visible -------------- */
+    if (tbody) {
+      if (!r) {
+        tbody.innerHTML = '<tr><td colspan="2">' + (cfg
+          ? 'No market reading is available, so there is nothing to sum. This is a placeholder, not a zero.'
+          : 'The market list (algo ids, names, source) could not be read from ' +
+            '<a href="/monitor/data.json">data.json</a>, so there is nothing to sum. This is a ' +
+            'placeholder, not a zero.') + '</td></tr>';
+      } else {
+        var out = r.rows.map(function (m) {
+          var label = esc(m.name || ('algo ' + m.id)) + ' <span class="av-sub">(algo ' +
+            esc(String(m.id)) + ' \u00b7 ' + esc(m.market || '?') + ')</span>';
+          return '<tr><td>' + label + '</td><td>' + esc(hashText(m.h)) + '</td></tr>';
+        });
+        out.push('<tr class="av-total"><td><strong>Consolidated &mdash; sum of the three</strong></td>' +
+          '<td><strong>' + esc(hashText(r.totalH)) + '</strong></td></tr>');
+        tbody.innerHTML = out.join('');
+      }
+    }
+
+    /* --- the plain statement, with the live numbers ----------------------- */
+    if (claim) {
+      if (!r) {
+        claim.innerHTML = 'The three NiceHash SHA-256 markets that make up the rentable supply could ' +
+          'not be read' + (cfg ? ' (the live source failed and <a href="/monitor/data.json">data.json</a> ' +
+          'holds no usable snapshot)' : '') + ', so the size of the rental market and the ratio ' +
+          'against BSV\u2019s network are labelled placeholders right now \u2014 not zeros and not ' +
+          'guesses.' + (rate > 0
+            ? ' The out-hash costs below still come from the live network hashrate and the published ' +
+              'leased rate.'
+            : '');
+      } else {
+        var unit = r.live ? 'live' : 'snapshot';
+        var parts = [];
+        parts.push('The three NiceHash SHA-256 markets below list <strong class="av-num">' +
+          esc(hashText(r.totalH)) + '</strong> between them (' + unit + ' read)');
+        if (ratio != null) {
+          parts.push(' \u2014 roughly <strong class="av-num">' +
+            esc(ratio >= 10 ? NF.format(Math.round(ratio)) : dec(ratio, 2)) + '\u00d7</strong> the entire ' +
+            'BSV network of <strong class="av-num">' + esc(hashText(hp)) + '</strong> (' +
+            (fromCache ? 'last-read' : 'live') + ')');
+        } else {
+          parts.push('; BSV\u2019s network hashrate could not be read, so the ratio is a placeholder ' +
+            'right now');
+        }
+        parts.push('.');
+        if (ratio != null && rate > 0) {
+          var matchDay = (hp / 1e18) * rate * 24;
+          parts.push(' Matching that network at the published leased rate costs <strong class="av-num">' +
+            esc(money(matchDay)) + '/day</strong>');
+          if (majMult > 0) {
+            parts.push('; a comfortable <strong class="av-num">' + esc(dec(majMult, 0)) +
+              '\u00d7 majority</strong> costs <strong class="av-num">' +
+              esc(money(matchDay * majMult)) + '/day</strong>');
+          }
+          parts.push('.');
+        } else {
+          parts.push(' The out-hash cost is a placeholder until both the live hashrate and the ' +
+            'published leased rate are readable.');
+        }
+        claim.innerHTML = parts.join('');
+      }
+    }
+
+    /* --- the caveat that survives: price impact, not availability ---------- */
+    var impact = el('av-impact');
+    if (impact && cfg && cfg.price_impact_source_url) {
+      impact.innerHTML = '<a href="' + esc(cfg.price_impact_source_url) + '" target="_blank" ' +
+        'rel="noopener">' + esc(cfg.price_impact_source_name || 'NiceHash hash-power marketplace') +
+        '</a> guidance is that large demand moves the price of the order book, so a rental of this ' +
+        'size is slower and costlier than the flat rate suggests. The hashrate is still there to ' +
+        'rent; it is the price and the time that move.';
+    }
+
+    /* --- provenance: live, snapshot, or nothing --------------------------- */
+    if (state) {
+      var link = '<a href="' + esc(r && r.sourceUrl ? r.sourceUrl : '') + '" target="_blank" ' +
+        'rel="noopener">' + esc((r && r.sourceName) || 'NiceHash public stats API') + '</a>';
+      if (!r) {
+        setText('av-state', 'No market reading \u2014 labelled placeholder, not 0.');
+        state.className = 'mon-card__meta is-down';
+      } else if (r.live) {
+        state.className = 'mon-card__meta is-live';
+        state.innerHTML = 'Live \u2014 read from ' + link +
+          ' \u00b7 summed over the algo ids published in <a href="/monitor/data.json">data.json</a> (' +
+          esc(algoIds) + ') \u00b7 read ' + clock() + '.';
+      } else {
+        state.className = 'mon-card__meta is-cached';
+        state.innerHTML = 'The live read failed (' + esc(r.reason) + '). Showing the hand-published ' +
+          'snapshot in <a href="/monitor/data.json">data.json</a>' +
+          (r.at != null ? ', read ' + utc(r.at) + ' (' + age(r.at) + ' old)' : '') +
+          ' \u2014 labelled a snapshot, not a live value. Source: ' + link + '.';
+      }
+    }
   }
 
   function paintDerived() {
@@ -654,7 +844,8 @@
     var bp = (V.bsvPrice != null) ? V.bsvPrice : getRaw('bsvPrice');
     var basis = (fromCache ? 'last read' : 'live') + ' network estimate of ' + hashText(hp);
     var elecRowIds = ['d-needhash', 'd-machines', 'd-power', 'd-perhour', 'd-perday', 'd-bsvday'];
-    var leaseRowIds = ['d-leasehour', 'd-leaseday', 'd-rentablemultiple'];
+    var leaseRowIds = ['d-leasehour', 'd-leaseday'];
+    var marketRowIds = ['d-rentablemultiple', 'd-matchday', 'd-majday'];
 
     if (hp == null) {
       paint('attack', {
@@ -668,10 +859,11 @@
         meta: 'The leased cost is the published market rate applied to the live BSV hashrate. The ' +
               'hashrate could not be read and has no cached value, so the rate cannot be turned into ' +
               'a cost \u2014 this is a placeholder, not a zero. Rate source: ' +
-              src('crypto51.app (NiceHash SHA-256 prices)', LEASE_SRC) + '.'
+              '<a href="' + esc(LEASE_SRC) + '" target="_blank" rel="noopener">' +
+              'crypto51.app (NiceHash SHA-256 prices)</a>.'
       });
-      elecRowIds.concat(leaseRowIds).forEach(function (id) { setText(id, 'not derived'); });
-      paintAvailability(null, null, false);
+      elecRowIds.concat(leaseRowIds, marketRowIds).forEach(function (id) { setText(id, 'not derived'); });
+      paintRentable(null, false);
     } else if (!calc) {
       paint('attack', {
         text: 'unavailable', state: 'assumptions not loaded', stateClass: 'is-down', cache: false,
@@ -684,10 +876,10 @@
         meta: 'No usable leased_rate_usd_per_eh_hour was read from ' +
               '<a href="/monitor/data.json">data.json</a>, so there is no sourced rate to apply. This ' +
               'is a placeholder, not a guess. The rate, when published, is the NiceHash SHA-256 price ' +
-              'via ' + src('crypto51.app', LEASE_SRC) + '.'
+              'via <a href="' + esc(LEASE_SRC) + '" target="_blank" rel="noopener">crypto51.app</a>.'
       });
-      elecRowIds.concat(leaseRowIds).forEach(function (id) { setText(id, 'not derived'); });
-      paintAvailability(hp, null, fromCache);
+      elecRowIds.concat(leaseRowIds, marketRowIds).forEach(function (id) { setText(id, 'not derived'); });
+      paintRentable(hp, fromCache);
     } else {
       /* Electricity floor — unchanged. */
       if (calc.elec) {
@@ -733,24 +925,41 @@
           meta: '$' + dec(L.rate, 2) + ' per EH/s per hour \u00d7 ' + hashText(calc.needH) + ' (' +
                 dec(calc.mult, 2) + '\u00d7 the ' + basis + ') = ' + money(L.perHour) + '/hour, ' +
                 money(L.perDay) + '/day. ' + src('crypto51.app (NiceHash SHA-256 prices)', LEASE_SRC) +
-                '. A rate, not an offer: the market lists a fraction of this hashrate \u2014 see the ' +
-                'availability note above. Excludes buying the hardware.'
+                '. A rate, not an offer. The SHA-256 rental market is larger than BSV\u2019s whole ' +
+                'network \u2014 see the market note above \u2014 so this cost is not capped by listed ' +
+                'supply; what limits a real attack is price impact, not availability. Excludes buying ' +
+                'the hardware.'
         });
         setText('d-leasehour', money(L.perHour));
         setText('d-leaseday', money(L.perDay));
+
+        /* The out-hash cost per day, on the two bases actually asked for:
+           1x the network (a bare match, a 50% share of the total) and the
+           majority multiple from data.json (2x, about 67%). Both are the
+           published leased rate applied to the LIVE network hashrate, so they
+           follow the network instead of being hard-coded. */
+        var majMult = numOrNull(V.rentableCfg && V.rentableCfg.majority_multiple);
+        var matchDay = (hp / 1e18) * L.rate * 24;
+        setText('d-matchday', money(matchDay) + '/day at 1\u00d7 the network');
+        if (majMult > 0) {
+          setText('d-majday', money(matchDay * majMult) + '/day at ' + dec(majMult, 0) +
+            '\u00d7 the network');
+        } else {
+          setText('d-majday', 'majority_multiple not published in data.json');
+        }
       } else {
         paint('lease', {
           text: 'NOT PUBLISHED', state: 'rate not published', stateClass: 'is-none', cache: false,
           meta: 'No usable leased_rate_usd_per_eh_hour was read from ' +
                 '<a href="/monitor/data.json">data.json</a>, so there is no sourced rate to apply. This ' +
                 'is a placeholder, not a guess. The rate, when published, is the NiceHash SHA-256 price ' +
-                'via ' + src('crypto51.app', LEASE_SRC) + '.'
+                'via <a href="' + esc(LEASE_SRC) + '" target="_blank" rel="noopener">crypto51.app</a>.'
         });
         setText('d-leasehour', 'not derived');
         setText('d-leaseday', 'not derived');
       }
 
-      paintAvailability(calc.networkH, calc.rentable, fromCache);
+      paintRentable(calc.networkH, fromCache);
     }
 
     /* The observed spacing and the difficulty are two views of the same thing;
@@ -775,6 +984,8 @@
        say they fell back to cache, not reuse a value from the previous refresh. */
     V.dataLoaded = false;
     V.assumptions = null;
+    V.rentableCfg = null;
+    V.rentable = null;
     V.reserve = null;
     V.supply = null;
     V.hashrateH = null;
@@ -792,13 +1003,29 @@
       run(['sol-tps'], fetchTps)
     ];
 
-    jobs.push(loadData().then(function (j) {
+    /* The rentable-market read needs the algo ids and the source URL, so it
+       waits for data.json rather than hard-coding either. It counts as its own
+       live figure. */
+    var dataJob = loadData();
+
+    jobs.push(dataJob.then(function (j) {
       paintPublished(j);
     }, function (e) {
       V.dataLoaded = false;
       paintPublished({});
       setText('published-at', 'could not read /monitor/data.json (' + errMsg(e) +
         ') \u2014 open this page over http(s), not file://, and check the file is valid JSON');
+    }));
+
+    jobs.push(dataJob.then(function () {
+      runState.total++;
+      return fetchRentable(V.rentableCfg).then(function (r) {
+        V.rentable = r;
+        if (r && r.live) runState.live++;
+      });
+    }, function () {
+      /* data.json failed, so the market list is unknown; paintRentable() says so. */
+      V.rentable = null;
     }));
 
     return Promise.all(jobs).then(function () {

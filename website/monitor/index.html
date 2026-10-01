@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monitoring — SOLBEAM</title>
-  <meta name="description" content="The two things SOLBEAM cannot enforce — a colluding signer set and a spend nobody challenges — are published instead: the reserve-to-supply ratio and the cost of rewriting the BSV chain that backs it, alongside live BSV hashrate, block height and spacing, SOL price, and Solana stake and throughput." />
+  <meta name="description" content="The two things SOLBEAM cannot enforce — a colluding signer set and a spend nobody challenges — are published instead: the reserve-to-supply ratio, the cost of rewriting the BSV chain that backs it, and the size of the SHA-256 rental market against BSV's own network — alongside live BSV hashrate, block height and spacing, SOL price, and Solana stake and throughput." />
   <meta name="theme-color" content="#05060A" />
   <meta property="og:title" content="Monitoring — SOLBEAM" />
   <meta property="og:description" content="Reserve against supply, and the cost to rewrite the BSV chain. Network figures live from public, keyless APIs." />
@@ -31,10 +31,14 @@
 
     .hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
 
-    /* The availability constraint is the sentence the whole leased-hashrate
-       section turns on, so it gets the gold edge the BSV figures use. */
+    /* The rentable-market block is what the whole leased-hashrate section turns
+       on, so it gets the gold edge the BSV figures use. */
     .note--punch { border-color: rgba(228, 161, 27, .45); border-left-width: 3px; }
     .note--punch .av-num { color: var(--text); font-variant-numeric: tabular-nums; }
+
+    /* The algo id and market of each summed market, and the total row. */
+    .av-sub { color: var(--muted); font-size: 12.5px; }
+    table.assum tr.av-total td { border-bottom: none; }
 
     .mon-card {
       background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
@@ -136,10 +140,13 @@
     <p class="note">
       <strong>What is live here and what is not.</strong> The network figures — BSV hashrate, block
       height, block spacing, BSV and SOL price, Solana stake and throughput — are fetched by your
-      browser from public, keyless APIs. The <strong>reserve, the supply and their ratio are not
+      browser from public, keyless APIs, and so is the rentable SHA-256 supply, read live from
+      NiceHash&rsquo;s three SHA-256 markets. The <strong>reserve, the supply and their ratio are not
       published yet</strong>, because the federation does not exist and <code>solBSV</code> exists only
-      on a local validator. Those three are marked <em>NOT PUBLISHED</em> everywhere they appear.
-      Nothing on this page claims monitoring is live for anything that is not.
+      on a local validator. Those three are marked <em>NOT PUBLISHED</em> everywhere they appear. When a
+      live source cannot be read, the page says so: it shows a labelled snapshot or an explicit
+      placeholder, and it never shows a failed read as a zero. Nothing on this page claims monitoring is
+      live for anything that is not.
     </p>
 
     <h2>The numbers that matter</h2>
@@ -162,27 +169,50 @@
         <span class="mon-card__label">Same attack, at the leased-hashrate rate</span>
         <span class="mon-card__fig" id="fig-lease">not loaded</span>
         <span class="mon-card__state is-derived" id="state-lease">derived &middot; market rate</span>
-        <span class="mon-card__meta" id="meta-lease">What the same hashrate costs to <em>rent</em>, at the published SHA-256 market rate, instead of at an assumed electricity price. It is a rate, not an offer: the rentable market is a fraction of what the attack needs. Requires JavaScript.</span>
+        <span class="mon-card__meta" id="meta-lease">What the same hashrate costs to <em>rent</em>, at the published SHA-256 market rate, instead of at an assumed electricity price. It is a rate, not an offer: the rentable market is larger than BSV&rsquo;s whole network, so what limits a real attack is price impact, not availability. Requires JavaScript.</span>
       </div>
     </div>
 
-    <p class="note note--punch" style="margin-top:12px">
-      <strong>The leased figure is a rate, not an offer.</strong>
-      <span id="av-figures">SHA-256 rental markets list a published amount of capacity against BSV&rsquo;s
-      live network hashrate. Both are read when JavaScript runs — the capacity from
-      <a href="/monitor/data.json">data.json</a>, the network hashrate from the live BSV source above.</span>
-      <strong>So an attack cannot be mounted by renting at any price.</strong> Beyond that fraction the
-      hashrate has to be <em>bought or built</em>, which is a capital and lead-time problem, not an hourly rate.
+    <h2>The rentable market, and what it means</h2>
+
+    <p class="note note--punch">
+      <strong>BSV can be 51%-attacked by renting.</strong>
+      <span id="av-claim">The size of the SHA-256 rental market against BSV&rsquo;s whole network, and
+      what out-hashing that network costs per day at the published leased rate, are computed from the
+      live hashrate and the live NiceHash markets when JavaScript runs. Without JavaScript they are a
+      labelled placeholder, never a guess.</span>
+      <strong>Attack cost is therefore not a defence, and this page should not imply that it is.</strong>
     </p>
-    <p class="mon-card__meta" id="av-meta" style="margin:-4px 0 14px">
-      Leased rate and rentable capacity: <a href="https://www.crypto51.app/about.html" target="_blank" rel="noopener">crypto51.app</a>,
-      which publishes NiceHash SHA-256 rental prices, via its API at
-      <a href="https://api.crypto51.app/coins.json" target="_blank" rel="noopener">api.crypto51.app/coins.json</a>
-      (<code>rentable_price_usd_hour</code>, <code>rentable_price_units</code>,
-      <code>rentable_capacity_pretty</code>). Every SHA-256 coin on that list reports the same rate, because
-      SHA-256 hashrate is fungible; BSV is not on the list, so the SHA-256 rate is applied to BSV&rsquo;s own
-      live hashrate. The rate is a snapshot, not a stream: the page reads the published number from
-      <a href="/monitor/data.json">data.json</a>.
+
+    <table class="assum" style="margin-top:14px">
+      <thead>
+        <tr><th>NiceHash SHA-256 market</th><th>Available</th></tr>
+      </thead>
+      <tbody id="av-rows">
+        <tr><td colspan="2">Requires JavaScript. The three markets &mdash; their algo ids, their names,
+        the exchange each is quoted in, and the source URL &mdash; are listed in
+        <a href="/monitor/data.json">data.json</a> and summed live from NiceHash&rsquo;s public stats
+        API. The consolidated figure is the sum of all three; reading only one of them is the error this
+        page used to make.</td></tr>
+      </tbody>
+    </table>
+    <p class="mon-card__meta" id="av-state" style="margin-top:8px">The consolidated figure is the sum
+      of the three markets above, not one of them. The algo ids that are summed and the source they are
+      read from are both in <a href="/monitor/data.json">data.json</a>; if the live read fails, the
+      hand-published snapshot in that file is shown instead, labelled as a snapshot.</p>
+
+    <p class="note" style="margin-top:16px">
+      <strong>This is precisely the threat the vault exists for.</strong> A rented majority can reorg a
+      deposit &mdash; but <strong>the program verifies the chain itself and can burn a mint whose
+      deposit is reorged away</strong>, which no amount of rented hashrate prevents.
+      <strong>The defence is the reversal, not the price of the attack.</strong>
+    </p>
+
+    <p class="note">
+      <strong>The one caveat that survives.</strong> Renting the whole market is not instantaneous:
+      <span id="av-impact">NiceHash&rsquo;s own marketplace guidance is that large demand moves the price
+      of the order book, so a real attack would be slower and costlier than the flat rate suggests.</span>
+      <strong>That is a friction, not a barrier, and this page does not present it as one.</strong>
     </p>
 
     <div class="mon-bar">
@@ -198,9 +228,10 @@
         JavaScript. Each card below still names its source, so you can check every figure yourself.
         The reserve, the supply and the ratio are placeholders regardless of JavaScript: the page reads
         them from <a href="/monitor/data.json">data.json</a>, which currently holds no published values.
-        The leased rate, the rentable capacity and the availability ratio are the same — they come from
-        <a href="/monitor/data.json">data.json</a> and the live hashrate, so without JavaScript they are
-        labelled placeholders too, never guesses.
+        The rentable-market figures, the ratio against BSV&rsquo;s network and the out-hash costs are the
+        same — the three NiceHash markets are fetched live and the rented rate is read from
+        <a href="/monitor/data.json">data.json</a>, so without JavaScript they are labelled placeholders
+        too, never guesses and never zeros.
       </p>
     </noscript>
 
@@ -307,8 +338,11 @@
       and the rented-hashrate cost at the published SHA-256 market rate. Both are printed below with
       their units, because they answer different questions — the first is what an attacker who already
       owns the machines pays in power, the second is what an attacker without hardware would pay the
-      market. Every input lives in <a href="/monitor/data.json">data.json</a>, so restating the estimate
-      needs no code change.
+      market. The rented basis is then priced for the two things that were actually asked for:
+      <strong>matching</strong> BSV&rsquo;s network, and a <strong>comfortable majority</strong> on top
+      of it. Every assumption lives in <a href="/monitor/data.json">data.json</a>; the live hashrate and
+      the three NiceHash markets that supply the hashrate are fetched by your browser, so restating the
+      estimate needs no code change.
     </p>
 
     <div class="formula">electricity cost/day &nbsp;=&nbsp; (network hashrate &times; hashrate_multiple &divide; machine_hashrate) &times; machine_power &times; energy_price &times; 24</div>
@@ -325,23 +359,29 @@
         <tr><td>Machine power draw</td><td id="a-power">not loaded</td></tr>
         <tr><td>Energy price</td><td id="a-energy">not loaded</td></tr>
         <tr><td>Leased SHA-256 rate (NiceHash, via crypto51.app)</td><td id="a-lease-rate">not loaded</td></tr>
-        <tr><td>Rentable SHA-256 capacity, whole market (crypto51.app)</td><td id="a-rentable">not loaded</td></tr>
+        <tr><td>Consolidated rentable SHA-256, three NiceHash markets (live)</td><td id="a-rentable">not loaded</td></tr>
+        <tr><td>Comfortable-majority multiple, above the network estimate</td><td id="a-majmult">not loaded</td></tr>
         <tr><td>BSV target block interval</td><td id="a-target">not loaded</td></tr>
       </tbody>
     </table>
 
     <p class="mon-card__meta" style="margin-top:12px">
-      The leased rate and the rentable capacity are published, not assumed:
+      The leased <em>rate</em> is published, not assumed:
       <a href="https://www.crypto51.app/about.html" target="_blank" rel="noopener">crypto51.app</a>
       publishes NiceHash SHA-256 rental prices, and its API at
       <a href="https://api.crypto51.app/coins.json" target="_blank" rel="noopener">api.crypto51.app/coins.json</a>
-      exposes <code>rentable_price_usd_hour</code>, <code>rentable_price_units</code>,
-      <code>rentable_capacity</code> and <code>rentable_capacity_pretty</code>. Every SHA-256 coin on that
-      list — BTC, BCH, XEC, FB, QUAI, BC2 — reports the same rate, because SHA-256 hashrate is fungible.
-      BSV is not on the list, so the SHA-256 <em>rate</em> is applied to BSV&rsquo;s own live hashrate. Both
-      numbers are hand-copied into <a href="/monitor/data.json">data.json</a> with the time they were read,
-      and the availability ratio is computed in the browser from the live hashrate, so it stays true as
-      BSV&rsquo;s hashrate moves.
+      exposes <code>rentable_price_usd_hour</code> and <code>rentable_price_units</code>. Every SHA-256
+      coin on that list — BTC, BCH, XEC, FB, QUAI, BC2 — reports the same rate, because SHA-256 hashrate
+      is fungible. BSV is not on the list, so the SHA-256 <em>rate</em> is applied to BSV&rsquo;s own live
+      hashrate, and it is hand-copied into <a href="/monitor/data.json">data.json</a> with the time it was
+      read.
+      The rentable <em>supply</em> is no longer taken from crypto51. crypto51 reads only one of
+      NiceHash&rsquo;s three SHA-256 markets — the legacy one, which holds three orders and almost no
+      hashrate. The consolidated figure above is the live sum of all three, fetched from NiceHash&rsquo;s
+      own public stats API. The algo ids, the market names and the source URL are in
+      <a href="/monitor/data.json">data.json</a>; the sum, the ratio and both out-hash costs are computed
+      in the browser from the live hashrate and the live markets, so they stay true as BSV&rsquo;s
+      hashrate and the market move.
     </p>
 
     <table class="assum" style="margin-top:14px">
@@ -357,17 +397,19 @@
         <tr><td>Same cost, in BSV at the live BSV price</td><td id="d-bsvday">not derived</td></tr>
         <tr><td>Leased cost per hour, at the market rate</td><td id="d-leasehour">not derived</td></tr>
         <tr><td>Leased cost per day, at the market rate</td><td id="d-leaseday">not derived</td></tr>
-        <tr><td>Network hashrate &divide; rentable SHA-256 capacity</td><td id="d-rentablemultiple">not derived</td></tr>
+        <tr><td>Out-hash cost per day, matching BSV&rsquo;s hashrate</td><td id="d-matchday">not derived</td></tr>
+        <tr><td>Out-hash cost per day, comfortable majority</td><td id="d-majday">not derived</td></tr>
+        <tr><td>Rentable SHA-256 &divide; BSV network hashrate</td><td id="d-rentablemultiple">not derived</td></tr>
       </tbody>
     </table>
 
     <ul class="points" style="margin-top:16px">
       <li><strong>Electricity only.</strong> The first basis excludes buying or renting the machines, cooling, bandwidth, pool fees, and the fact that rented SHA-256 normally costs more than raw electricity. It is a floor on what an attacker who already owns the hardware pays — nothing more.</li>
-      <li><strong>Renting is a rate, not an offer.</strong> The second basis applies the published SHA-256 rental rate to the same hashrate, per hour and per day. That is what the market charges for the hashrate it lists for sale — and it lists only a small fraction of what the attack needs, so no amount of money rents the whole attack. Beyond that fraction the hashrate must be bought or built, which is capital and lead time, not an hourly rate.</li>
-      <li><strong>The machines must exist and be for sale.</strong> The availability question is now published rather than left open: the network&rsquo;s live hashrate against the whole rentable SHA-256 market is shown above, and the market is far short of it. A larger attack is a hardware-acquisition problem this page does not price.</li>
+      <li><strong>Renting is not capped by the market.</strong> The second basis applies the published SHA-256 rental rate to the same hashrate, per hour and per day. An earlier version of this page said the market listed only a small fraction of what the attack needs, so no amount of money could rent it. <strong>That was false.</strong> The figure came from crypto51, which reads only the legacy standard SHA-256 market on NiceHash — the one with a handful of open orders. The market that matters, the one virtually all modern Bitcoin hardware lives on, is one of the other two, and all three are listed by algo id in <a href="/monitor/data.json">data.json</a>. Summed across all three, the rentable supply dwarfs BSV&rsquo;s whole network &mdash; the ratio is computed live above &mdash; so the hashrate needed to match or out-mine BSV is <em>for sale</em>. What is not instantaneous is moving that much through the book: large demand moves the price, which makes a real attack slower and costlier than the flat rate. <strong>That is a friction, not a barrier, and this page does not present it as one.</strong></li>
+      <li><strong>The defence is the reversal, not the price.</strong> A rented majority can reorg a deposit — but the program verifies the chain itself and can burn a mint whose deposit is reorged away, so the deposit&rsquo;s value does not survive the reorg no matter how much hashrate was rented. This is precisely the threat the vault exists for; no amount of rented hashrate prevents the reversal.</li>
       <li><strong>SHA-256 is shared with BTC</strong>, where far more of it already exists. This figure is the cost of assembling hashrate equal to BSV's own; it is not a lower bound on what someone who already controls large SHA-256 could do.</li>
-      <li><strong>1.0&times; is parity, not a majority.</strong> The default multiple is 1.0&times; the network estimate, which <em>matches</em> the honest hashrate. To exceed it an attacker must add <em>more</em> than 1.0&times;. 0.51&times; is not a bare majority: 0.51&times; added to the existing network is 0.51 &divide; 1.51 &asymp; 34% of the total hashrate, not 51%. Just over half the cost of the 1.0&times; figure buys about a third of the hashrate.</li>
-      <li><strong>The inputs are stated, not hidden.</strong> The machine, its hash rate, its power draw, the energy price, the multiple, the leased rate and the rentable capacity are all printed above, with units and sources, and are editable in <a href="/monitor/data.json">data.json</a>. Nothing here is a number we invented.</li>
+      <li><strong>1.0&times; is parity, not a majority.</strong> The default multiple is 1.0&times; the network estimate, which <em>matches</em> the honest hashrate. To exceed it an attacker must add <em>more</em> than 1.0&times;. 0.51&times; is not a bare majority: 0.51&times; added to the existing network is 0.51 &divide; 1.51 &asymp; 34% of the total hashrate, not 51%. The comfortable-majority figure prices the multiple published in <a href="/monitor/data.json">data.json</a> on top of the network estimate.</li>
+      <li><strong>The inputs are stated, not hidden.</strong> The machine, its hash rate, its power draw, the energy price, the multiple, the leased rate, the majority multiple, and the three markets that are summed — their algo ids, names and source — are all printed above, with units and sources, and are editable in <a href="/monitor/data.json">data.json</a>. Nothing here is a number we invented.</li>
     </ul>
 
     <p class="note" style="margin-top:22px">
