@@ -10,13 +10,13 @@ member is exposed to — and, in the same voice, how much of any of it exists.
 one asks only: *is it built, is it enforced, and what happens to a member who does not do it?* For most
 of the federation the answer is that it is neither built nor enforced, and saying so is the point.
 
-**Status: designed, not built — all of it.** The built program is **21 instructions and 66 passing
+**Status: designed, not built — all of it.** The built program is **27 instructions and 77 passing
 tests**, and **none of the federation exists in it**: no membership account, no bond, no Greycore, no
 reserve script keys, no governance, no slashing (§8). Everything in this chapter is therefore an
 **expectation of how the system is supposed to work**, not a description of a system that runs. The
 instruction count was taken by counting the handlers in `poc/solana/programs/solbeam/src/lib.rs` and the
 test count from the suite, in this review — neither was copied from another document. The suite's
-recorded run is **66 passing / 0 failing**.
+recorded run is **77 passing / 0 failing**.
 
 ---
 
@@ -247,7 +247,7 @@ who sign the same fraudulent thing and never equivocate is caught by none of the
 
 ## 8. What the programme actually does today
 
-**The built set is 21 instructions and 66 passing tests.** The handler count was taken by counting the
+**The built set is 27 instructions and 77 passing tests.** The handler count was taken by counting the
 `pub fn`s inside the `#[program]` module of `poc/solana/programs/solbeam/src/lib.rs` (lines 412–2053):
 `initialize`, `push_header`, `seed_headers`, `init_staging`, `push_fork_header`, `abandon_staging`,
 `commit_fork`, `initialize_token`, `initialize_bridge`, `report_spent`, `verify_deposit`,
@@ -276,7 +276,7 @@ signer becomes its key or quorum; nothing else about the instruction needs to ch
 `ReportSpent` and `create_spent_outpoint`). Until then the hole is closed **in mechanism and unchanged
 in trust**: it is still one key's assertion, and that key is the upgrade authority.
 
-**On the counts.** The suite stands at **66 passing / 0 failing** and the program at **21 instructions**. Two documents said "37 passing" until this note was written — the phrase was split across a line break, so a text-level find-and-replace silently matched nothing while reporting success, and a plain `grep "37 passing"` reported the files clean for the same reason. **Prefer grepping with a whitespace-tolerant pattern**, or the check will confirm a correction that never happened.
+**On the counts.** The suite stands at **77 passing / 0 failing** and the program at **27 instructions**. Two documents said "37 passing" until this note was written — the phrase was split across a line break, so a text-level find-and-replace silently matched nothing while reporting success, and a plain `grep "37 passing"` reported the files clean for the same reason. **Prefer grepping with a whitespace-tolerant pattern**, or the check will confirm a correction that never happened.
 
 [11 §6](11-peg-out-spec.md#6-what-this-does-not-solve)).
 

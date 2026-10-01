@@ -13,8 +13,8 @@ retyped, and `python3 config/gen.py --check` fails if any projection is stale. T
 by `BEGIN/END GENERATED` comments; **everything outside those fences is hand-written prose**, and the
 generator leaves it alone. A value that has to appear in a projection is a `%v%`/`%V%` template over
 the row's machine `value`, so changing the JSON alone moves the code, the CSV and this page together.
-> **Almost all of this is a specification, not shipped behaviour.** The built set is 21 instructions
-> and 66 passing / 0 failing. The only parameters actually settable in the built program are
+> **Almost all of this is a specification, not shipped behaviour.** The built set is 27 instructions
+> and 77 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, now **144 blocks — about 24 hours**) and the authority timelock
 > (`TIMELOCK_SLOTS = 32`, a constant). **`FLOOR` is not a parameter in code** — it is the constant
 > `MIN_CONFIRMATIONS = 12`. Nothing else here is settable at runtime.
@@ -74,7 +74,7 @@ that lives only in this sheet.
 > runtime-settable value**, and it is in Solana slots deliberately, for the opposite reason: a height
 > deadline would never expire if the header feed stalled.
 >
-> Everything else marked `designed` is a specification, and **21 instructions exist**, not 56
+> Everything else marked `designed` is a specification, and **27 instructions exist**, not 56
 > parameters.
 
 **A machine-readable copy is at [`parameters.csv`](parameters.csv)**, generated from the same JSON.

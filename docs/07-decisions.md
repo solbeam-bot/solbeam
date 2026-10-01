@@ -13,7 +13,7 @@ short version, so it can be reviewed with fresh eyes.
 > and why. The reversals are the point of this register.
 
 **Built or designed?** Built: the **light client with cw-144**, **`solBSV`**, the **mint**, **fork
-staging**, the **nullifier**, the **timelocked authority** and **the vault** — 21 instructions, 66
+staging**, the **nullifier**, the **timelocked authority** and **the vault** — 27 instructions, 77
 passing / 0 failing. **Designed, not built: the federation, the Greycore, peg-out and governance.**
 **The vault's protective window is a stored parameter at 144 BSV blocks (~24 hours)**, so a
 followed reorg has a window in which it can be reversed.
@@ -78,7 +78,7 @@ proof of guilt (D13). **Redemptions are never pausable** (D11, D12).
 | **Three security layers** | A **threshold signature** catches a minority moving funds; **individual attestations** catch a minority's equivocation; a **covenant** (research, later) would catch a colluding majority. None catches a consistent majority. "Double threshold" means **a key plus a paper trail**, not a stronger threshold |
 | **Collusion accepted, transparency is the mitigation** | A colluding threshold can take the reserve; maximum loss is the non-member supply. Continuous publication of the reserve and supply converts a hidden theft into a visible one — an **early deliverable** |
 | **Genesis** | Members post a **BSV-side bond**, so no `solBSV` needs to exist first. A capped, explicitly-unbonded first mint is a documented later option, not chosen |
-| **Confirmed by test** | 66 on-chain tests / 0 failing, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`**, and the burn path exercised at a non-zero maturity |
+| **Confirmed by test** | 77 on-chain tests / 0 failing, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`**, and the burn path exercised at a non-zero maturity |
 | **`MIN_CONFIRMATIONS = 12` and a 144-block maturity window protect a deposit** | The 12-confirmation delay is **prevention**; the 144-block (~24 hour) window is the time in which a followed reorg can be **reversed** |
 
 ---
