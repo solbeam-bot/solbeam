@@ -248,7 +248,7 @@ The current build answers the vault's open questions and records three decided p
 | | Value |
 |---|---|
 | `lc.max_staleness_slots` | **54,000 (~6 h)** — a multiple of BSV block time; anything under ~1,500 slots per block is meaningless |
-| `v.maturity_blocks` | **0, as a stored parameter** — not a compile-time constant |
+| `v.maturity_blocks` | **0, as a stored parameter** — not a compile-time constant. Later set to **144 blocks (~24 hours)** |
 | `MIN_CONFIRMATIONS` | **12**, unchanged |
 
 **The correction that matters.** An earlier revision of the spec said **"the burn cannot fire"** at
@@ -261,8 +261,18 @@ calls `burn_staged` before anyone releases still burns the tokens.
 **And the reason maturity is a parameter rather than a constant:** a constant at 0 could never be
 exercised, so `burn_staged` could only be *asserted*. As a parameter it is set non-zero in a test, and
 the burn path is **proven**: `NotMatured` is reachable, `DepositHashUnchanged` flips to
-`DepositHashChanged`, the burn zeroes the vault with the supply delta asserted, and a later maturity
-raise leaves in-flight staged items at the value they were staged with.
+`DepositHashChanged`, the burn zeroes the vault with the supply delta asserted, and the raise to 144
+leaves in-flight staged items at the value they were staged with.
+
+**What the parameter was for, and what it was set to.** The value was later raised from 0 to
+**144 blocks — about 24 hours** — through that same stored parameter. It is the point at which the
+reversal has a window rather than only a race: a followed reorg is caught while the mint is still
+staged and can be burned. Renting BSV's hashrate costs roughly **$9,000 a day**; BSV's difficulty
+sits at mining break-even, so the attacker is nearly made whole by the block rewards they mine; and
+the SHA-256 rental market holds about **120× BSV's network**. At **$10k/day a double spend is not a
+theoretical risk**. Maturity is counted in **BSV blocks, not Solana slots**, because depth is what a
+reorg must overcome. The reasoning above — that 0 made release and burn a race rather than disabling
+the burn — is kept because it is why the raise was the priority.
 
 **The tests that do NOT cover what they appear to** — `StaleClient` (54,000 slots is unreachable on a
 local validator: implemented, **untested**), `AlreadyStaged`, `WrongStagedMint`, and the

@@ -65,7 +65,7 @@ touching code.** Where a value is a guess rather than a derivation it is marked 
 | ID | Value | Status | Why |
 |---|---|---|---|
 | `po.payout_confirmations` | **6 BSV blocks** (~1 hour) | `ph` | How deep the payout must be before it can be claimed. Lower than the mint's 12 because the *burn* still faces a challenge window, so depth here is not the only protection |
-| `po.challenge_window` | **144 BSV blocks** (~24 hours) | `ph` | The window in which a claim can be shown to have been reorged. **Matches `v.maturity_blocks`' designed value deliberately** — both are "how long before we believe the chain" |
+| `po.challenge_window` | **144 BSV blocks** (~24 hours) | `ph` | The window in which a claim can be shown to have been reorged. **Matches `v.maturity_blocks` deliberately** — both are "how long before we believe the chain" |
 | `po.deadline` | **216,000 Solana slots** (~24 hours) | `ph` | How long a member has to pay before the holder may cancel. In **slots**, because a deadline that cannot advance is not a deadline — and if the header feed stalls, a BSV-height deadline would never expire, freezing the holder's funds |
 | `po.cancel_grace` | **0** | `dec` | Cancellation is immediate on expiry. A grace period would only delay the exit |
 | `fee.redeem_bp` | **30 bp** | `dec` | The peg-out fee, matching the mint side |

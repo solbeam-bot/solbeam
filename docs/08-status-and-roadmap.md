@@ -60,30 +60,40 @@ of a 192-entry window costs ~28 KB of a 32 KB per-instruction heap.
 
 ---
 
-## 2. The vault is built. Its protective window is off by parameter.
+## 2. The vault is built, with its protective window at 144 blocks.
 
-This is the single most important caveat in the document, and it is stated rather than left to be
-discovered.
+This was the single most important caveat in the document, and it is now closed.
 
-**Maturity ships at 0**, as a **stored parameter** (`Config::maturity_blocks`), not a compile-time
-constant. At maturity 0:
+**Maturity is 144 BSV blocks — about 24 hours** — as a **stored parameter**
+(`Config::maturity_blocks`), not a compile-time constant. It shipped at 0, and the reasoning that
+made that a defect is worth keeping, because it is the reason the value was raised. At maturity 0:
 
-- the vault is a **pass-through**: tokens minted into it become releasable in the same instant;
-- the burn predicate is **satisfied instantly rather than unreachable** — `burn_staged` requires the
-  hash to differ *and* the height to have matured, and the second condition is always met;
-- so **release and burn are a race**, and in practice **release wins**, because the recipient wants
+- the vault was a **pass-through**: tokens minted into it became releasable in the same instant;
+- the burn predicate was **satisfied instantly rather than unreachable** — `burn_staged` requires the
+  hash to differ *and* the height to have matured, and at 0 the second condition was always met;
+- so **release and burn were a race**, and in practice **release won**, because the recipient wants
   their tokens and a reorg is the unusual case.
 
-**Someone who sees a reorg and calls `burn_staged` before anyone releases still burns the tokens.**
-Maturity 0 removes the *window* in which the reversal is comfortable, not the reversal itself.
+**Someone who saw a reorg and called `burn_staged` before anyone released still burned the tokens.**
+Maturity 0 removed the *window* in which the reversal is comfortable, not the reversal itself.
 
-**What protects a deposit today is `MIN_CONFIRMATIONS = 12` — roughly two hours. That is prevention,
-not reversal.** The reversal remains **available, tested, and racy** rather than disabled: the burn
-path is exercised by test at a non-zero maturity, with a followed reorg, and a later maturity raise
-leaves in-flight staged items at the value they were staged with.
+**The attack that made 144 the priority is affordable.** Renting BSV's hashrate costs roughly
+**$9,000 a day**; BSV's difficulty sits at mining break-even, so the attacker is nearly made whole by
+the block rewards they mine; and the SHA-256 rental market holds about **120× BSV's network**
+(~25 EH/s against ~0.21 EH/s). At **$10k/day a double spend is not a theoretical risk**, and the
+defence is that the mint can be reversed — which needs a window.
 
-**Do not write "reorg-reversible" as a property of the running system.** The honest sentence is: *the
-vault is built; the protective window is currently 0 and can be raised.*
+**The window is now on, and it is in BSV blocks.** 144 blocks at BSV's 600-second target is about
+24 hours, and the slot equivalent (~216,000) would decouple the window from the depth it measures.
+`po.deadline` stays in Solana slots deliberately, because a height deadline would never expire if the
+header feed stalled. `MIN_CONFIRMATIONS = 12` remains the **prevention**; the maturity window is what
+adds the reversal. The burn path is exercised by test at a non-zero maturity, with a followed reorg,
+and the raise leaves in-flight staged items at the value they were staged with.
+
+**"Reorg-reversible" is now a property of the running system, not only of the mechanism.** One
+proviso stands: the window is a stored parameter one authority change away from 0, and an instance
+already deployed carrying 0 holds it until it is raised through the timelocked authority path that
+exists for exactly this.
 
 ---
 
@@ -144,7 +154,7 @@ features.
 - **Collusion is unprevented.** A majority of the reserve signers acting **together with** the
   Greycore could take the reserve. The 2-of-2 raises the bar; it does not remove the trust.
 - **Sharding: none.** Our blast radius is **100%** of the reserve; the reference isolates to `1/N`.
-- **The vault's protective window is off** (§2). `MIN_CONFIRMATIONS = 12` is what protects a deposit.
+- **The vault's protective window is a stored parameter**, set to 144 blocks (§2). `MIN_CONFIRMATIONS = 12` is the prevention; the window is the reversal.
 - **No independent audit.** The critical defects found so far were found by our own adversarial
   review, which is not the same as an audit by someone with no stake in the answer.
 
@@ -176,9 +186,9 @@ features.
 4. **The upgrade authority.** It is timelocked now (`TIMELOCK_SLOTS = 32`), but it is still one key.
    **What does it control, and what is the timelock worth if the holder waits it out?**
 5. **`cw-144` itself.** Verified against 324 real headers — **what is the 325th doing?**
-6. **The vault's window being off.** The reversal mechanism exists, but at maturity 0 it is a race
-   that release normally wins. **Every "reorg-reversible" claim rests on a parameter, not on shipped
-   behaviour.**
+6. **The vault's window is a parameter.** The reversal mechanism exists, and maturity is set to
+   144 blocks (~24 hours) so a followed reorg has a window. **Every "reorg-reversible" claim still
+   rests on that parameter, and one authority change is all that separates it from 0.**
 
 ---
 
@@ -201,7 +211,8 @@ reverse it. **Ours notices on-chain and reverses it**, because a reorg is a fact
 program already stores.
 
 **That is the addition, and it is why the light client and the vault exist.** The detection half is
-built and verified; the reversal half is built, and **its safety window is off by parameter.**
+built and verified; the reversal half is built, and **its safety window is a stored parameter set to
+144 blocks (~24 hours).**
 
 **What we take from the reference, deliberately, because the precedent is good:** a bonded member set;
 a **second quorum of trusted third parties** (the Greycore) which must co-sign every reserve spend; a
@@ -224,7 +235,7 @@ recorded as such.**
 
 **The vault is the contribution and it is built.** If you take one thing from this document: **the
 reorg reversal is what makes this different from the reference — the mechanism exists and is tested,
-and at the shipped maturity of 0 it is a race rather than a window.**
+and maturity is set to 144 blocks so that it is a window rather than only a race.**
 
 ---
 
@@ -245,6 +256,7 @@ the design rests on, then the federation and the parts that need bonds and adjud
 | **The replay-list ceiling** | The nullifier removes the 200-per-window cap, the pruning logic and the accidental capacity limit at once |
 | **The window resize** | **192 records of 52 bytes**, `SPACE` **10,107** of 10,240, deposit lifetime **32 hours**. The old 288 × 32-byte, 48-hour layout was arithmetically impossible once cw-144 was implemented |
 | **The vault** | `release_mint`, `burn_staged` and `set_maturity` are built; the burn path is tested at a non-zero maturity |
+| **The vault's window** | `v.maturity_blocks` raised from 0 to **144 blocks (~24 hours)** through the stored `Config` parameter the authority path already changes |
 
 **Testnet is no longer blocked on the retarget.** What remains open is **X3**: the DAA rule is
 hard-coded and BSV says it will change, so it must become changeable without a redeploy — which the
@@ -254,7 +266,6 @@ federation model turns into a **governance parameter** rather than an orphaned r
 
 | Step | What ships | Why this order |
 |---|---|---|
-| **Raise the vault's maturity from 0** | A non-zero `maturity_blocks`, through the timelocked authority path that already exists | The mechanism is built; the protective window is a parameter. Until it is non-zero, the reversal is a race |
 **Monitoring: built.** `website/monitor/` publishes live BSV and Solana chain data, and reserves the reserve-and-supply figures as **NOT PUBLISHED** placeholders until a federation exists to publish them. The cost-to-out-mine estimate is derived from live hashrate against a stated assumption. See [12](12-federation-operations.md).
 | **Transparency — reserve and supply published continuously** | The reserve balance and the `solBSV` supply published as a live, public backing ratio | **Promoted from a phase-5 monitoring task to an early deliverable.** For the two cases nothing can enforce — a colluding threshold, and an unspent-outpoint spend nobody challenges — **visibility is the only remaining defence**, and it must exist before real value does |
 | **The reported spent-outpoint record** | The format and the write path, then the check in the mint | Closes N5 in practice. Until then the mint cannot tell a spent deposit output from an unspent one |
@@ -273,7 +284,7 @@ federation model turns into a **governance parameter** rather than an orphaned r
 1. **Testnet, mint only.** No longer blocked on the retarget; no real value.
 2. **Transparency, alongside the testnet.** Publish the reserve balance and the supply continuously,
    so the backing ratio is public **before** any real value is at stake.
-3. **Testnet, vault.** Raise maturity, so mints stage, mature and release.
+3. **Testnet, vault.** Mints stage, mature for 144 blocks and release.
 4. **Testnet, federation and governance.** Bonds, threshold custody, governance and slashing exercised
    end to end. Still no real value.
 5. **Mainnet, mint only, small caps.** Deposits proven end to end. Redemption handled manually and
@@ -291,7 +302,7 @@ federation model turns into a **governance parameter** rather than an orphaned r
 - A deposit is minted on mainnet with no human in the loop: staged in the vault, then released after a
   non-zero maturity.
 - A reorg followed inside the maturity window burns the staged tokens, and the depositor ends exactly
-  where they started. *(The burn is tested at a non-zero maturity; the shipped maturity is 0.)*
+  where they started. *(The burn is tested at a non-zero maturity; the shipped maturity is 144 blocks.)*
 - A federation is formed from **Greycore-admitted members** at the two-sided float, and holds the
   reserve under a **2-of-2 `OP_CHECKMULTISIG`**.
 - A governance proposal passes at **85% of pledged coins** and takes effect after **30 days**, with
