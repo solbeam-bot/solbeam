@@ -74,7 +74,7 @@ concept, and it says so.
 | | |
 |---|---|
 | **The deposit is verified; the backing is reported** | The program verifies BSV proof of work and Merkle inclusion itself. **The program verifies deposits; the federation reports backing** — it reports spent deposit outpoints, because Solana cannot read the BSV UTXO set |
-| **Reversal is trustless** | The program compares its own stored header hashes. A reorg is a fact about headers, not a report from anyone. **The mechanism is built; its protective window ships at 0 (see 08)** |
+| **Reversal is trustless** | The program compares its own stored header hashes. A reorg is a fact about headers, not a report from anyone. **The mechanism is built, and its protective window is set to 144 BSV blocks (~24 hours) — see 08** |
 | **The reserve is trusted, and bounded** | The BSV sits under a **2-of-2 `OP_CHECKMULTISIG`** — the federation's threshold ECDSA gateway key **and** the Greycore's, both required — so no gateway majority and no Greycore can move it alone. What protects a holder is a **two-sided bond under the collective key** — the program seizes the `solBSV` side automatically; the members seize the BSV side by signing, which is a **collective action by the majority and a social duty, not an on-chain guarantee** |
 | **There is a federation** | Bonded members, **admitted by the Greycore**. They are paid to carry the risk; the bonds are the float, held under the collective key, not each member's own |
 | **There is governance** | 85% of pledged coins, 30 days, signalled live. It holds the upgrade authority — see *the floor is the exit* below |
@@ -165,8 +165,8 @@ Header: the animated disc at 40–64 px. Hero: the animated disc at 160–240 px
 Left panel: BSV mark. Middle panel: a progress ring or the beam disc mid-rotation, with the
 confirmation depth beneath — state the depth as **`FLOOR`, 12 blocks**, then the **144-block
 maturity** before release. There is no bid and no market-priced depth, so never put a variable number
-or a clock here. Right panel: Solana mark with the `solBSV` ticker. *(The shipped program's vault
-maturity is currently 0 — see 08; the graphic shows the designed values.)*
+or a clock here. Right panel: Solana mark with the `solBSV` ticker. *(Both numbers are the shipped values:
+`FLOOR` = 12, maturity = 144 BSV blocks — see 08.)*
 
 **Voice.**
 
@@ -189,7 +189,7 @@ maturity is currently 0 — see 08; the graphic shows the designed values.)*
 - **Precise words:** mint, redeem, bond, **2-of-2 reserve script / Greycore**, threshold **key** for
   the gateway leg, maturity, deadline, proof, equivocation.
 - **Say the numbers.** The fee (**30 bp, governed**), the confirmation depth (**12 blocks**), maturity
-  (**144 blocks designed; 0 shipped**), the bonds (**1,000 BSV per side, the float**), the gateway
+  (**144 BSV blocks, ~24 hours**), the bonds (**1,000 BSV per side, the float**), the gateway
   threshold (**4-of-N, `N` open**), the **Greycore** (size and threshold `open`), and the governance
   defaults (**85% / 30 days**). Do not present a confirmation time as a promise.
 
@@ -230,8 +230,10 @@ and proved back to the program.
 straight to your wallet; the vault releases to you after a **maturity window of 144 blocks** passes
 with the deposit still canonical. If BSV reorgs and the program follows the heavier branch, the
 still-staged tokens are **burned**, and your BSV returned with the reorg, so you end where you
-started. **The vault is built, but the shipped maturity is 0**, so the reversal is currently available
-and racy rather than a protective window; `MIN_CONFIRMATIONS = 12` is what protects a deposit today.
+started. **The vault and its window are built.** The window shipped at 0, where a deposit was
+releasable the instant it was minted and a burn could only win a race; it is set to **144 blocks**,
+which is what gives the reversal time to happen. `MIN_CONFIRMATIONS = 12` is what protects a deposit
+before that.
 **One real cliff, not dressed up:** the proof must be submitted while the deposit's block is still
 inside the light client's **32-hour window** (192 records); after that it can never verify, and the
 BSV is with the reserve.
@@ -276,7 +278,8 @@ stops **mints only**. On `solBSV` itself there is **no freeze authority**.
 fee; the order book is **removed**. There is no book, no matching and no market-making.
 
 **Why does a deposit wait?** Twelve blocks is **`FLOOR`**, the minimum confirmation depth; maturity is
-then **144 blocks designed**, chosen so the program has time to see a reorg and burn the staged tokens
+then **144 BSV blocks (~24 hours)**, chosen so the program has time to see a reorg and burn the staged
+tokens
 instead of releasing them. The deposit's whole proof must land inside the light client's **32-hour
 window**. Redemption deadlines are measured in **Solana slots**, so a cluster halt freezes the clock.
 
@@ -367,9 +370,10 @@ downloading the whole chain. SOLBEAM runs a BSV light client **on Solana**, hold
 rolling window of **192 records** (52 bytes each, `SPACE` **10,107** of 10,240) carrying a hash,
 cumulative chainwork and time per header.
 
-**Maturity** — how long a staged mint must stay unreorged before the vault releases it. Designed at
-**144 blocks**; **shipped at 0**. Depth sets the cost of attacking; maturity sets the time available
-to detect.
+**Maturity** — how long a staged mint must stay unreorged before the vault releases it. Set at
+**144 BSV blocks** (~24 hours). It is counted in BSV blocks rather than Solana slots, because depth is
+what a reorg must overcome — the slot equivalent would be about 216,000. Depth sets the cost of
+attacking; maturity sets the time available to detect.
 
 **Merkle proof** — a short cryptographic path showing a transaction is included in a block.
 
@@ -418,7 +422,7 @@ one key.
 **Vault** — a **program-owned token account that every mint lands in first, never with the user**.
 Because the tokens sit in the program's own account, the program can **burn them if a reorg is
 followed** or release them on maturity, without a freeze authority. Peg-out escrows into the vault.
-**Built**; its protective window ships at 0.
+**Built**; its protective window is **144 BSV blocks** (~24 hours).
 
 ### Terms of earlier models — removed or superseded
 

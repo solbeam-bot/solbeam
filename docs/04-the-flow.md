@@ -16,7 +16,7 @@ the loss.**
 |---|---|
 | **Light client** | **Built.** Checkpoint plus a rolling window of **192** BSV headers — **32 hours** — in one account of **10,107 bytes**, with a **52-byte** record per header (block hash, cumulative chainwork, timestamp). cw-144 verified against **324/324** real mainnet headers, and 160 real mainnet headers through `push_header` itself |
 | **Token and mint** | **Built.** 66 on-chain tests, with negative controls |
-| **Vault** | **Built**, but the protective window ships at **0** — see [02. How it works §4](02-how-it-works.md#the-maturity-0-consequence-stated-up-front) |
+| **Vault** | **Built**, with a **144-block (~24 hour)** maturity window — see [02. How it works §4](02-how-it-works.md#why-maturity-was-raised-from-0-to-144) |
 | **Federation, Greycore, governance, peg-out** | **Designed, not built.** Everything after the mint step |
 | **Order book** | **Removed.** A governed 30 bp fee replaces it |
 
@@ -74,7 +74,7 @@ downstream is the federation and peg-out.
                → mints NET into the vault, owned by the program,
                  recording deposit_hash, deposit_height and
                  maturity_at_deposit, and the recipient
-4  MATURE    maturity_at_deposit of BSV — a STORED parameter, shipped at 0
+4  MATURE    maturity_at_deposit of BSV — a STORED parameter, shipped at 144
 5  RELEASE   anyone calls release_mint                                [built]
                requires: the client is FRESH (a header was pushed
                          within the staleness bound — StaleClient)
@@ -101,7 +101,7 @@ can anyone else.
 | The deposit is reorged out **and the window passes unnoticed** | Once the height leaves the window there is no hash left to check, so `release_mint` succeeds unchecked and the tokens are handed over against a block that no longer exists | **The reserve and every other User.** Detectable only inside `WINDOW − MATURITY` — 48 blocks at the designed values, and **zero at the maximum committed depth** |
 | The reorg is shallower than `FLOOR` | Any reorg deep enough to erase a deposit is necessarily deeper than the 12-confirmation floor, so depth does not spare it | The User, unless the burn happens in time |
 | A forged deposit proof | Rejected by the built checks: header in window, canonical hash, Merkle branch, output value and script, recipient committed in the `OP_RETURN` | The submitter, plus the fee |
-| **The vault's maturity is 0** | Release and burn are both permitted from the moment of staging — a **race**, and release normally wins | **The User and the reserve.** What protects a deposit today is `MIN_CONFIRMATIONS = 12`: prevention, not reversal |
+| **The vault's maturity is lowered again** | At 0, release and burn are both permitted from the moment of staging — a **race**, and release normally wins. At the shipped 144 blocks a followed reorg is caught and burned instead | **The User and the reserve.** The window is a stored parameter; `MIN_CONFIRMATIONS = 12` is still the prevention, and the 144-block window is the reversal |
 | The deposit output is later spent by the members themselves | The proof still verifies, because the program cannot see BSV-side spends: an unbacked mint. The federation's **reported spent-outpoint record** is the answer, and it is **not built** | **Users** |
 | The peg-in fee's physical location is unspecified (`OP_RETURN` carries no amount) | The program can mint `net` and credit an accrual against a pool the members already hold; the 30 bp is decided by the federation's signing policy | **Users**, if the accrual and the reserve diverge |
 

@@ -50,11 +50,12 @@ The distinction the rest of this set is careful about:
 - **Trusted** — the checkpoint, the reserve, and the federation's spent-outpoint report; all
   off-chain, none enforceable by the program.
 
-**The vault is built but its protective window ships at 0**, by stored parameter. At maturity 0 the
-burn predicate is satisfied *instantly* rather than unreachable, so release and burn are a **race**
-and release normally wins. **What protects a deposit today is `MIN_CONFIRMATIONS = 12` (~2 hours),
-which is prevention, not reversal.** Do not read "reorg-reversible" as a property of the running
-system. See [08. Status and roadmap](08-status-and-roadmap.md) §2.
+**The vault is built, and its protective window is 144 BSV blocks (~24 hours)**, by stored
+parameter. It shipped at 0, where the burn predicate was satisfied *instantly* rather than
+unreachable, so release and burn were a **race** and release normally won; 144 blocks is what gives a
+followed reorg a window in which the staged mint can be burned. **`MIN_CONFIRMATIONS = 12` (~2 hours)
+is still the prevention; the window is the reversal.** See
+[08. Status and roadmap](08-status-and-roadmap.md) §2.
 
 A full account of what is built, what is not, and what the tests do not cover is in
 [08](08-status-and-roadmap.md); the running history of the claims this project got wrong is in
