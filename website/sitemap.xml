@@ -2,4 +2,14 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://solbeam.me/</loc><priority>1.0</priority></url>
   <url><loc>https://solbeam.me/about/</loc><priority>0.8</priority></url>
+  <url>
+    <loc>https://solbeam.me/status/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://solbeam.me/monitor/</loc>
+    <changefreq>hourly</changefreq>
+    <priority>0.7</priority>
+  </url>
 </urlset>
