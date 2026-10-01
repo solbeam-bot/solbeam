@@ -1,5 +1,5 @@
 {
-  "_what": "Hand-published values for the /monitor/ page. Nothing in this file is fetched from a public API. `null` means NOT PUBLISHED — the page renders that as an explicit placeholder, never as 0 and never as a dash.",
+  "_what": "Hand-published values for the /monitor/ page. Nothing in this file is fetched live: every value, including the market rates copied from public sources, is entered by hand, and each copied value names its source and the time it was read. `null` means NOT PUBLISHED — the page renders that as an explicit placeholder, never as 0 and never as a dash.",
   "_how_to_update": "Edit the numbers, set published_at to the current UTC time in ISO-8601 (e.g. 2026-10-01T05:00:00Z), commit. No HTML or JavaScript edit is needed.",
   "_warning": "Do not put a value here that you have not actually measured or that nobody can verify. This page is a stated mitigation: the reserve and the supply are published because the protocol cannot check them, and a wrong number here is worse than a placeholder.",
   "version": 1,
@@ -23,11 +23,12 @@
   },
 
   "attack_cost_assumptions": {
-    "_what": "Assumptions, not measurements. The cost-to-rewrite figure on /monitor/ is computed in the reader's browser from the LIVE BSV hashrate (estimate) and the numbers below. They are printed on the page, with units, because the whole design leans on this cost. Change them here to restate the estimate; nobody should have to edit the HTML.",
-    "_disclaimer": "This is an electricity-only floor with an assumed machine. It is not a quote, it is not a measurement, and it excludes the cost of buying or renting the hardware.",
+    "_what": "Inputs, not measurements. The cost-to-rewrite figure on /monitor/ is computed in the reader's browser from the LIVE BSV hashrate (estimate) and the numbers below, on two independent bases: an electricity-only floor from an assumed machine and energy price, and a leased-hashrate cost at the published SHA-256 rental rate. The availability constraint — the live network hashrate against the whole rentable market — is derived from the same live hashrate and the rentable-capacity figure below. Every input is printed on the page, with units and sources, because the whole design leans on this cost. Change them here to restate the estimate; nobody should have to edit the HTML.",
+    "_disclaimer": "The electricity figure is an electricity-only floor with an assumed machine. It is not a quote, it is not a measurement, and it excludes the cost of buying or renting the hardware, plus cooling, bandwidth and pool fees.",
+    "_leased_disclaimer": "The leased figure is a PUBLISHED MARKET RATE applied to BSV's live hashrate, not a quote and not an offer. It excludes the cost of buying or building the hardware. Renting SHA-256 normally costs more than raw electricity, which is why the leased figure is the larger of the two. The rate is only meaningful up to the market's listed capacity, which is a small fraction of what out-mining BSV needs — see rentable_capacity_ph_s. Beyond that fraction the hashrate has to be bought or built, which is a capital and lead-time problem, not an hourly rate.",
 
     "hashrate_multiple": 1.0,
-    "_hashrate_multiple_units": "multiple of the network's current estimated hashrate that an attacker assembles. 1.0 = the whole network, enough to build a heavier chain; a bare majority is about 0.51.",
+    "_hashrate_multiple_units": "Multiple of the network's current estimated hashrate that an attacker assembles. 1.0 = the network's whole current hashrate, which merely MATCHES the honest hashrate (a 50% share of the total). To exceed the honest hashrate an attacker must add MORE than 1.0. 0.51 is not a majority: 0.51x added to the existing network is 0.51 / 1.51 = about 34% of the total hashrate, not 51%.",
 
     "machine": "Bitmain Antminer S19k Pro",
     "machine_hashrate_ths": 120,
@@ -38,6 +39,15 @@
 
     "energy_usd_per_kwh": 0.06,
     "_energy_usd_per_kwh_units": "USD per kWh. ASSUMED energy price. Excludes hardware purchase, cooling, pool fees, and excludes the fact that renting SHA-256 on the open market normally costs more than raw electricity.",
+
+    "leased_rate_usd_per_eh_hour": 1770.67,
+    "_leased_rate_usd_per_eh_hour_units": "USD per 1 EH/s of rented SHA-256 hashrate, per hour (1 EH/s = 1e18 H/s). crypto51's `rentable_price_units` field names the unit 'EH' and its `rentable_price_usd_hour` field reads $1,770.67.",
+    "_leased_rate_usd_per_eh_hour_source": "NiceHash spot rental prices as published by crypto51.app: https://www.crypto51.app/about.html ('rental pricing is from NiceHash') and its API https://api.crypto51.app/coins.json (`rentable_price_usd_hour`, `rentable_price_units`). Every SHA-256 coin on that list — BTC, BCH, XEC, FB, QUAI, BC2 — reports the same $1,770.67 per EH per hour, because SHA-256 hashrate is fungible. BSV is not on the list, so this SHA-256 rate is applied to BSV's own LIVE hashrate rather than to a published BSV row. Read 2026-10-01T05:07:23Z.",
+
+    "rentable_capacity_ph_s": 1,
+    "_rentable_capacity_ph_s_units": "PH/s of SHA-256 hashrate listed for rent across the market as a whole (1 PH/s = 1e15 H/s). This is the entire rentable supply, not BSV's share of it.",
+    "_rentable_capacity_ph_s_source": "crypto51.app API https://api.crypto51.app/coins.json, field `rentable_capacity_pretty`, which the API publishes as '1 PH/s' for every SHA-256 coin. The same API's unrounded `rentable_capacity` is 1,429,412,810,479,854.5 H/s (about 1.43 PH/s); the published, rounded figure is used here so the page quotes the source as the source states itself. Read 2026-10-01T05:07:23Z. The page divides BSV's LIVE hashrate by this value in the browser, so the availability ratio follows the network instead of being hard-coded.",
+    "_rentable_capacity_ph_s_what": "The availability constraint: the whole rentable SHA-256 market is a small fraction of what out-mining BSV would need. See `_leased_disclaimer`.",
 
     "bsv_target_block_seconds": 600,
     "_bsv_target_block_seconds_units": "seconds. BSV's target block interval, used to turn the live difficulty into an estimated network hashrate: hashrate = difficulty x 2^32 / this. Miners may mine faster or slower than the target; the observed spacing is published separately."

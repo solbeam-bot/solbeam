@@ -28,6 +28,12 @@
     solRpc:  'https://solana-rpc.publicnode.com'
   };
 
+  /* The leased-hashrate inputs are published snapshots, not a live API call:
+     the page reads the rate and the rentable capacity from data.json, whose
+     fields cite crypto51.app and the time they were read. These URLs are the
+     citations shown on the page. */
+  var LEASE_SRC = 'https://api.crypto51.app/coins.json';
+
   /* Fallback source links, used when a figure goes "unavailable" and the live
      meta (which carries the source) was never written. */
   var SOURCES = {
@@ -37,7 +43,8 @@
     'bsv-price':    ['CoinGecko simple/price, or Coinbase spot', API.cg],
     'sol-price':    ['CoinGecko simple/price, or Coinbase spot', API.cg],
     'sol-stake':    ['Solana RPC getVoteAccounts', API.solRpc],
-    'sol-tps':      ['Solana RPC getRecentPerformanceSamples', API.solRpc]
+    'sol-tps':      ['Solana RPC getRecentPerformanceSamples', API.solRpc],
+    'lease':        ['crypto51.app NiceHash SHA-256 rental prices', LEASE_SRC]
   };
 
   /* Live figures this run has collected, for the derived cards. */
@@ -107,6 +114,11 @@
   function hashText(h) {
     var x = humanHash(h);
     return dec(x.v, x.v < 10 ? 2 : 1) + ' ' + x.u;
+  }
+
+  /* Rentable capacity is published in whole PH/s, so print it as published. */
+  function phText(ph) {
+    return dec(ph, (Math.abs(ph - Math.round(ph)) < 1e-9) ? 0 : 2) + ' PH/s';
   }
 
   function powerText(kw) {
@@ -444,7 +456,8 @@
 
   function paintAssumptions() {
     var a = V.assumptions;
-    var ids = ['a-multiple', 'a-machine', 'a-mh', 'a-power', 'a-energy', 'a-target'];
+    var ids = ['a-multiple', 'a-machine', 'a-mh', 'a-power', 'a-energy', 'a-lease-rate',
+               'a-rentable', 'a-target'];
     if (!a) {
       ids.forEach(function (id) {
         setText(id, V.dataLoaded ? 'missing from data.json' : 'not loaded');
@@ -460,6 +473,14 @@
     setText('a-power', (pw == null ? 'unset' : dec(pw, 2)) + ' kW per machine');
     var en = numOrNull(a.energy_usd_per_kwh);
     setText('a-energy', (en == null ? 'unset' : '$' + dec(en, 2)) + ' per kWh (assumed)');
+    var lr = numOrNull(a.leased_rate_usd_per_eh_hour);
+    setText('a-lease-rate', lr == null
+      ? 'not published in data.json'
+      : '$' + dec(lr, 2) + ' per EH/s per hour (published)');
+    var rc = numOrNull(a.rentable_capacity_ph_s);
+    setText('a-rentable', rc == null
+      ? 'not published in data.json'
+      : phText(rc) + ' listed for rent, whole market (published)');
     var tg = numOrNull(a.bsv_target_block_seconds);
     setText('a-target', (tg == null ? '600' : dec(tg, 0)) + ' s');
   }
@@ -521,19 +542,82 @@
 
   /* --- derived: ratio, attack cost, implied hashrate ----------------------- */
 
+  /* Two independent bases, so a missing input on one does not blank the other:
+       elec     — electricity-only floor from an assumed machine and energy price
+       leased   — published SHA-256 market rate applied to the same hashrate
+       rentable — the availability constraint: live network vs the whole market
+     `needH` is the attacker's hashrate (network estimate x multiple); at the
+     default multiple of 1.0 it is the live network estimate itself. The
+     availability ratio uses the raw network hashrate, not the attacker figure. */
   function computeAttack(hp, a) {
     if (!a) return null;
     var mult = numOrNull(a.hashrate_multiple);
     if (mult == null) mult = 1;
+    var needH = hp * mult;
+    var out = { mult: mult, networkH: hp, needH: needH, elec: null, leased: null, rentable: null };
+
     var mh = numOrNull(a.machine_hashrate_ths);
     var pw = numOrNull(a.machine_power_kw);
     var en = numOrNull(a.energy_usd_per_kwh);
-    if (!(mh > 0) || !(pw > 0) || !(en > 0)) return null;
-    var needH = hp * mult;
-    var machines = needH / (mh * 1e12);
-    var kw = machines * pw;
-    var perHour = kw * en;
-    return { mult: mult, needH: needH, machines: machines, kw: kw, perHour: perHour, perDay: perHour * 24 };
+    if ((mh > 0) && (pw > 0) && (en > 0)) {
+      var machines = needH / (mh * 1e12);
+      var kw = machines * pw;
+      var perHour = kw * en;
+      out.elec = { machines: machines, kw: kw, perHour: perHour, perDay: perHour * 24 };
+    }
+
+    var rate = numOrNull(a.leased_rate_usd_per_eh_hour);
+    if (rate > 0) {
+      var leasedPerHour = (needH / 1e18) * rate;
+      out.leased = { rate: rate, perHour: leasedPerHour, perDay: leasedPerHour * 24 };
+    }
+
+    var rentablePh = numOrNull(a.rentable_capacity_ph_s);
+    if (rentablePh > 0) {
+      var rentableH = rentablePh * 1e15;
+      out.rentable = {
+        ph: rentablePh,
+        h: rentableH,
+        multiple: hp / rentableH,         /* network hashrate / rentable capacity */
+        pct: (rentableH / needH) * 100    /* rentable as a share of what the attack needs */
+      };
+    }
+    return out;
+  }
+
+  /* The availability constraint: the whole rentable SHA-256 market against the
+     hashrate the attack needs. The ratio is computed from the LIVE network
+     hashrate and the published rentable capacity, never hard-coded. `hp` and
+     `rentable` are passed separately so the placeholder names the missing
+     input instead of blaming the wrong source. */
+  function paintAvailability(hp, rentable, fromCache) {
+    var box = el('av-figures');
+    if (!box) return;
+    setText('d-rentablemultiple', 'not derived');
+
+    if (hp == null) {
+      box.innerHTML = 'SHA-256 rental markets list a published amount of capacity against BSV\u2019s live ' +
+        'network hashrate. The live hashrate could not be read, so the comparison cannot be computed ' +
+        'right now \u2014 this is a placeholder, not a zero.';
+      return;
+    }
+    if (!rentable) {
+      box.innerHTML = 'SHA-256 rental markets list a published amount of capacity, but ' +
+        '<a href="/monitor/data.json">data.json</a> has no usable rentable_capacity_ph_s, so the ' +
+        'comparison against the live ' + esc(hashText(hp)) + ' network is a labelled placeholder ' +
+        '\u2014 not a zero and not a guess.';
+      return;
+    }
+
+    box.innerHTML = 'SHA-256 rental markets list roughly <strong class="av-num">' + esc(phText(rentable.ph)) +
+      '</strong> of capacity (the whole market, not BSV\u2019s share) against BSV\u2019s ' +
+      '<strong class="av-num">' + esc(hashText(hp)) + '</strong> ' +
+      (fromCache ? 'last-read' : 'live') + ' network \u2014 the network is ' +
+      '<strong class="av-num">' + esc(NF.format(Math.round(rentable.multiple))) + '\u00d7</strong> the ' +
+      'rentable supply, so the entire rentable supply is <strong class="av-num">' +
+      esc(dec(rentable.pct, 2)) + '%</strong> of what the attack needs.';
+    setText('d-rentablemultiple',
+      NF.format(Math.round(rentable.multiple)) + '\u00d7 (network \u00f7 rentable)');
   }
 
   function paintDerived() {
@@ -561,53 +645,112 @@
       });
     }
 
-    /* Cost to out-mine the chain. */
+    /* Cost to out-mine the chain, on two bases: the electricity-only floor and
+       the leased-hashrate (market) rate. They are computed independently, so a
+       missing energy price does not blank the leased figure, and vice versa. */
     var hp = (V.hashrateH != null) ? V.hashrateH : getRaw('hashrateH');
     var fromCache = (V.hashrateH == null) && (getRaw('hashrateH') != null);
     var calc = (hp != null) ? computeAttack(hp, V.assumptions) : null;
     var bp = (V.bsvPrice != null) ? V.bsvPrice : getRaw('bsvPrice');
+    var basis = (fromCache ? 'last read' : 'live') + ' network estimate of ' + hashText(hp);
+    var elecRowIds = ['d-needhash', 'd-machines', 'd-power', 'd-perhour', 'd-perday', 'd-bsvday'];
+    var leaseRowIds = ['d-leasehour', 'd-leaseday', 'd-rentablemultiple'];
 
-    if (calc) {
-      var bsvPerDay = (bp != null && bp > 0) ? calc.perDay / bp : null;
-      var meta = money(calc.perHour) + '/hour of electricity for ' + hashText(calc.needH) + ' (' +
-                 dec(calc.mult, 2) + '\u00d7 the ' + (fromCache ? 'last read' : 'live') + ' network estimate of ' +
-                 hashText(hp) + '), across ' + NF.format(Math.round(calc.machines)) + ' assumed machines ' +
-                 'drawing ' + powerText(calc.kw) + '.';
-      if (bsvPerDay != null) meta += ' At the live BSV price that is ' + dec(bsvPerDay, 1) + ' BSV/day.';
-      meta += ' Assumptions, with units, are tabulated below \u2014 they are ours, not measurements.';
-      paint('attack', {
-        text: money(calc.perDay) + '/day',
-        state: fromCache ? 'derived \u00b7 hashrate cached' : 'derived \u00b7 live hashrate',
-        stateClass: fromCache ? 'is-cached' : 'is-derived',
-        cache: false,
-        meta: meta
-      });
-      setText('d-needhash', hashText(calc.needH) + ' (' + dec(calc.mult, 2) + '\u00d7 live network estimate)');
-      setText('d-machines', NF.format(Math.round(calc.machines)));
-      setText('d-power', powerText(calc.kw));
-      setText('d-perhour', money(calc.perHour));
-      setText('d-perday', money(calc.perDay));
-      setText('d-bsvday', bsvPerDay != null ? dec(bsvPerDay, 1) + ' BSV' : 'needs a live BSV price');
-    } else if (hp == null) {
+    if (hp == null) {
       paint('attack', {
         text: 'unavailable', state: 'needs live hashrate', stateClass: 'is-down', cache: false,
         meta: 'The cost is derived from the live BSV hashrate, which could not be read and has no ' +
               'cached value, so there is no honest number to show. The assumptions below are still ' +
               'printed, and the source is ' + src('WhatsOnChain chain/info', API.chain) + '.'
       });
-      ['d-needhash', 'd-machines', 'd-power', 'd-perhour', 'd-perday', 'd-bsvday'].forEach(function (id) {
-        setText(id, 'not derived');
+      paint('lease', {
+        text: 'unavailable', state: 'needs live hashrate', stateClass: 'is-down', cache: false,
+        meta: 'The leased cost is the published market rate applied to the live BSV hashrate. The ' +
+              'hashrate could not be read and has no cached value, so the rate cannot be turned into ' +
+              'a cost \u2014 this is a placeholder, not a zero. Rate source: ' +
+              src('crypto51.app (NiceHash SHA-256 prices)', LEASE_SRC) + '.'
       });
-    } else {
+      elecRowIds.concat(leaseRowIds).forEach(function (id) { setText(id, 'not derived'); });
+      paintAvailability(null, null, false);
+    } else if (!calc) {
       paint('attack', {
-        text: 'unavailable', state: 'assumption missing', stateClass: 'is-down', cache: false,
-        meta: 'The live hashrate was read, but data.json did not provide a usable hardware assumption ' +
-              '(machine hash rate, power draw and energy price must all be present and positive), so no ' +
-              'cost can be derived. See <a href="/monitor/data.json">data.json</a>.'
+        text: 'unavailable', state: 'assumptions not loaded', stateClass: 'is-down', cache: false,
+        meta: 'The live hashrate was read, but <a href="/monitor/data.json">data.json</a> could not be ' +
+              'read (or has no attack_cost_assumptions block), so neither cost basis can be computed. ' +
+              'This is a placeholder, not a zero.'
       });
-      ['d-needhash', 'd-machines', 'd-power', 'd-perhour', 'd-perday', 'd-bsvday'].forEach(function (id) {
-        setText(id, 'not derived');
+      paint('lease', {
+        text: 'NOT PUBLISHED', state: 'rate not published', stateClass: 'is-none', cache: false,
+        meta: 'No usable leased_rate_usd_per_eh_hour was read from ' +
+              '<a href="/monitor/data.json">data.json</a>, so there is no sourced rate to apply. This ' +
+              'is a placeholder, not a guess. The rate, when published, is the NiceHash SHA-256 price ' +
+              'via ' + src('crypto51.app', LEASE_SRC) + '.'
       });
+      elecRowIds.concat(leaseRowIds).forEach(function (id) { setText(id, 'not derived'); });
+      paintAvailability(hp, null, fromCache);
+    } else {
+      /* Electricity floor — unchanged. */
+      if (calc.elec) {
+        var bsvPerDay = (bp != null && bp > 0) ? calc.elec.perDay / bp : null;
+        var meta = money(calc.elec.perHour) + '/hour of electricity for ' + hashText(calc.needH) + ' (' +
+                   dec(calc.mult, 2) + '\u00d7 the ' + basis + '), across ' +
+                   NF.format(Math.round(calc.elec.machines)) + ' assumed machines drawing ' +
+                   powerText(calc.elec.kw) + '.';
+        if (bsvPerDay != null) meta += ' At the live BSV price that is ' + dec(bsvPerDay, 1) + ' BSV/day.';
+        meta += ' Assumptions, with units, are tabulated below \u2014 they are ours, not measurements.';
+        paint('attack', {
+          text: money(calc.elec.perDay) + '/day',
+          state: fromCache ? 'derived \u00b7 hashrate cached' : 'derived \u00b7 live hashrate',
+          stateClass: fromCache ? 'is-cached' : 'is-derived',
+          cache: false,
+          meta: meta
+        });
+        setText('d-needhash', hashText(calc.needH) + ' (' + dec(calc.mult, 2) + '\u00d7 live network estimate)');
+        setText('d-machines', NF.format(Math.round(calc.elec.machines)));
+        setText('d-power', powerText(calc.elec.kw));
+        setText('d-perhour', money(calc.elec.perHour));
+        setText('d-perday', money(calc.elec.perDay));
+        setText('d-bsvday', bsvPerDay != null ? dec(bsvPerDay, 1) + ' BSV' : 'needs a live BSV price');
+      } else {
+        paint('attack', {
+          text: 'unavailable', state: 'assumption missing', stateClass: 'is-down', cache: false,
+          meta: 'The live hashrate was read, but data.json did not provide a usable hardware assumption ' +
+                '(machine hash rate, power draw and energy price must all be present and positive), so no ' +
+                'electricity cost can be derived. See <a href="/monitor/data.json">data.json</a>.'
+        });
+        elecRowIds.forEach(function (id) { setText(id, 'not derived'); });
+      }
+
+      /* Leased-hashrate cost: the published market rate on the same attacker
+         hashrate. At the default multiple of 1.0 this is BSV's live hashrate. */
+      if (calc.leased) {
+        var L = calc.leased;
+        paint('lease', {
+          text: money(L.perHour) + '/hour',
+          state: fromCache ? 'leased rate \u00b7 hashrate cached' : 'leased rate \u00b7 live hashrate',
+          stateClass: fromCache ? 'is-cached' : 'is-derived',
+          cache: false,
+          meta: '$' + dec(L.rate, 2) + ' per EH/s per hour \u00d7 ' + hashText(calc.needH) + ' (' +
+                dec(calc.mult, 2) + '\u00d7 the ' + basis + ') = ' + money(L.perHour) + '/hour, ' +
+                money(L.perDay) + '/day. ' + src('crypto51.app (NiceHash SHA-256 prices)', LEASE_SRC) +
+                '. A rate, not an offer: the market lists a fraction of this hashrate \u2014 see the ' +
+                'availability note above. Excludes buying the hardware.'
+        });
+        setText('d-leasehour', money(L.perHour));
+        setText('d-leaseday', money(L.perDay));
+      } else {
+        paint('lease', {
+          text: 'NOT PUBLISHED', state: 'rate not published', stateClass: 'is-none', cache: false,
+          meta: 'No usable leased_rate_usd_per_eh_hour was read from ' +
+                '<a href="/monitor/data.json">data.json</a>, so there is no sourced rate to apply. This ' +
+                'is a placeholder, not a guess. The rate, when published, is the NiceHash SHA-256 price ' +
+                'via ' + src('crypto51.app', LEASE_SRC) + '.'
+        });
+        setText('d-leasehour', 'not derived');
+        setText('d-leaseday', 'not derived');
+      }
+
+      paintAvailability(calc.networkH, calc.rentable, fromCache);
     }
 
     /* The observed spacing and the difficulty are two views of the same thing;
