@@ -27,8 +27,8 @@ account of it.
 > token**, the **mint** (`verify_deposit`), **fork staging**, the **nullifier**, the **timelocked
 > authority**, and the **vault** (`release_mint`, `burn_staged`, `set_maturity`) — **21 instructions,
 > 66 passing / 0 failing**. **Designed and not built: the federation, the Greycore, peg-out and
-> governance.** The vault's protective window ships at 0, so the reversal is available and racy
-> rather than automatic (§4). See [08. Status and roadmap](08-status-and-roadmap.md) for the full
+> governance.** The vault's protective window is a stored parameter, set to **144 BSV blocks
+> (~24 hours)**, so a followed reorg has a window in which to burn the staged mint (§4). See [08. Status and roadmap](08-status-and-roadmap.md) for the full
 > built/designed line.
 
 ---
@@ -194,7 +194,7 @@ path.
    │                         │                           │     deposit's block hash
    │                         │                           │     recorded
    │                         │                           │
-   │                         │                           │  5. MATURE (designed 144)
+   │                         │                           │  5. MATURE (144 blocks)
    │                         │                           │  6. RELEASE — permissionless
    │◄────────────────────────────────────────────────────┤     hash still matches:
    │                         │                           │       vault → you
@@ -215,7 +215,7 @@ path.
    and anyone may submit it for anyone. `MIN_CONFIRMATIONS = 12` is the code's fixed form of `FLOOR`.
 4. **`solBSV` is minted into the vault, not to you.** The record (`StagedMint`) stores the block hash
    the deposit was proven against, its height, and **`maturity_at_deposit`**.
-5. **Maturity** — designed 144 blocks, **shipped 0** (§4).
+5. **Maturity** — 144 BSV blocks (~24 hours), a stored parameter (§4).
 6. **`release_mint` and `burn_staged` are permissionless** — anyone may resolve a pending item and
    reclaim its rent, so **no party's cooperation is ever required.**
 
@@ -231,7 +231,7 @@ mitigates it by minting automatically.
 
 ---
 
-## 4. The vault — the built reversal, and the window that ships off
+## 4. The vault — the built reversal, and the window that makes it real
 
 **The vault is the contribution.** RenVM's host chain trusted the shard's report; ours compares the
 program's own stored headers, so a deposit that is reorged out can be **reversed**, not merely
@@ -270,36 +270,50 @@ not seen the reorg; depth alone would release even if the record of that height 
 hash equality alone would release immediately — the maturity-0 behaviour, and the reason the window
 exists. All three together are what make "this deposit survived" mean something.
 
-### The maturity-0 consequence, stated up front
+### Why maturity was raised from 0 to 144
 
-**At maturity 0 the vault is a pass-through.** Tokens are minted into the vault and become releasable
-in the same instant, and the token has no freeze authority — so once released, a later reorg has
-nothing to reverse.
+**The window shipped at 0, and that was the defect.** At maturity 0 the vault is a pass-through:
+tokens are minted into the vault and become releasable in the same instant, and the token has no
+freeze authority — so once released, a later reorg has nothing to reverse.
 
-**But "the burn cannot fire" would be too strong.** At maturity 0 the burn predicate is *satisfied
-instantly* rather than *unreachable*: `burn_staged` requires the hash to differ **and** the height to
-have matured, and at 0 the second condition is always met. So it is a **race** — release and burn are
-both permitted from the moment of staging, and in practice **release wins**, because the recipient
-wants their tokens and a reorg is the unusual case.
+**It would be too strong to say the burn could not fire.** At maturity 0 the burn predicate is
+*satisfied instantly* rather than *unreachable*: `burn_staged` requires the hash to differ **and** the
+height to have matured, and at 0 the second condition is always met. So it was a **race** — release
+and burn both permitted from the moment of staging — and in practice **release wins**, because the
+recipient wants their tokens and a reorg is the unusual case.
 
-**The honest statement is narrower than it first appears:** maturity 0 removes the *window* in which
-the reversal is comfortable, not the reversal itself. Someone who sees a reorg and calls `burn_staged`
-before anyone releases **still burns the tokens.**
+**The honest statement about 0 was narrower than it first appears:** maturity 0 removed the *window*
+in which the reversal is comfortable, not the reversal itself. Someone who saw a reorg and called
+`burn_staged` before anyone released **still burned the tokens.** That reasoning is why the value was
+raised, not why it was left alone.
 
-**What protects a deposit today is `MIN_CONFIRMATIONS = 12`** — roughly two hours, **prevention, not
-reversal**. The reversal remains **available, tested, and racy** rather than disabled. **Do not write
-"reorg-reversible" as a property of the running system.**
+**It is now 144 BSV blocks — about 24 hours.** That is the point at which "reorg-reversible" becomes
+true of the running system rather than only of the mechanism: a followed reorg has a window in which
+the mint is still staged and can be burned. **The attack that made this the priority is affordable.**
+Renting BSV's hashrate costs roughly **$9,000 a day**; BSV's difficulty sits at mining break-even, so
+the attacker is nearly made whole by the block rewards they mine; and the SHA-256 rental market holds
+about **120× BSV's network** (~25 EH/s against ~0.21 EH/s). At **$10k/day a double spend is not a
+theoretical risk**, and the defence is that the mint can be reversed — which needs a window.
 
-Maturity is a **stored parameter**, not a constant, for four reasons: the PoC ships at 0 by decision;
-the burn path is testable (a constant at 0 could never be exercised); governance can raise it through
-the path that already exists; and it makes the honest sentence available — *the vault is built; the
-protective window is currently 0 and can be raised.*
+**Maturity is in BSV blocks, not Solana slots**, because depth is what a reorg must overcome. 144
+blocks at BSV's 600-second target is about 24 hours; the slot equivalent would be roughly 216,000, and
+using slots would decouple the window from the thing it measures. `po.deadline` stays in slots
+deliberately, for the opposite reason.
 
-**The detection budget, if maturity is raised to 144.** With `WINDOW = 192` and `FLOOR = 12`, the
-margin between "releasable" (`MATURITY`) and "no longer checkable" (`WINDOW`) is `WINDOW − MATURITY`
-= **48 blocks (~8 hours)**. A deposit committing to a deeper `FLOOR` in its `OP_RETURN` has less; at
-the maximum committed depth the margin is zero, because the clocks coincide. This is a parameter
-decision with a security consequence, not a mechanism.
+**`MIN_CONFIRMATIONS = 12` is still prevention, not reversal** — roughly two hours before a deposit is
+mintable. The window is what adds the reversal on top of it.
+
+Maturity is a **stored parameter**, not a constant, for four reasons: the decision is reversible — the
+value was raised from 0 to 144 through the path that already exists; the burn path is testable at a
+non-zero value, where a constant at 0 could never be exercised; a later raise leaves in-flight staged
+items at the maturity they were staged with; and it keeps the one security-relevant number where
+changing it is visible.
+
+**The detection budget at 144.** With `WINDOW = 192` and `FLOOR = 12`, the margin between
+"releasable" (`MATURITY`) and "no longer checkable" (`WINDOW`) is `WINDOW − MATURITY` = **48 blocks
+(~8 hours)**. A deposit committing to a deeper `FLOOR` in its `OP_RETURN` has less; at the maximum
+committed depth the margin is zero, because the clocks coincide. This is a parameter decision with a
+security consequence, not a mechanism.
 
 ### What the vault tests do NOT cover
 
@@ -315,8 +329,8 @@ Recorded because the alternative is a document claiming more than it verified:
 
 **`burn_staged` IS exercised**, at a non-zero maturity, with a followed reorg: `NotMatured` is
 reachable, `DepositHashUnchanged` flips to `DepositHashChanged`, and the burn zeroes the vault with
-the supply delta asserted. A later maturity raise leaves in-flight staged items at the value they were
-staged with — proven, not merely asserted.
+the supply delta asserted. The raise to 144 leaves in-flight staged items at the value they were staged
+with — proven, not merely asserted.
 
 ### The nullifier, and the ceiling it removed
 

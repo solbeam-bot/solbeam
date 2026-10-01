@@ -356,7 +356,7 @@ it better. *Open* — our design is not specified.
 | **How a mint is authorised** | A gateway shard observes the lock, checks the UTXO, its uniqueness and **6 confirmations**, then threshold-signs; the Greycore adds a second signature | The **Solana program verifies the BSV chain itself** in `verify_deposit`. The federation is an **accepted oracle** only for what Solana cannot see | **Add** |
 | **How a release is authorised** | A shard observes the **burn** (12 confirmations), threshold-signs, Greycore co-signs | **Designed, not built.** Escrow, individually-signed intents, threshold signature plus Greycore co-signature, settlement proved against the light client, permissionless cancel | **Change** |
 | **What the host chain trusts** | A signature plus a uniqueness hash. It does not verify Bitcoin | Solana trusts **its own verification** of BSV for deposits; for **backing** it trusts the federation's report | **Add** for deposits, **Weaker** for backing |
-| **Reorg handling** | **Not addressed in the sources** | The client keeps a header window and a stored block hash per staged mint; a followed reorg is visible on-chain and the staged tokens burn. **Fork staging and the reversal are built; maturity ships at 0, so the window is off by parameter** | **Add** |
+| **Reorg handling** | **Not addressed in the sources** | The client keeps a header window and a stored block hash per staged mint; a followed reorg is visible on-chain and the staged tokens burn. **Fork staging and the reversal are built; maturity is a stored parameter set to 144 BSV blocks (~24 hours)** | **Add** |
 | **Custody structure** | One threshold ECDSA key per shard, held by 100 nodes, rotated every epoch; the gateway script is a P2PKH-shaped script | `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`, gateway at `4-of-N`. The reserve never moves when membership changes — re-sharing, not migration | **Change** |
 | **Second quorum** | The Greycore, chosen by community governance, co-signing every gateway action | The Greycore is a **2-of-2 co-signer** on the reserve script. Same *shape*, enforced **in the script** rather than by a second MPC signature | **Take** (shape), **Change** (mechanism) |
 | **Membership admission** | Bond 100,000 REN, wait until the next epoch; shard selection is random and unbiased | **Open entry** on posting both bonds, admitted by the Greycore. The ceremony that admits a member into the `4-of-N` threshold set is **not specified** | **Open** |
@@ -404,8 +404,8 @@ it better. *Open* — our design is not specified.
    releases we have a designed mechanism whose triggering condition is not specified.
 7. **RenVM shipped; our second half is designed.** The federation, the Greycore, peg-out and
    governance are **designed, not built**. The vault is now built and `release_mint` / `burn_staged`
-   are permissionless — **with the shipped maturity at 0, so the protective window is off by
-   parameter.** RenVM ran in production; the implementation gap is real.
+   are permissionless — **with maturity set to 144 BSV blocks (~24 hours), so the protective window is
+   real.** RenVM ran in production; the implementation gap is real.
 
 **Sharding: none. Collusion: unprevented.** The reference's `n/t` capacity rule does not transfer, and
 no numeric rule has replaced it. All four are stated rather than implied away.
