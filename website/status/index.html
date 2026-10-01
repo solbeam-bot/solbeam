@@ -190,14 +190,16 @@
 
     <div class="phase">
       <div class="phase__head">
-        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__mark mark--ok" aria-hidden="true">&#10004;</span>
         <span class="phase__name">Phase 5 &middot; Public monitoring</span>
-        <span class="phase__state">Plan only</span>
+        <span class="phase__state">Built</span>
       </div>
       <ul>
-        <li>The absolute cost to rewrite the BSV chain, and how much SHA-256 is actually available to rent.</li>
-        <li>Reserve against supply. <strong>The protocol cannot check this</strong> — the reserve is off-chain BSV — so it is published instead, as a number anyone can verify for themselves.</li>
-        <li>Observed block spacing, so a chain mining far faster than its target is visible to everyone.</li>
+        <li><strong>Done: <a href="/monitor/">the monitoring page</a>.</strong> It publishes, live and keyless in the reader's browser, BSV block height, hashrate and <strong>observed block spacing</strong> (mean and median over the ten newest headers), BSV and SOL prices, and Solana validator stake and throughput. Every figure shows its source and when it was fetched.</li>
+        <li><strong>Reserve against supply — the figures that matter most, and they are not published yet.</strong> The protocol <em>cannot</em> check this: the reserve is off-chain BSV, and the mint exists only on a local validator. So the page shows them as <strong>"NOT PUBLISHED"</strong> rather than as zero or a dash, because <em>"we have not published this"</em> and <em>"this is zero"</em> must not look alike. Each says what would populate it and when.</li>
+        <li><strong>Done: the cost to rewrite the chain</strong>, derived from live hashrate against a stated machine and energy price, printed with its units and labelled an electricity-only floor. <strong>That is the number the whole design leans on</strong>, so the assumptions live in a data file a reader can inspect rather than inside the page.</li>
+        <li><strong>Not sourced, and not invented:</strong> how much SHA-256 is actually available to <em>rent</em>. It remains an open item, stated as one rather than filled with a guess.</li>
+        <li><strong>Why this is a security feature and not a dashboard.</strong> For the two things the design cannot enforce — a colluding signer set, and a spend nobody challenges — <strong>public visibility is the only remaining defence.</strong> It turns a hidden theft into a visible one.</li>
       </ul>
     </div>
 
@@ -205,7 +207,7 @@
     <div class="tally">
       <span><b>21</b> instructions built</span>
       <span><b>66</b> on-chain tests</span>
-      <span><b>0</b> of peg-out built</span>
+      <span><b>4</b> of 4 peg-out steps</span>
       <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>
     </div>
