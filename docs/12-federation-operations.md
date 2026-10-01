@@ -310,7 +310,13 @@ monitoring task to an **early deliverable**, *"and it must exist before real val
 
 **It also computes the cost to out-mine the chain** — live hashrate against a stated machine and energy assumption, printed with units and labelled an electricity-only floor. **That is the number the design leans on**, and it is an assumption rather than a measurement, so the page says so.
 
-**One thing it cannot source, and does not invent:** how much SHA-256 is actually available to *rent*. That remains an open Phase 5 item.
+**The availability figure, and why it matters more than the price.** NiceHash's public API exposes the SHA-256 rental market in **three separate markets that must be summed** — `SHA256AsicBoost` (BTC), `SHA256AsicBoost_USDT` (USDT), and the legacy `SHA256`. **Consolidated, the rentable supply is roughly 25 EH/s.**
+
+**Against BSV's network of about 0.21 EH/s, that is a surplus of ~120×.**
+
+> **BSV can be 51%-attacked by renting.** Matching the network's hashrate costs on the order of **$9,000 a day** at the current leased rate; a comfortable majority about twice that. **Attack cost is not a defence, and nothing here treats it as one.**
+
+**What answers it is the vault.** A rented majority can reorg a deposit, but **the program verifies the chain itself and burns a mint whose deposit is reorged away** — which no amount of rented hashrate prevents. **The defence is the reversal, not the price of the attack.**
 
 **And the limit of the mitigation stands:** publication makes a theft **visible**. It does not prevent
 one, and a published reserve balance is an assertion by the party that could steal it
