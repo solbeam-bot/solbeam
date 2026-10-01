@@ -55,13 +55,24 @@ fact about BSV — while **`lc.window_hours = 32`** is **`built-frozen` + `decid
 constant holding a design choice. **`v.reorg_margin = 48`** is **`designed` + `derived`**: arithmetic
 that lives only in this sheet.
 
-> ### The single most important row
+> ### The single most important rows
 >
-> **`v.maturity_blocks` is the only parameter the built program can change at runtime.** It ships at
-> **0**, which removes the protective window: the vault is a pass-through, the burn predicate is
-> satisfied instantly rather than being unreachable, and release and burn are a **race** that release
-> normally wins. **What protects a deposit today is `MIN_CONFIRMATIONS = 12` — prevention, not
-> reversal.**
+> **`v.maturity_blocks` is the window in which a reorg can be reversed.** It was 0, which meant a
+> deposit was releasable the instant it was minted and there was nothing left to burn. **It is now
+> 144 blocks — about 24 hours** — which is the point at which *"reorg-reversible"* becomes true of
+> the running system rather than only of the mechanism.
+>
+> **This mattered because the attack is affordable.** Renting BSV's hashrate costs roughly $9,000 a
+> day; BSV's difficulty sits at mining break-even, so the attacker is nearly made whole by the block
+> rewards they mine; and the SHA-256 rental market holds about 120× BSV's network (~25 EH/s against
+> ~0.21 EH/s). At **$10k/day a double spend is not a theoretical risk**, and the defence is that the
+> mint can be reversed — which needs a window.
+>
+> **Maturity is in BSV blocks, not Solana slots**, because depth is what a reorg must overcome. 144
+> blocks at BSV's 600-second target is about 24 hours; the slot equivalent would be roughly 216,000,
+> and using slots would decouple the window from the thing it measures. **`po.deadline` is the other
+> runtime-settable value**, and it is in Solana slots deliberately, for the opposite reason: a height
+> deadline would never expire if the header feed stalled.
 >
 > Everything else marked `designed` is a specification, and **21 instructions exist**, not 56
 > parameters.
@@ -226,9 +237,11 @@ Depth is a protocol parameter, not a market term (the order book is removed):
 
 - **`FLOOR` = 12 blocks** is the minimum. It makes a reorg cost real mining work; a low floor makes
   attacks cheap and frequent, raising the number of chances for a detection failure to slip through.
-- **Maturity = 144 blocks designed** sets the time available to detect. A staged mint is released only
-  once the tip has advanced past the deposit **and** the hash the client stores at that height still
-  matches. If it differs, the deposit was reorged and the staged tokens **burn**. **Shipped at 0.**
+- **Maturity = 144 blocks** sets the time available to detect, and is a stored parameter rather than a
+  constant. A staged mint is released only once the tip has advanced past the deposit **and** the hash
+  the client stores at that height still matches. If it differs, the deposit was reorged and the staged
+  tokens **burn**. **It shipped at 0, where release and burn are a race; 144 blocks is what gives the
+  reversal a window.**
 - **`WINDOW` = 32 hours** bounds the reorg the client can see at all. Beyond it, a reorg is not
   detectable *by definition*.
 
@@ -298,8 +311,8 @@ The remaining placeholders — `lc.cluster_id`, `lc.pow_limit_bits`, `fed.shards
 1. **The program upgrade authority can override every parameter.** It is the design's answer to put it
    under governance; until that exists, it is a live critical.
 2. **X3 — the DAA is hard-coded.** A BSV consensus change halts the bridge until a redeploy.
-3. **The vault's protective window ships at 0**, so the reversal is available and racy rather than
-   automatic.
+3. **The vault's protective window is one authority change away from 0.** It is set to 144 blocks,
+   but `set_maturity` is a single timelocked authority path.
 
 ## Change checklist
 
