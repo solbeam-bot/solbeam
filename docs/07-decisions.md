@@ -13,7 +13,7 @@ short version, so it can be reviewed with fresh eyes.
 > and why. The reversals are the point of this register.
 
 **Built or designed?** Built: the **light client with cw-144**, **`solBSV`**, the **mint**, **fork
-staging**, the **nullifier**, the **timelocked authority** and **the vault** — 21 instructions, 37
+staging**, the **nullifier**, the **timelocked authority** and **the vault** — 21 instructions, 66
 passing / 0 failing. **Designed, not built: the federation, the Greycore, peg-out and governance.**
 **The vault's protective window ships at 0**, so the reversal is available and racy rather than
 automatic.
