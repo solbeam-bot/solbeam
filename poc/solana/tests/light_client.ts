@@ -3188,7 +3188,14 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
   const addr1 = Buffer.alloc(20, 0xa1);
   const addr3 = Buffer.alloc(20, 0xa3);
   const addr4 = Buffer.alloc(20, 0xa4);
+  const addr5 = Buffer.alloc(20, 0xa5);
+  const addr6 = Buffer.alloc(20, 0xa6);
   const addrOther = Buffer.alloc(20, 0xee);
+
+  // R3 and R4 are opened in the reorg test and resolved by the two window
+  // tests after it, so their ids are kept here rather than inside one `it`.
+  let id3 = 0;
+  let id4 = 0;
 
   /** The deposit claim for the funding deposit, shaped like the vault's. */
   const depositClaim = (
@@ -3281,6 +3288,10 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
     expect(Buffer.from(item.bsvAddress).toString("hex"))
       .to.equal(addr0.toString("hex"));
     expect(item.initiatedSlot.toNumber()).to.be.greaterThan(0);
+    // `initiated + Config::redeem_deadline_slots + po.cancel_grace`. The grace
+    // ships at 0, so this term cannot be told apart from an omitted add here;
+    // the non-zero arithmetic is asserted by the program's
+    // `redeem_deadline_is_policy_plus_cancel_grace` unit test instead.
     expect(item.deadlineSlot.toNumber())
       .to.equal(item.initiatedSlot.toNumber() + SMALL_DEADLINE + CANCEL_GRACE);
     expect(item.payoutHeight.toNumber()).to.equal(0);
@@ -3583,8 +3594,8 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
   // -- the challenge: a reorged payout ----------------------------------------
 
   it("refuses to settle a reorged payout, and lets the holder cancel it", async () => {
-    const id3 = await openRedeem(addr3);
-    const id4 = await openRedeem(addr4);
+    id3 = await openRedeem(addr3);
+    id4 = await openRedeem(addr4);
 
     // A fresh chain whose block 130 pays R3 and whose block 131 pays R4.
     await timelockedCheckpoint(gov, 115, rawAt(115));
@@ -3640,12 +3651,27 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
       .signers([stranger]).rpc();
     expect(await balance(holderAta)).to.equal(before + AMOUNT);
 
-    // A claim whose height has left the window cannot be checked at all: settle
-    // refuses, and cancel refuses too, because "gone from the window" is not
-    // "shown reorged". This is the same boundary the vault's two exits have.
+    // A claim whose height has left the window cannot be checked at all. That
+    // is the *next* test's subject; here it is only the setup. R4's claim stays
+    // staged on the books at height 131 while the window is parked at 190.
     await timelockedCheckpoint(gov, 190, rawAt(190));
     expect((await program.account.lightClient.fetch(lightClient))
       .windowStart.toNumber()).to.equal(190);
+  });
+
+  // -- the latch: a claim the window has left --------------------------------
+
+  it("returns the escrow of a claim whose payout block has left the window", async () => {
+    // R4's claim is on the books (payout_height 131) but unprovable: the window
+    // now starts at 190, so the client cannot check that block at all. Before
+    // the fix this was a permanent latch — settle failed
+    // `PayoutHeightNotInWindow` and cancel failed `RedeemClaimed`, and no third
+    // instruction can close a PendingRedeem. The holder's escrow was stuck, not
+    // delayed.
+    expect((await program.account.pendingRedeem.fetch(redeemPda(id4)))
+      .payoutHeight.toNumber()).to.equal(131);
+
+    // The specific error the latch produced on this exit still holds.
     try {
       await program.methods.settleRedeem(new anchor.BN(id4))
         .accounts(settleAccounts(id4)).rpc();
@@ -3653,13 +3679,124 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
     } catch (e: any) {
       expect(String(e)).to.contain("PayoutHeightNotInWindow");
     }
+
+    // And the other exit must now resolve: an unprovable claim is not a live
+    // claim, so the escrow comes back to the holder rather than staying stuck.
+    const before = await balance(holderAta);
+    const pendingBefore =
+      (await program.account.redeemBook.fetch(book)).pending.toNumber();
+    await program.methods.cancelRedeem(new anchor.BN(id4))
+      .accounts(cancelAccounts(id4, provider.wallet.publicKey)).rpc();
+    expect(await balance(holderAta)).to.equal(before + AMOUNT);
+    expect(await provider.connection.getAccountInfo(redeemPda(id4))).to.equal(null);
+    expect(await provider.connection.getAccountInfo(escrowPda(id4))).to.equal(null);
+    expect((await program.account.redeemBook.fetch(book)).pending.toNumber())
+      .to.equal(pendingBefore - 1);
+  });
+
+  // -- the symmetric case: a stale claim --------------------------------------
+
+  it("lets a stale claim be re-claimed with a fresh proof, without latching", async () => {
+    // The window was re-anchored at 190 by the test above, and a checkpoint
+    // stores no window records of its own, so the next header must link to the
+    // checkpoint header itself.
+    parent = rawAt(190);
+
+    // R5 and R6 both have a real payout in the window the client holds now, so
+    // both claims are live and both die together when the window moves past
+    // their blocks.
+    const id5 = await openRedeem(addr5);
+    const id6 = await openRedeem(addr6);
+    const item5 = await program.account.pendingRedeem.fetch(redeemPda(id5));
+
+    const txPay5a = payoutTx(p2pkh(addr5), payoutMin, 0x81);
+    const txPay6a = payoutTx(p2pkh(addr6), payoutMin, 0x82);
+    const H5A = 191;
+    const H6A = 192;
+    const blk5a = blockWith(doubleSha256(txPay5a), parent, 0x81);
+    await push(blk5a); // 191
+    const blk6a = blockWith(doubleSha256(txPay6a), parent, 0x82);
+    await push(blk6a); // 192
+    for (let h = H6A + 1; h <= H6A + PAYOUT_CONFIRMATIONS - 1; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    await claimForId(id5, txPay5a, H5A, blk5a);
+    await claimForId(id6, txPay6a, H6A, blk6a);
+    expect((await program.account.pendingRedeem.fetch(redeemPda(id5)))
+      .payoutHeight.toNumber()).to.equal(H5A);
+
+    // Move the window past both blocks. Both claims are now stale: still
+    // staged, but the client no longer holds the block either was proven
+    // against, so neither can ever settle.
+    const blk300 = blockWith(Buffer.alloc(32, 0xd0), parent, 0xd0);
+    await timelockedCheckpoint(gov, 300, blk300);
+    parent = blk300;
+    expect((await program.account.lightClient.fetch(lightClient))
+      .windowStart.toNumber()).to.equal(300);
+    for (const id of [id5, id6]) {
+      try {
+        await program.methods.settleRedeem(new anchor.BN(id))
+          .accounts(settleAccounts(id)).rpc();
+        expect.fail("a stale claim cannot settle");
+      } catch (e: any) {
+        expect(String(e)).to.contain("PayoutHeightNotInWindow");
+      }
+    }
+
+    // R5: the stale claim is replaceable *only* by a proof that pays the
+    // holder. A wrong-address proof reaches `PayoutAddressMismatch`, which is
+    // only reachable if the stale claim no longer satisfies the live-claim
+    // guard — so the guard is reading "out of window" as "not live".
+    const txPay5wrong = payoutTx(p2pkh(addrOther), payoutMin, 0x83);
+    const HWRONG5 = 301;
+    const blkWrong5 = blockWith(doubleSha256(txPay5wrong), parent, 0x83);
+    await push(blkWrong5); // 301
+    for (let h = HWRONG5 + 1; h <= HWRONG5 + PAYOUT_CONFIRMATIONS - 1; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
     try {
-      await program.methods.cancelRedeem(new anchor.BN(id4))
-        .accounts(cancelAccounts(id4, provider.wallet.publicKey)).rpc();
-      expect.fail("a claim that cannot be shown reorged still blocks cancel");
+      await claimForId(id5, txPay5wrong, HWRONG5, blkWrong5);
+      expect.fail("a stale claim may only be replaced by a proof that pays");
+    } catch (e: any) {
+      expect(String(e)).to.contain("PayoutAddressMismatch");
+    }
+    // Nothing was written by the refused re-claim, and the stale claim still
+    // does not block the exit.
+    expect((await program.account.pendingRedeem.fetch(redeemPda(id5)))
+      .payoutHeight.toNumber()).to.equal(H5A);
+    const before5 = await balance(holderAta);
+    await program.methods.cancelRedeem(new anchor.BN(id5))
+      .accounts(cancelAccounts(id5, provider.wallet.publicKey)).rpc();
+    expect(await balance(holderAta)).to.equal(before5 + AMOUNT);
+
+    // R6: a *different* transaction, to the holder's own address, in the
+    // window. The stale claim is replaced and the redemption stays open.
+    const txPay6b = payoutTx(p2pkh(addr6), payoutMin, 0x84);
+    const H6B = 307;
+    const blk6b = blockWith(doubleSha256(txPay6b), parent, 0x84);
+    await push(blk6b); // 307
+    for (let h = H6B + 1; h <= H6B + PAYOUT_CONFIRMATIONS - 1; h++) {
+      await push(blockWith(Buffer.alloc(32, h), parent, h));
+    }
+    await claimForId(id6, txPay6b, H6B, blk6b);
+    expect((await program.account.pendingRedeem.fetch(redeemPda(id6)))
+      .payoutHeight.toNumber()).to.equal(H6B);
+
+    // The re-claim re-latches cancellation — but only because a fresh,
+    // in-window, payable proof now stands, and the member really did pay again.
+    // It is not a new latch: the rule that freed R5 applies to this claim in
+    // turn, once its own block leaves the window. (The deadline has passed, so
+    // `RedeemClaimed` here is the claim and not the clock.)
+    expect(item5.deadlineSlot.toNumber()).to.be.lessThan(
+      await provider.connection.getSlot("processed"));
+    try {
+      await program.methods.cancelRedeem(new anchor.BN(id6))
+        .accounts(cancelAccounts(id6, provider.wallet.publicKey)).rpc();
+      expect.fail("a freshly re-claimed payout must still block cancellation");
     } catch (e: any) {
       expect(String(e)).to.contain("RedeemClaimed");
     }
+    expect(await provider.connection.getAccountInfo(escrowPda(id6))).to.not.equal(null);
   });
 
   // -- the cap ----------------------------------------------------------------

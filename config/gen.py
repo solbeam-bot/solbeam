@@ -2,14 +2,23 @@
 """One canonical parameter sheet, projected into the program and the tests.
 
 `config/params.json` is the single source of truth.  `docs/parameters.csv` is
-its human-readable projection, `poc/solana/programs/solbeam/src/params.rs` is
-its Rust projection, and `poc/solana/tests/params.json` is the projection the
-test suite reads.  Nothing is retyped: change a value in `config/params.json`,
-run this script, and the program and the suite move together.
+its human-readable projection, `docs/06-parameters.md` carries the same rows as
+a table, `poc/solana/programs/solbeam/src/params.rs` is its Rust projection, and
+`poc/solana/tests/params.json` is the projection the test suite reads.  Nothing
+is retyped: change a value in `config/params.json`, run this script, and the
+program and the suite move together.
 
-The check is the point.  If `config/params.json` and `docs/parameters.csv`
-disagree on any value, name, status or description, this exits non-zero and
-writes nothing -- so the document, the CSV and the code cannot drift.
+Every row carries **two independent facts**, and both are checked:
+
+* `status` -- *where the value lives*: `built-mutable`, `built-frozen`,
+  `built-shape`, `designed`, `open`, `superseded`;
+* `provenance` -- *how it was chosen*: `measured`, `decided`, `placeholder`,
+  `derived`.
+
+The check is the point.  If `config/params.json`, `docs/parameters.csv` and the
+table in `docs/06-parameters.md` disagree on any value, name, status,
+provenance or description, this exits non-zero and writes nothing -- so the
+document, the CSV and the code cannot drift.
 
 Usage:
     python3 config/gen.py              # verify, then (re)write the generated files
@@ -35,10 +44,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PARAMS_JSON = ROOT / "config" / "params.json"
 PARAMS_CSV = ROOT / "docs" / "parameters.csv"
+PARAMS_MD = ROOT / "docs" / "06-parameters.md"
 PARAMS_RS = ROOT / "poc" / "solana" / "programs" / "solbeam" / "src" / "params.rs"
 TESTS_JSON = ROOT / "poc" / "solana" / "tests" / "params.json"
 
-CSV_COLUMNS = ["id", "name", "value", "status", "description"]
+CSV_COLUMNS = ["id", "name", "value", "status", "provenance", "description"]
+
+# The doc-06 table's columns, in order.  The table is found by this header, so
+# the document can keep using tables for prose without confusing the parser.
+DOC_COLUMNS = ["id", "name", "value", "status", "provenance", "description"]
+
+# The status and provenance vocabularies, checked against the legend in doc 06.
+STATUSES = ["built-mutable", "built-frozen", "built-shape", "designed", "open",
+            "superseded"]
+PROVENANCES = ["measured", "decided", "placeholder", "derived"]
 
 # Parameter IDs whose value is not a plain leading number and need a spelling.
 EXPLICIT_VALUES = {
@@ -46,7 +65,19 @@ EXPLICIT_VALUES = {
     "fed.script": "2-of-2 OP_CHECKMULTISIG",
     "pi.op_return_layout": "version | cluster_id | program_hash | flags | recipient",
     "lc.pow_limit_bits": "0x1d00ffff / 0x207fffff",
+    # The CSV's human cell is "200 der\u00b7superseded", and the "-superseded"
+    # word is what makes `typed_value` read it as no value.  The doc-06 cell is
+    # the bare "200", which would silently parse as the number 200, so the row
+    # needs the spelling spelled out here.
+    "pi.max_used": None,
 }
+
+# The words the old single-marker sheet used in a value cell.  They are stripped
+# before a doc-06 value is compared with the JSON, because the split moved them
+# into the `status` and `provenance` columns.  `der\u00b7superseded` first: it
+# contains `der`.
+MARKER_WORDS = ["der\u00b7superseded", "der", "mea", "dec", "ph", "built",
+                "designed"]
 
 # The Rust constants the program turns on.  (name, type, parameter id, expression)
 # `expression` overrides the literal, for a constant that is derived from another
@@ -142,6 +173,32 @@ def rust_int(value: int) -> str:
     return "_".join(groups)
 
 
+def plain_cell(cell: str) -> str:
+    """A markdown table cell as plain text, with whitespace collapsed.
+
+    `\u2016` is how the doc's table spells the layout's `|` separator without
+    ending the markdown row early, so it is folded back to `|` here.
+    """
+    text = cell.replace("**", "").replace("*", "").replace("`", "")
+    text = text.replace("\u2016", "|")
+    return " ".join(text.split())
+
+
+def value_core(cell: str) -> str:
+    """A human value cell with the old marker words removed."""
+    text = plain_cell(cell)
+    for word in MARKER_WORDS:
+        text = re.sub(rf"\b{re.escape(word)}\b", " ", text)
+    return " ".join(text.split())
+
+
+def markdown_row(line: str) -> list[str]:
+    line = line.strip()
+    if not line.startswith("|"):
+        return []
+    return [cell.strip() for cell in line.strip("|").split("|")]
+
+
 # ---------------------------------------------------------------------------
 # the check
 # ---------------------------------------------------------------------------
@@ -163,7 +220,7 @@ def check_against_csv(params: dict, csv_rows: list[dict[str, str]]) -> None:
 
     for row, param in zip(csv_rows, params["parameters"]):
         pid = row["id"]
-        for field in ("name", "status", "description"):
+        for field in ("name", "status", "provenance", "description"):
             if param.get(field) != row[field]:
                 die(f"{pid}: {field} differs\n"
                     f"  csv : {row[field]!r}\n  json: {param.get(field)!r}")
@@ -180,7 +237,8 @@ def check_against_csv(params: dict, csv_rows: list[dict[str, str]]) -> None:
     regenerated = csv_bytes([
         {
             "id": p["id"], "name": p["name"], "value": p["csv_value"],
-            "status": p["status"], "description": p["description"],
+            "status": p["status"], "provenance": p["provenance"],
+            "description": p["description"],
         }
         for p in params["parameters"]
     ])
@@ -190,6 +248,114 @@ def check_against_csv(params: dict, csv_rows: list[dict[str, str]]) -> None:
 
     check_arithmetic(params)
     check_code_constants(params, csv_rows)
+
+
+# ---------------------------------------------------------------------------
+# doc 06 -- the third projection
+# ---------------------------------------------------------------------------
+
+def read_doc_rows(path: Path = PARAMS_MD) -> list[dict[str, str]]:
+    """Every row of every parameter table in `docs/06-parameters.md`, in order.
+
+    A parameter table is the one whose header is exactly `DOC_COLUMNS`; the
+    document's other tables (the legends, the superseded IDs, the revenue
+    sketch) are left alone.
+    """
+    if not path.exists():
+        die(f"{path.relative_to(ROOT)} does not exist")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    header = [c.lower() for c in DOC_COLUMNS]
+    rows: list[dict[str, str]] = []
+    i = 0
+    while i < len(lines):
+        if [plain_cell(c).lower() for c in markdown_row(lines[i])] != header:
+            i += 1
+            continue
+        i += 1
+        # The `|---|---|` rule, then rows until the table ends.
+        if i < len(lines) and set(lines[i].strip()) <= set("|-: "):
+            i += 1
+        while i < len(lines):
+            cells = markdown_row(lines[i])
+            if len(cells) != len(DOC_COLUMNS):
+                break
+            rows.append(dict(zip(DOC_COLUMNS, cells)))
+            i += 1
+    if not rows:
+        die(f"{path.relative_to(ROOT)} has no parameter table with the columns "
+            f"{', '.join(DOC_COLUMNS)}")
+    return rows
+
+
+def check_doc_table(params: dict, doc_rows: list[dict[str, str]]) -> None:
+    own_ids = [p["id"] for p in params["parameters"]]
+    doc_ids = [plain_cell(r["id"]) for r in doc_rows]
+    if doc_ids != own_ids:
+        missing = [i for i in own_ids if i not in doc_ids]
+        extra = [i for i in doc_ids if i not in own_ids]
+        if missing or extra:
+            die("docs/06-parameters.md and config/params.json list different "
+                f"IDs (md-only={extra}, json-only={missing})")
+        die("docs/06-parameters.md lists the parameters in a different order "
+            "than config/params.json")
+
+    for param, row in zip(params["parameters"], doc_rows):
+        pid = param["id"]
+        for field in ("name", "status", "provenance"):
+            got = plain_cell(row[field])
+            if param.get(field) != got:
+                die(f"{pid}: {field} differs between docs/06-parameters.md and "
+                    f"config/params.json\n"
+                    f"  md  : {got!r}\n  json: {param.get(field)!r}")
+
+        value = param["value"]
+        cell = plain_cell(row["value"])
+        if isinstance(value, str):
+            # A prose value: the doc's spelling must be the JSON's, once the
+            # marker words (now their own columns) are removed from both.
+            if value_core(cell) != value_core(value):
+                die(f"{pid}: value differs between docs/06-parameters.md and "
+                    f"config/params.json\n"
+                    f"  md  : {value_core(cell)!r}\n"
+                    f"  json: {value_core(value)!r}")
+        else:
+            meant = typed_value(pid, cell)
+            if meant != value:
+                die(f"{pid}: docs/06-parameters.md value {cell!r} means "
+                    f"{meant!r}, not {value!r}")
+
+
+def check_doc_legend(params: dict) -> None:
+    """The two legend tables must count the rows they describe."""
+    lines = PARAMS_MD.read_text(encoding="utf-8").splitlines()
+    wanted = {"status": STATUSES, "provenance": PROVENANCES}
+    for axis, words in wanted.items():
+        header = [axis, "meaning", "count"]
+        rows = []
+        i = 0
+        while i < len(lines):
+            if [plain_cell(c).lower() for c in markdown_row(lines[i])] != header:
+                i += 1
+                continue
+            i += 1
+            if i < len(lines) and set(lines[i].strip()) <= set("|-: "):
+                i += 1
+            while i < len(lines):
+                cells = markdown_row(lines[i])
+                if len(cells) != 3:
+                    break
+                rows.append((plain_cell(cells[0]), plain_cell(cells[2])))
+                i += 1
+        if [name for name, _count in rows] != words:
+            die(f"docs/06-parameters.md has no {axis} legend table listing "
+                f"{', '.join(words)}")
+        counts: dict[str, int] = {w: 0 for w in words}
+        for param in params["parameters"]:
+            counts[param[axis]] += 1
+        for name, count in rows:
+            if str(counts[name]) != count:
+                die(f"docs/06-parameters.md {axis} legend says {name} = "
+                    f"{count}, but config/params.json has {counts[name]}")
 
 
 def param_value(params: dict, pid: str):
@@ -311,8 +477,9 @@ def bootstrap() -> dict:
     return {
         "schema": "solbeam.params/1",
         "note": ("The single canonical parameter sheet. docs/parameters.csv, "
-                 "programs/solbeam/src/params.rs and tests/params.json are all "
-                 "generated from this file by config/gen.py."),
+                 "docs/06-parameters.md, programs/solbeam/src/params.rs and "
+                 "tests/params.json are all checked against this file by "
+                 "config/gen.py."),
         "source": "docs/parameters.csv",
         "code_constants": [
             {
@@ -331,6 +498,7 @@ def bootstrap() -> dict:
                 "name": r["name"],
                 "value": typed_value(r["id"], r["value"]),
                 "status": r["status"],
+                "provenance": r["provenance"],
                 "description": r["description"],
                 "csv_value": r["value"],
             }
@@ -374,23 +542,30 @@ def main() -> None:
               f"{PARAMS_CSV.relative_to(ROOT)}")
 
     params = load_params()
-    csv_rows = read_csv(PARAMS_CSV)
-    check_against_csv(params, csv_rows)
-
+    # `--write-csv` is the regeneration mode, so it writes the CSV *before* the
+    # check: the check then proves the bytes it just wrote are what the JSON
+    # projects.  Without it the checked-in CSV is compared as-is.
     if args.write_csv:
         PARAMS_CSV.write_bytes(csv_bytes([
             {
                 "id": p["id"], "name": p["name"], "value": p["csv_value"],
-                "status": p["status"], "description": p["description"],
+                "status": p["status"], "provenance": p["provenance"],
+                "description": p["description"],
             }
             for p in params["parameters"]
         ]))
         print(f"gen.py: wrote {PARAMS_CSV.relative_to(ROOT)}")
 
+    csv_rows = read_csv(PARAMS_CSV)
+    check_against_csv(params, csv_rows)
+    check_doc_table(params, read_doc_rows())
+    check_doc_legend(params)
+
     write_if_changed(PARAMS_RS, emit_rust(params).encode("utf-8"), args.check)
     write_if_changed(TESTS_JSON, emit_tests_json(params).encode("utf-8"),
                      args.check)
-    print("gen.py: config/params.json agrees with docs/parameters.csv")
+    print("gen.py: config/params.json agrees with docs/parameters.csv and "
+          "docs/06-parameters.md")
 
 
 if __name__ == "__main__":

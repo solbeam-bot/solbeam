@@ -1686,10 +1686,11 @@ pub mod solbeam {
         // The deadline is recorded **now**, from the policy in force now. A
         // later governance change moves the policy for future redemptions and
         // cannot shorten or extend this one — the same rule maturity follows.
-        let deadline_slot = now
-            .checked_add(ctx.accounts.config.redeem_deadline_slots)
-            .and_then(|s| s.checked_add(CANCEL_GRACE_SLOTS))
-            .ok_or(SolbeamError::Overflow)?;
+        let deadline_slot = redeem_deadline_slot(
+            now,
+            ctx.accounts.config.redeem_deadline_slots,
+            CANCEL_GRACE_SLOTS,
+        )?;
 
         let pending = &mut ctx.accounts.pending;
         pending.holder = ctx.accounts.holder.key();
@@ -1758,11 +1759,22 @@ pub mod solbeam {
     ///   exclusive, so the "paid **and** refunded" case the old design made
     ///   certain cannot arise.
     ///
-    /// **A reorged payout is cancellable.** If the client's stored hash at the
-    /// payout's height no longer equals the one the claim was proven against,
-    /// the BSV did not stay paid, and the holder is made whole rather than left
-    /// with an escrow that no instruction could resolve (W6: a one-way latch
-    /// with no resolver). This is what the challenge window is *for*.
+    /// **A claim the client can no longer check is not a live claim.** If the
+    /// stored hash at the payout's height no longer equals the one the claim was
+    /// proven against, the BSV did not stay paid, and the holder is made whole
+    /// rather than left with an escrow that no instruction could resolve. If the
+    /// height has left the window altogether the same rule applies and for a
+    /// stronger reason: `settle_redeem` then fails `PayoutHeightNotInWindow`
+    /// forever, so a claim that still blocked cancellation would latch the
+    /// escrow permanently — not delay it, latch it. It is the same
+    /// "too old to check" boundary the vault's exits have at
+    /// `DepositHeightNotInWindow`, and it is worse here because the holder has
+    /// no other route to their funds. **The rule: a claim whose payout block has
+    /// left the light client's window is no longer provable, so the escrow
+    /// returns to the holder.** The residual is stated rather than hidden — if
+    /// that block had not been reorged, the member paid in BSV and the holder
+    /// keeps both the payout and the refund. The window is what makes that
+    /// trade; a permanently stuck escrow is the worse failure.
     ///
     /// The amount returned is `pending.amount` — **unchanged**, no fee: nothing
     /// was paid, so nothing is charged.
@@ -1773,14 +1785,16 @@ pub mod solbeam {
         require!(now >= pending.deadline_slot, SolbeamError::DeadlineNotReached);
 
         if pending.payout_height != 0 {
-            let reorged = match lc.hash_at(pending.payout_height) {
-                Some(hash) => hash != pending.payout_hash,
-                // Height gone from the window: it cannot be shown reorged, so
-                // the claim stands and the escrow is not cancellable. This is
-                // the same "too old to check" boundary the vault's exits have.
-                None => false,
-            };
-            require!(reorged, SolbeamError::RedeemClaimed);
+            // A claim blocks cancellation only while it is still provable.
+            // `payout_claim_is_live` is false both for a hash that changed (a
+            // reorg) and for a height that has left the window: neither can
+            // settle any more (`settle_redeem` refuses the latter with
+            // `PayoutHeightNotInWindow`), so neither may keep the escrow
+            // latched. See the doc comment for the rule and its residual.
+            require!(
+                !payout_claim_is_live(lc, pending),
+                SolbeamError::RedeemClaimed
+            );
         }
 
         // The destination is derived from `holder`, so a caller that supplied a
@@ -1871,10 +1885,13 @@ pub mod solbeam {
         // is a double claim, not a re-claim after a reorg. (If the stored hash
         // no longer matches, or the height has left the window, the claim is
         // void and a fresh proof — or the re-included transaction — may replace
-        // it.)
-        let live_claim = pending.payout_height != 0
-            && lc.hash_at(pending.payout_height) == Some(pending.payout_hash);
-        require!(!live_claim, SolbeamError::PayoutAlreadyClaimed);
+        // it. `payout_claim_is_live` is the same predicate `cancel_redeem`
+        // refuses on, so "void enough to re-claim" and "void enough to cancel"
+        // are one condition, not two.)
+        require!(
+            !payout_claim_is_live(lc, pending),
+            SolbeamError::PayoutAlreadyClaimed
+        );
 
         // 1. The header must still be inside the window.
         let index = lc
@@ -1962,6 +1979,10 @@ pub mod solbeam {
     /// * **the client still holds the payout's height and its stored hash still
     ///   equals the claim's** — a reorg is the one thing the window exists to
     ///   catch, and if it happened the burn must not execute (`PayoutReorged`);
+    ///   a height gone from the window cannot be checked at all
+    ///   (`PayoutHeightNotInWindow`), and **that claim is then cancellable** —
+    ///   it can never settle, so it must not latch the escrow (see
+    ///   [`cancel_redeem`]);
     /// * **`po.challenge_window` BSV blocks have passed over the staging
     ///   block** — `tip_height >= payout_height + W`, so a transient fork cannot
     ///   burn a good claim before it is buried.
@@ -3201,6 +3222,36 @@ fn redeem_fee(amount: u64) -> Result<u64> {
     Ok(scaled / 10_000)
 }
 
+/// The slot at which a redemption initiated at `now` may be cancelled:
+/// `now + policy_slots + grace_slots`, with an overflow reported rather than
+/// wrapped.
+///
+/// `policy_slots` is the `Config::redeem_deadline_slots` in force at initiation
+/// and `grace_slots` is `po.cancel_grace`. The grace is a parameter rather than
+/// read from the constant inside so the arithmetic is testable directly: the
+/// shipped `po.cancel_grace` is 0, so no on-chain test can tell the term apart
+/// from an omitted add. The call site passes `CANCEL_GRACE_SLOTS`, so the
+/// parameter still governs behaviour.
+fn redeem_deadline_slot(now: u64, policy_slots: u64, grace_slots: u64) -> Result<u64> {
+    now.checked_add(policy_slots)
+        .and_then(|s| s.checked_add(grace_slots))
+        .ok_or(SolbeamError::Overflow)
+}
+
+/// True while a staged payout claim is still **provable**: a claim was made and
+/// the client still holds that exact block.
+///
+/// This is the one definition of a *live claim*, shared by [`claim_payout`]'s
+/// double-claim guard and [`cancel_redeem`]'s refusal, so the two instructions
+/// cannot disagree about whether the escrow is still committed to a payout. It
+/// is false both when the client's hash at the claim's height has changed (the
+/// payout was reorged) and when the height has left the window entirely (the
+/// claim can no longer be checked, and so can never settle).
+fn payout_claim_is_live(lc: &LightClient, pending: &PendingRedeem) -> bool {
+    pending.payout_height != 0
+        && lc.hash_at(pending.payout_height) == Some(pending.payout_hash)
+}
+
 /// True when `script` is the canonical P2PKH script for `hash160`:
 /// `76 a9 14 <hash160> 88 ac`.
 ///
@@ -3517,9 +3568,10 @@ impl StagedMint {
 /// state the two exits resolve against.**
 ///
 /// Created by [`initiate_redeem`] and closed by exactly one of
-/// [`cancel_redeem`] (the deadline passed with no payout) or [`settle_redeem`]
-/// (a payout was proven and the challenge window passed). No third instruction
-/// closes it, so the escrow cannot leak out of the program by another path.
+/// [`cancel_redeem`] (the deadline passed, and any claim on it is no longer
+/// live) or [`settle_redeem`] (a payout was proven and the challenge window
+/// passed). No third instruction closes it, so the escrow cannot leak out of
+/// the program by another path.
 ///
 /// Every field is a **stored** fact rather than a re-derivation, because the
 /// policy in force when the holder committed is what they are owed: `fee` and
@@ -3555,8 +3607,10 @@ pub struct PendingRedeem {
     pub payout_height: u64,
     /// The hash of the block at `payout_height` when the payout was claimed.
     /// [`settle_redeem`] burns only while the client's own window still holds
-    /// this same hash; [`cancel_redeem`] returns the escrow only when it does
-    /// not.
+    /// this same hash; [`cancel_redeem`] returns the escrow whenever it does
+    /// not — a changed hash *or* a height that has left the window, both of
+    /// which make the claim unprovable and therefore unsettleable. The shared
+    /// predicate is `payout_claim_is_live`.
     pub payout_hash: [u8; 32],
     pub bump: u8,
 }
@@ -4736,5 +4790,35 @@ mod pegout_tests {
         assert!(!is_p2pkh_for(&bad, &hash));
         // Truncated.
         assert!(!is_p2pkh_for(&script[..24], &hash));
+    }
+
+    /// `po.cancel_grace` ships at **0**, so on a local validator the term is a
+    /// no-op and no on-chain assertion can tell it apart from an omitted add.
+    /// The constant is therefore asserted here, and the arithmetic that uses it
+    /// is exercised directly — including a non-zero grace the shipped
+    /// configuration cannot reach. This states exactly what is and is not
+    /// covered: the formula is tested, the shipped value is 0, and an
+    /// end-to-end non-zero grace stays untested because there is none to run.
+    #[test]
+    fn redeem_deadline_is_policy_plus_cancel_grace() {
+        assert_eq!(CANCEL_GRACE_SLOTS, 0, "shipped po.cancel_grace");
+        // The shipped arithmetic: now + policy + 0.
+        assert_eq!(redeem_deadline_slot(1_000, 216_000, 0).unwrap(), 217_000);
+        // The term the parameter adds when it is not zero.
+        assert_eq!(redeem_deadline_slot(1_000, 216_000, 30).unwrap(), 217_030);
+        assert_eq!(
+            redeem_deadline_slot(1_000, 216_000, CANCEL_GRACE_SLOTS).unwrap(),
+            1_000 + 216_000
+        );
+        // The grace is added after the policy, so it can only move the deadline
+        // later, never truncate it.
+        assert!(
+            redeem_deadline_slot(1_000, 216_000, 30).unwrap()
+                > redeem_deadline_slot(1_000, 216_000, 0).unwrap()
+        );
+        // Overflow is an error, not a wrap.
+        assert!(redeem_deadline_slot(u64::MAX, 1, 0).is_err());
+        assert!(redeem_deadline_slot(1, u64::MAX, 0).is_err());
+        assert!(redeem_deadline_slot(1, 1, u64::MAX).is_err());
     }
 }

@@ -1,46 +1,50 @@
 # 06. Parameters
 
-**Every value the system turns on, in one place.** Each row has an **ID**, a **name**, a **value** and
-a **description**, with a status marker. The intent is that this becomes a config that both the
-on-chain program and the node software read, so a specification can be correct while the numbers are
-still provisional.
+**Every value the system turns on, in one place.** Each row has an **ID**, a **name**, a **value**, a
+**status**, a **provenance** and a **description**. The intent is that this becomes a config that both
+the on-chain program and the node software read, so a specification can be correct while the numbers
+are still provisional.
 
-**The sheet is now driven by [`config/params.json`](../config/params.json); `docs/parameters.csv` is generated from it by `config/gen.py`.**
+**The sheet is driven by [`config/params.json`](../config/params.json).** [`parameters.csv`](parameters.csv)
+and the tables below are its two human projections, and `config/gen.py` fails if either disagrees with
+the JSON on any ID, name, value, status or provenance — the three cannot drift.
 > **Almost all of this is a specification, not shipped behaviour.** The built set is 21 instructions
 > and 64 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, shipped at **0**) and the authority timelock
 > (`TIMELOCK_SLOTS = 32`, a constant). **`FLOOR` is not a parameter in code** — it is the constant
 > `MIN_CONFIRMATIONS = 12`. Nothing else here is settable at runtime.
 
-## How to read the value column
+## How to read the two markers
 
-| Marker | Meaning |
-|---|---|
-| **mea** | **Measured.** From the code, the chain or the toolchain. Do not change without re-measuring |
-| **dec** | **Decided.** A settled design choice |
-| **ph** | **Placeholder.** A starting value expected to move |
-| **der** | **Derived.** Computed from other parameters; changing it directly is a bug |
-| **built** | Present in the program today |
-| **der·superseded** | Derived, and no longer binding; recorded for history |
-| **open** | **Undecided.** No value yet — this is work to do |
+Every row carries **two independent facts**. The older sheet carried only one of them, inconsistently:
+the same fact could be written `dec` in one projection and `derived` in another, and no projection
+said *where the value actually lives*. **Status** answers that. **Provenance** answers *how the value
+was chosen*.
 
----
+**Status — where the value lives.**
 
-## The sheet — where every value actually lives
-
-**This is the distinction that matters, and the one we have repeatedly blurred:** *"the parameters
-document says X"* and *"the program can be set to X"* are different claims.
-
-| Class | Meaning | Count |
+| Status | Meaning | Count |
 |---|---|---|
-| **`built-mutable`** | In the program, in an account, changeable at runtime through the timelocked authority | **2** |
-| **`built-shape`** | The shape is enforced by the built program; the keys behind it are not | **1** |
-| **`built-frozen`** | In the program as a constant. Changing it needs a **redeploy** | **16** |
-| **`measured`** | A fact about BSV, Solana or the toolchain, not a choice | — |
-| **`derived`** | Computed from others; changing it directly is a bug | — |
-| **`designed`** | Decided, and **not in the program** | — |
-| **`open`** | **No value yet.** This is work to do, not a decision deferred | — |
-| **`superseded`** | Recorded for history only | — |
+| **`built-mutable`** | In the program, in a runtime account, changeable through the timelocked authority | **2** |
+| **`built-frozen`** | In the program as a compiled constant; changing it needs a **redeploy** | **22** |
+| **`built-shape`** | The shape is enforced by the built program; the keys (or the authority) behind it are not | **2** |
+| **`designed`** | **Not in the program.** A specification row: decided policy, an external measurement, or a derived quantity the program does not carry | **30** |
+| **`open`** | **No value yet.** This is work to do, not a decision deferred | **2** |
+| **`superseded`** | Recorded for history only | **2** |
+
+**Provenance — how it was chosen.**
+
+| Provenance | Meaning | Count |
+|---|---|---|
+| **`measured`** | From the chain, the code or the toolchain. Do not change without re-measuring | **11** |
+| **`decided`** | A settled design choice | **30** |
+| **`placeholder`** | A starting value — or no value yet — expected to move | **13** |
+| **`derived`** | Computed from other parameters; changing it directly is a bug | **6** |
+
+So **`lc.seconds_per_block = 600`** is **`built-frozen` + `measured`** — a compiled constant holding a
+fact about BSV — while **`lc.window_hours = 32`** is **`built-frozen` + `decided`** — a compiled
+constant holding a design choice. **`v.reorg_margin = 48`** is **`designed` + `derived`**: arithmetic
+that lives only in this sheet.
 
 > ### The single most important row
 >
@@ -50,112 +54,112 @@ document says X"* and *"the program can be set to X"* are different claims.
 > normally wins. **What protects a deposit today is `MIN_CONFIRMATIONS = 12` — prevention, not
 > reversal.**
 >
-> Everything else marked `designed` above is a specification, and **21 instructions exist**, not 56
+> Everything else marked `designed` is a specification, and **21 instructions exist**, not 56
 > parameters.
 
-**A machine-readable copy is at [`parameters.csv`](parameters.csv)**, regenerated from this table.
+**A machine-readable copy is at [`parameters.csv`](parameters.csv)**, generated from the same JSON.
 
 ---
 
 ## Light client
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `lc.window_hours` | Window length (hours) | **32** `dec` | How much BSV history the client keeps. Sets the deposit deadline |
-| `lc.window` | Window length (records) | **192** `der` | `window_hours × 3600 / seconds_per_block`. Bounded above by the account cap |
-| `lc.seconds_per_block` | Target block spacing | **600** `mea` | BSV's ten-minute target |
-| `lc.record_size` | Bytes per header record | **52** `der` | `32 hash + 16 chainwork + 4 time`. Not configurable |
-| `lc.lookback` | DAA lookback (records) | **147** `der` | `144 + 3` for the median-of-three. **Measured: 146 reproduces 0/324 headers, 147 reproduces 324/324** |
-| `lc.daa` | Difficulty rule | **cw-144** `mea` | The rule BSV actually uses. Verified against real mainnet headers. **Hard-coded (X3)** |
-| `lc.daa_clamp_low` | Lower clamp | **72 × 600 s** `mea` | Multiplies `seconds_per_block`, **not** the averaging window |
-| `lc.daa_clamp_high` | Upper clamp | **288 × 600 s** `mea` | As above |
-| `lc.floor` | Confirmation depth | **12 blocks** `built` | `MIN_CONFIRMATIONS`, **fixed in code**, not a runtime parameter |
-| `lc.max_fork_batch` | Headers per fork tx | **12** `mea` | Set by the 1,232-byte transaction limit |
-| `lc.max_account_create` | Solana account cap | **10,240 bytes** `mea` | A Solana limit, not a choice |
-| `lc.cluster_id` | Deployment identifier | **open** | Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** — the code checks only that the recipient's 32 bytes appear in the `OP_RETURN` |
-| `lc.pow_limit_bits` | Maximum target | **`0x1d00ffff` / `0x207fffff`** `built` | In code as `MAINNET_POW_LIMIT_BITS`, with `no_retargeting` derived from the regtest value |
-| `lc.max_staleness_slots` | Freshness bound | **54,000 slots (~6 h)** `built` | How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator** |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `lc.window_hours` | Window length (hours) | **32** | `built-frozen` | `decided` | How much BSV history the client keeps. Sets the deposit deadline |
+| `lc.window` | Window length (records) | **192** | `built-frozen` | `derived` | `window_hours × 3600 / seconds_per_block`. Bounded above by the account cap |
+| `lc.seconds_per_block` | Target block spacing | **600** | `built-frozen` | `measured` | BSV's ten-minute target |
+| `lc.record_size` | Bytes per header record | **52** | `built-frozen` | `derived` | `32 hash + 16 chainwork + 4 time`. Not configurable |
+| `lc.lookback` | DAA lookback (records) | **147** | `built-frozen` | `derived` | `144 + 3` for the median-of-three. **Measured: 146 reproduces 0/324 headers, 147 reproduces 324/324** |
+| `lc.daa` | Difficulty rule | **cw-144** | `built-frozen` | `measured` | The rule BSV actually uses. Verified against real mainnet headers. **Hard-coded (X3)** |
+| `lc.daa_clamp_low` | Lower clamp | **72 × 600 s** | `built-frozen` | `measured` | Multiplies `seconds_per_block`, **not** the averaging window |
+| `lc.daa_clamp_high` | Upper clamp | **288 × 600 s** | `built-frozen` | `measured` | As above |
+| `lc.floor` | Confirmation depth | **12 blocks** | `built-frozen` | `decided` | `MIN_CONFIRMATIONS`, **fixed in code**, not a runtime parameter |
+| `lc.max_fork_batch` | Headers per fork tx | **12** | `built-frozen` | `measured` | Set by the 1,232-byte transaction limit |
+| `lc.max_account_create` | Solana account cap | **10,240 bytes** | `built-frozen` | `measured` | A Solana limit, not a choice |
+| `lc.cluster_id` | Deployment identifier | **open** | `open` | `placeholder` | Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** — the code checks only that the recipient's 32 bytes appear in the `OP_RETURN` |
+| `lc.pow_limit_bits` | Maximum target | **`0x1d00ffff` / `0x207fffff`** | `built-frozen` | `measured` | In code as `MAINNET_POW_LIMIT_BITS`, with `no_retargeting` derived from the regtest value |
+| `lc.max_staleness_slots` | Freshness bound | **54,000 slots (~6 h)** | `built-frozen` | `derived` | How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator** |
 
 ## Vault
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `v.maturity_blocks` | Maturity | **0** `built` | Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks** |
-| `v.reorg_margin` | Detection margin | **48 blocks** at the *designed* values `der` | `window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth |
-| `v.escrow_close_refund` | Rent refund on close | **true** `dec` | Closing an item returns its rent to the caller |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `v.maturity_blocks` | Maturity | **0** | `built-mutable` | `placeholder` | Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks** |
+| `v.reorg_margin` | Detection margin | **48 blocks** at the *designed* values | `designed` | `derived` | `window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth |
+| `v.escrow_close_refund` | Rent refund on close | **true** | `built-frozen` | `decided` | Closing an item returns its rent to the caller |
 
 ## Federation
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `fed.bond_mint` | Mint-side bond — BSV side (**the float**) | **1,000 BSV** `dec` | Held **outside the reserve**. **The bond is the float** — working capital for transfers — **not a capital requirement sized against the reserve**, and not a capacity ceiling. The `k × (BSV held)` line is a solvency check on mint and exit. **Held under the collective (threshold ECDSA) key, not the member's own**, and seized by the **members collectively**; slashing pays the slashers from it. A collective action by the majority, not an automatic rule |
-| `fed.bond_key` | Mint-side bond custody | **collective (threshold ECDSA) key** `dec` | **The design requirement the mechanism rests on.** If a member controls their own bond they move it the moment they are caught. *Residuals:* a majority could seize an honest member's bond; nothing on BSV compels signing, so the duty to slash is **social** |
-| `fed.bond_redeem` | Redeem-side bond — `solBSV` side (**the float**) | **1,000 BSV** `dec` | Seizable on Solana. **This side is enforceable.** Neither bond sits inside the reserve |
-| `fed.bond_size` | Nominal bond size | **1,000 BSV** `dec` | Superseded by the two side-specific bonds; kept as the per-side default name |
-| `fed.total_bond` | Aggregate bond (tracked) | **superseded** | The old single running total is replaced by two side-specific aggregates |
-| `fed.mint_gate` | Bonds gate minting | **true** `dec` | **F5.** A mint is refused unless the BSV-side bond covers the BSV held after it. A **solvency floor, not a capacity claim.** The old `total_bond ≥ k × (non_bonded_supply + amount)` is **superseded** |
-| `fed.bond_asset` | Bond denomination | **split** `dec` | Mint side BSV, redeem side `solBSV`; neither inside the reserve. No price oracle is needed for either |
-| `fed.collusion_mitigation` | Against a colluding threshold | **transparency** `dec` | **Stated risk, not a mechanism.** No on-chain predicate proves who signed an off-chain threshold signature. The maximum loss is the whole **non-member supply**. Publishing the reserve and supply converts a hidden theft into a visible one; the unchallenged-spend case is separately addressed by the **reported spent-outpoint record** |
-| `fed.k` | Bond coverage floor | **1** `dec` | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, checked on mint and exit. **A solvency check, not a capacity ceiling.** The capacity arithmetic built on `k` and `n/t` is **withdrawn**. Capital inefficiency accepted |
-| `fed.threshold` | Gateway signing threshold | **4-of-N, `N` open** | `t` of `n` for the gateway **threshold ECDSA** key. **`N` is a variable; the number is arbitrary and deferred.** The key emits **one** signature and is one leg of the reserve's 2-of-2 script. Changing `t` or `n` is a **re-sharing**, not a migration |
-| `fed.greycore_size` | Greycore size | **open** | The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose, who do not run the reserve. The Greycore **finds and admits replacement members** |
-| `fed.greycore_threshold` | Greycore threshold | **open** | How many Greycore keys must sign alongside the gateway. The Greycore **co-signs every reserve spend**, which is what constrains the reserve. 4-of-5 was an earlier proposal and is not settled |
-| `fed.shards` | Shard count | **open** | One key or several groups. Affects blast radius and latency. **There is no sharding today: blast radius is 100%** |
-| `fed.unbond_slots` | Unbonding period | **open** | Must exceed the redemption deadline plus the challenge window |
-| `fed.delegated_staking` | Delegated staking | **disabled** `dec` | **Phase 2.** Lets non-members delegate `solBSV` to a member and share its fee. Activatable by governance, not built |
-| `fed.script` | Reserve deposit script | **2-of-2 `OP_CHECKMULTISIG`** `dec`, **shape accepted in code** `built` | `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`. Both keys must sign; the Greycore polices every reserve spend. The committed code accepts this shape: `is_reserve_multisig`, `MAX_SCRIPT_LEN = 71`, `DepositScript::SPACE = 84`. **The keys/quorum behind it are not built** |
-| `fed.bond_enforced_on_chain` | BSV-side bond seizure | **collective action** `dec` | The Solana program cannot seize the BSV-side bond; the members sign a threshold transaction. Stated as a residual, not hidden |
-| `fed.spent_report` | Spent-outpoint record (N5) | **one PDA per `(txid, vout)`, written by the program authority** `built` | `report_spent` records a deposit outpoint the reserve has spent; `verify_deposit` refuses a deposit whose outpoint is in the record. The signer is the **upgrade authority** — a **PoC stand-in** for the federation, which does not exist yet. Permanent and rent-exempt with **no prune**: closing a record would re-open the mint of an already-spent deposit |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `fed.bond_mint` | Mint-side bond — BSV side (**the float**) | **1,000 BSV** | `designed` | `decided` | Held **outside the reserve**. **The bond is the float** — working capital for transfers — **not a capital requirement sized against the reserve**, and not a capacity ceiling. The `k × (BSV held)` line is a solvency check on mint and exit. **Held under the collective (threshold ECDSA) key, not the member's own**, and seized by the **members collectively**; slashing pays the slashers from it. A collective action by the majority, not an automatic rule |
+| `fed.bond_key` | Mint-side bond custody | **collective (threshold ECDSA) key** | `designed` | `decided` | **The design requirement the mechanism rests on.** If a member controls their own bond they move it the moment they are caught. *Residuals:* a majority could seize an honest member's bond; nothing on BSV compels signing, so the duty to slash is **social** |
+| `fed.bond_redeem` | Redeem-side bond — `solBSV` side (**the float**) | **1,000 BSV** | `designed` | `decided` | Seizable on Solana. **This side is enforceable.** Neither bond sits inside the reserve |
+| `fed.bond_size` | Nominal bond size | **1,000 BSV** | `designed` | `decided` | Superseded by the two side-specific bonds; kept as the per-side default name |
+| `fed.total_bond` | Aggregate bond (tracked) | **superseded** | `superseded` | `decided` | The old single running total is replaced by two side-specific aggregates |
+| `fed.mint_gate` | Bonds gate minting | **true** | `designed` | `decided` | **F5.** A mint is refused unless the BSV-side bond covers the BSV held after it. A **solvency floor, not a capacity claim.** The old `total_bond ≥ k × (non_bonded_supply + amount)` is **superseded** |
+| `fed.bond_asset` | Bond denomination | **split** | `designed` | `decided` | Mint side BSV, redeem side `solBSV`; neither inside the reserve. No price oracle is needed for either |
+| `fed.collusion_mitigation` | Against a colluding threshold | **transparency** | `designed` | `decided` | **Stated risk, not a mechanism.** No on-chain predicate proves who signed an off-chain threshold signature. The maximum loss is the whole **non-member supply**. Publishing the reserve and supply converts a hidden theft into a visible one; the unchallenged-spend case is separately addressed by the **reported spent-outpoint record** |
+| `fed.k` | Bond coverage floor | **1** | `designed` | `decided` | `bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, checked on mint and exit. **A solvency check, not a capacity ceiling.** The capacity arithmetic built on `k` and `n/t` is **withdrawn**. Capital inefficiency accepted |
+| `fed.threshold` | Gateway signing threshold | **4-of-N, `N` open** | `designed` | `decided` | `t` of `n` for the gateway **threshold ECDSA** key. **`N` is a variable; the number is arbitrary and deferred.** The key emits **one** signature and is one leg of the reserve's 2-of-2 script. Changing `t` or `n` is a **re-sharing**, not a migration |
+| `fed.greycore_size` | Greycore size | **open** | `designed` | `placeholder` | The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose, who do not run the reserve. The Greycore **finds and admits replacement members** |
+| `fed.greycore_threshold` | Greycore threshold | **open** | `designed` | `placeholder` | How many Greycore keys must sign alongside the gateway. The Greycore **co-signs every reserve spend**, which is what constrains the reserve. 4-of-5 was an earlier proposal and is not settled |
+| `fed.shards` | Shard count | **open** | `designed` | `placeholder` | One key or several groups. Affects blast radius and latency. **There is no sharding today: blast radius is 100%** |
+| `fed.unbond_slots` | Unbonding period | **open** | `designed` | `placeholder` | Must exceed the redemption deadline plus the challenge window |
+| `fed.delegated_staking` | Delegated staking | **disabled** | `designed` | `decided` | **Phase 2.** Lets non-members delegate `solBSV` to a member and share its fee. Activatable by governance, not built |
+| `fed.script` | Reserve deposit script | **2-of-2 `OP_CHECKMULTISIG`** | `built-shape` | `decided` | `OP_2 <gateway threshold key> <greycore key> OP_2 OP_CHECKMULTISIG`. Both keys must sign; the Greycore polices every reserve spend. The committed code accepts this shape: `is_reserve_multisig`, `MAX_SCRIPT_LEN = 71`, `DepositScript::SPACE = 84`. **The keys/quorum behind it are not built** |
+| `fed.bond_enforced_on_chain` | BSV-side bond seizure | **collective action** | `designed` | `decided` | The Solana program cannot seize the BSV-side bond; the members sign a threshold transaction. Stated as a residual, not hidden |
+| `fed.spent_report` | Spent-outpoint record (N5) | **one PDA per `(txid, vout)`, written by the program authority** | `built-shape` | `decided` | `report_spent` records a deposit outpoint the reserve has spent; `verify_deposit` refuses a deposit whose outpoint is in the record. The signer is the **upgrade authority** — a **PoC stand-in** for the federation, which does not exist yet. Permanent and rent-exempt with **no prune**: closing a record would re-open the mint of an already-spent deposit |
 
 ## Governance
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `gov.threshold` | Pass threshold | **85%** `ph` | Share of pledged coins required |
-| `gov.delay` | Delay before effect | **30 days** `ph` | **Reducible** by governance, but never below `gov.delay_min`. Redemptions run throughout |
-| `gov.delay_min` | Minimum delay (**floor**) | **open** (7 days proposed) | **F7.** Both readings are defensible and the choice is open: *with a floor*, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; *without*, the exit window is whatever the current majority allows. A judgement about trust, **not a correctness question** |
-| `gov.signal` | Signal from proposal | **true** `dec` | Live from the moment it is raised |
-| `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** `dec` | Deliberate. Nothing is immutable, so the exit window, not the rule, is the protection |
-| `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** `designed` — in code it is the **upgrade authority**, one key, timelocked | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. **Not built** |
-| `gov.authority_timelock` | Authority timelock | **32 slots** `built` | `TIMELOCK_SLOTS`, a PoC value. Applied to `propose_authority_change` / `execute_authority_change` / `cancel_authority_change`. Must be long enough to exit |
-| `gov.pause_threshold` | Pause threshold | **>50%** `ph` | Lower than a governance change, because the power is bounded |
-| `gov.pause_duration` | Pause auto-lift | **open** | Days before a pause lapses unless renewed |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `gov.threshold` | Pass threshold | **85%** | `designed` | `placeholder` | Share of pledged coins required |
+| `gov.delay` | Delay before effect | **30 days** | `designed` | `placeholder` | **Reducible** by governance, but never below `gov.delay_min`. Redemptions run throughout |
+| `gov.delay_min` | Minimum delay (**floor**) | **open** (7 days proposed) | `designed` | `placeholder` | **F7.** Both readings are defensible and the choice is open: *with a floor*, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; *without*, the exit window is whatever the current majority allows. A judgement about trust, **not a correctness question** |
+| `gov.signal` | Signal from proposal | **true** | `designed` | `decided` | Live from the moment it is raised |
+| `gov.holds_upgrade_authority` | Governance owns the upgrade key | **true** | `designed` | `decided` | Deliberate. Nothing is immutable, so the exit window, not the rule, is the protection |
+| `gov.authority_threshold` | Checkpoint/pause authority | **federation threshold** — in code it is the **upgrade authority**, one key, timelocked | `designed` | `decided` | **F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. **Not built** |
+| `gov.authority_timelock` | Authority timelock | **32 slots** | `built-frozen` | `placeholder` | `TIMELOCK_SLOTS`, a PoC value. Applied to `propose_authority_change` / `execute_authority_change` / `cancel_authority_change`. Must be long enough to exit |
+| `gov.pause_threshold` | Pause threshold | **>50%** | `designed` | `placeholder` | Lower than a governance change, because the power is bounded |
+| `gov.pause_duration` | Pause auto-lift | **open** | `open` | `placeholder` | Days before a pause lapses unless renewed |
 
 ## Fees
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `fee.mint_bp` | Peg-in fee (**gross**) | **30 bp** `dec` | Covers all transaction fees; the remainder is member income. **Its physical location is unspecified — N1** |
-| `fee.redeem_bp` | Peg-out fee (**gross**) | **30 bp** `built` | As above |
-| `fee.bounty_share` | Challenger bounty | **open** | Share of a slashed bond paid to whoever proves the misbehaviour. The `burn_staged` bounty is suggested, not sized, and **not built** |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `fee.mint_bp` | Peg-in fee (**gross**) | **30 bp** | `designed` | `decided` | Covers all transaction fees; the remainder is member income. **Its physical location is unspecified — N1** |
+| `fee.redeem_bp` | Peg-out fee (**gross**) | **30 bp** | `built-frozen` | `decided` | As above |
+| `fee.bounty_share` | Challenger bounty | **open** | `designed` | `placeholder` | Share of a slashed bond paid to whoever proves the misbehaviour. The `burn_staged` bounty is suggested, not sized, and **not built** |
 
 ## Peg-in
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `pi.min_peg_in` | Minimum deposit | **1 BSV** `dec` | Prices out dust griefing. Decided; **enforcement is not in code** |
-| `pi.max_used` | Legacy replay-list cap | **200** `der·superseded` | Replaced by a **nullifier PDA per deposit**, which is **built**. There is no list and no ceiling |
-| `pi.op_return_layout` | Deposit commitment | **version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient** `dec` | **Designed.** What is built checks only that the recipient's 32 bytes appear in an `OP_RETURN` |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `pi.min_peg_in` | Minimum deposit | **1 BSV** | `designed` | `decided` | Prices out dust griefing. Decided; **enforcement is not in code** |
+| `pi.max_used` | Legacy replay-list cap | **200** | `superseded` | `derived` | Replaced by a **nullifier PDA per deposit**, which is **built**. There is no list and no ceiling |
+| `pi.op_return_layout` | Deposit commitment | **version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient** | `designed` | `decided` | **Designed.** What is built checks only that the recipient's 32 bytes appear in an `OP_RETURN` |
 
 ## Peg-out
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `po.payout_confirmations` | Payout depth | **6 BSV blocks** `built` | BSV confirmations before a payout is provable. `C_payout` |
-| `po.challenge_window` | Challenge window | **144 BSV blocks** `built` | `W`. Confirmations a payout needs before settling |
-| `po.deadline` | Redemption deadline | **216,000 slots** `built` | `D`. Must satisfy `D ≥ payout_confirmations + challenge_window`. A **stored, timelock-mutable `Config` field**, like `v.maturity_blocks` |
-| `po.cancel_grace` | Cancellation grace | **0** `built` | Cancellation is immediate on expiry. A grace period would only delay the exit |
-| `po.d_min` | Minimum redemption | **1,000,000 base units (0.01 BSV)** `built` | Minimum redemption, so a claim's proof is worth the transaction fees to settle |
-| `po.max_pending` | Concurrent redemption cap | **64** `built` | Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `po.payout_confirmations` | Payout depth | **6 BSV blocks** | `built-frozen` | `decided` | BSV confirmations before a payout is provable. `C_payout` |
+| `po.challenge_window` | Challenge window | **144 BSV blocks** | `built-frozen` | `decided` | `W`. Confirmations a payout needs before settling |
+| `po.deadline` | Redemption deadline | **216,000 slots** | `built-mutable` | `decided` | `D`. In Solana SLOTS, because a height deadline would never expire if the feed stalled. The earlier claim that `D ≥ payout_confirmations + challenge_window` **does not hold** at these values (216,000 slots against 150 BSV blocks); the pay-and-refund race is closed structurally instead — `cancel_redeem` is refused while a claim is live. A **stored, timelock-mutable `Config` field**, like `v.maturity_blocks` |
+| `po.cancel_grace` | Cancellation grace | **0** | `built-frozen` | `decided` | Cancellation is immediate on expiry. A grace period would only delay the exit |
+| `po.d_min` | Minimum redemption | **1,000,000 base units (0.01 BSV)** | `built-frozen` | `decided` | Minimum redemption, so a claim's proof is worth the transaction fees to settle |
+| `po.max_pending` | Concurrent redemption cap | **64** | `built-frozen` | `decided` | Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded |
 
 ## Measured constants — do not change without re-measuring
 
-| ID | Name | Value | Description |
-|---|---|---|---|
-| `m.rent_per_byte` | Solana rent | **5,080 lamports/byte** `mea` | `(bytes + 128) × 5,080`. **The 128-byte overhead is inside this rate.** 6,960 is an older toolchain's constant and overstates by ~37%. Measured: `solana rent 0` = 650,240 lamports; `solana rent 165` = 1,488,440 |
-| `m.signature_fee` | Solana base fee | **5,000 lamports** `mea` | Per signature |
-| `m.token_decimals` | `solBSV` decimals | **8** `mea` | — |
-| `m.blob_max` | Transaction size | **1,232 bytes** `mea` | Solana limit; drives `lc.max_fork_batch` |
+| ID | Name | Value | Status | Provenance | Description |
+|---|---|---|---|---|---|
+| `m.rent_per_byte` | Solana rent | **5,080 lamports/byte** | `designed` | `measured` | `(bytes + 128) × 5,080`. **The 128-byte overhead is inside this rate.** 6,960 is an older toolchain's constant and overstates by ~37%. Measured: `solana rent 0` = 650,240 lamports; `solana rent 165` = 1,488,440 |
+| `m.signature_fee` | Solana base fee | **5,000 lamports** | `designed` | `measured` | Per signature |
+| `m.token_decimals` | `solBSV` decimals | **8** | `built-frozen` | `measured` | — |
+| `m.blob_max` | Transaction size | **1,232 bytes** | `designed` | `measured` | Solana limit; drives `lc.max_fork_batch` |
 
 ---
 
