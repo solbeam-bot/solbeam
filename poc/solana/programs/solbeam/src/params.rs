@@ -80,10 +80,10 @@ pub const DAA_CLAMP_HIGH_MULTIPLIER: i64 = 288;
 
 // -- v --
 
-/// `v.maturity_blocks` -- Maturity -- `0 built`.
+/// `v.maturity_blocks` -- Maturity -- `144 blocks`.
 ///
-/// Staged mints wait this long before release. A stored parameter, not a constant, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a race. The designed value is 144 blocks
-pub const DEFAULT_MATURITY_BLOCKS: u64 = 0;
+/// How deep a deposit's block must be before its staged mint releases, in BSV blocks. 144 blocks is about 24 hours at BSV's 600 s target. This is the window in which a reorg is caught and the mint burned. Constraint: confirmations + maturity <= window, so 12 + 144 <= 192. SET TO 144: at 0 the mint side had no window at all, and an affordable rented reorg could not be reversed.
+pub const DEFAULT_MATURITY_BLOCKS: u64 = 144;
 
 // -- gov --
 

@@ -45,8 +45,8 @@ was chosen*.
 | Provenance | Meaning | Count |
 |---|---|---|
 | **`measured`** | From the chain, the code or the toolchain. Do not change without re-measuring | **11** |
-| **`decided`** | A settled design choice | **30** |
-| **`placeholder`** | A starting value — or no value yet — expected to move | **13** |
+| **`decided`** | A settled design choice | **31** |
+| **`placeholder`** | A starting value — or no value yet — expected to move | **12** |
 | **`derived`** | Computed from other parameters; changing it directly is a bug | **6** |
 <!-- END GENERATED: provenance-legend -->
 
@@ -94,7 +94,7 @@ that lives only in this sheet.
 
 | id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
-| `v.maturity_blocks` | Maturity | **0** | `built-mutable` | `placeholder` | Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks** |
+| `v.maturity_blocks` | Maturity | **144 blocks** | `built-mutable` | `decided` | Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks** |
 | `v.reorg_margin` | Detection margin | **48 blocks** at the *designed* values | `designed` | `derived` | `window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth |
 | `v.escrow_close_refund` | Rent refund on close | **true** | `built-frozen` | `decided` | Closing an item returns its rent to the caller |
 

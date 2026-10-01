@@ -28,9 +28,9 @@
       "value": 192,
       "status": "built-frozen",
       "provenance": "derived",
-      "description": "window_hours × 3600 / seconds_per_block. Bounded above by the account cap",
+      "description": "window_hours \u00d7 3600 / seconds_per_block. Bounded above by the account cap",
       "csv_value": "%v% der",
-      "doc_description": "`window_hours × 3600 / seconds_per_block`. Bounded above by the account cap"
+      "doc_description": "`window_hours \u00d7 3600 / seconds_per_block`. Bounded above by the account cap"
     },
     {
       "id": "lc.seconds_per_block",
@@ -79,7 +79,7 @@
       "status": "built-frozen",
       "provenance": "measured",
       "description": "Multiplies seconds_per_block, not the averaging window",
-      "csv_value": "%v% × 600 s mea",
+      "csv_value": "%v% \u00d7 600 s mea",
       "doc_description": "Multiplies `seconds_per_block`, **not** the averaging window"
     },
     {
@@ -89,7 +89,7 @@
       "status": "built-frozen",
       "provenance": "measured",
       "description": "As above",
-      "csv_value": "%v% × 600 s mea",
+      "csv_value": "%v% \u00d7 600 s mea",
       "doc_description": "As above"
     },
     {
@@ -128,9 +128,9 @@
       "value": null,
       "status": "open",
       "provenance": "placeholder",
-      "description": "Binds a deposit to one deployment (P11). Must differ per cluster. Not built — the code checks only that the recipient's 32 bytes appear in the OP_RETURN",
+      "description": "Binds a deposit to one deployment (P11). Must differ per cluster. Not built \u2014 the code checks only that the recipient's 32 bytes appear in the OP_RETURN",
       "csv_value": "open",
-      "doc_description": "Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** — the code checks only that the recipient's 32 bytes appear in the `OP_RETURN`"
+      "doc_description": "Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** \u2014 the code checks only that the recipient's 32 bytes appear in the `OP_RETURN`"
     },
     {
       "id": "lc.pow_limit_bits",
@@ -149,18 +149,18 @@
       "value": 54000,
       "status": "built-frozen",
       "provenance": "derived",
-      "description": "How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. Implemented (StaleClient), untested on a local validator",
+      "description": "How recent the last accepted header must be before release. A multiple of BSV block time \u2014 ~1,500 Solana slots per block. Implemented (StaleClient), untested on a local validator",
       "csv_value": "%V% slots (~6 h) built",
-      "doc_description": "How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator**"
+      "doc_description": "How recent the last accepted header must be before release. A multiple of BSV block time \u2014 ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator**"
     },
     {
       "id": "v.maturity_blocks",
       "name": "Maturity",
-      "value": 0,
+      "value": 144,
       "status": "built-mutable",
-      "provenance": "placeholder",
-      "description": "Staged mints wait this long before release. A stored parameter, not a constant, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a race. The designed value is 144 blocks",
-      "csv_value": "%v% built",
+      "provenance": "decided",
+      "description": "How deep a deposit's block must be before its staged mint releases, in BSV blocks. 144 blocks is about 24 hours at BSV's 600 s target. This is the window in which a reorg is caught and the mint burned. Constraint: confirmations + maturity <= window, so 12 + 144 <= 192. SET TO 144: at 0 the mint side had no window at all, and an affordable rented reorg could not be reversed.",
+      "csv_value": "144 blocks",
       "doc_description": "Staged mints wait this long before release. **A stored parameter, not a constant**, so governance can raise it without a redeploy. At 0 the vault is a pass-through and release/burn are a **race**. The designed value is **144 blocks**"
     },
     {
@@ -169,10 +169,10 @@
       "value": 48,
       "status": "designed",
       "provenance": "derived",
-      "description": "window − maturity. Do not add floor into this subtraction. Zero at the maximum committed depth",
+      "description": "window \u2212 maturity. Do not add floor into this subtraction. Zero at the maximum committed depth",
       "csv_value": "%v% blocks at the designed values der",
       "doc_value": "**%v% blocks** at the *designed* values",
-      "doc_description": "`window − maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth"
+      "doc_description": "`window \u2212 maturity`. **Do not add `floor` into this subtraction.** Zero at the maximum committed depth"
     },
     {
       "id": "v.escrow_close_refund",
@@ -186,14 +186,14 @@
     },
     {
       "id": "fed.bond_mint",
-      "name": "Mint-side bond — BSV side (the float)",
+      "name": "Mint-side bond \u2014 BSV side (the float)",
       "value": 1000,
       "status": "designed",
       "provenance": "decided",
-      "description": "Held outside the reserve. The bond is the float — working capital for transfers — not a capital requirement sized against the reserve, and not a capacity ceiling. The k × (BSV held) line is a solvency check on mint and exit. Held under the collective (threshold ECDSA) key, not the member's own, and seized by the members collectively; slashing pays the slashers from it. A collective action by the majority, not an automatic rule",
+      "description": "Held outside the reserve. The bond is the float \u2014 working capital for transfers \u2014 not a capital requirement sized against the reserve, and not a capacity ceiling. The k \u00d7 (BSV held) line is a solvency check on mint and exit. Held under the collective (threshold ECDSA) key, not the member's own, and seized by the members collectively; slashing pays the slashers from it. A collective action by the majority, not an automatic rule",
       "csv_value": "%V% BSV dec",
-      "doc_name": "Mint-side bond — BSV side (**the float**)",
-      "doc_description": "Held **outside the reserve**. **The bond is the float** — working capital for transfers — **not a capital requirement sized against the reserve**, and not a capacity ceiling. The `k × (BSV held)` line is a solvency check on mint and exit. **Held under the collective (threshold ECDSA) key, not the member's own**, and seized by the **members collectively**; slashing pays the slashers from it. A collective action by the majority, not an automatic rule"
+      "doc_name": "Mint-side bond \u2014 BSV side (**the float**)",
+      "doc_description": "Held **outside the reserve**. **The bond is the float** \u2014 working capital for transfers \u2014 **not a capital requirement sized against the reserve**, and not a capacity ceiling. The `k \u00d7 (BSV held)` line is a solvency check on mint and exit. **Held under the collective (threshold ECDSA) key, not the member's own**, and seized by the **members collectively**; slashing pays the slashers from it. A collective action by the majority, not an automatic rule"
     },
     {
       "id": "fed.bond_key",
@@ -207,13 +207,13 @@
     },
     {
       "id": "fed.bond_redeem",
-      "name": "Redeem-side bond — solBSV side (the float)",
+      "name": "Redeem-side bond \u2014 solBSV side (the float)",
       "value": 1000,
       "status": "designed",
       "provenance": "decided",
       "description": "Seizable on Solana. This side is enforceable. Neither bond sits inside the reserve",
       "csv_value": "%V% BSV dec",
-      "doc_name": "Redeem-side bond — `solBSV` side (**the float**)",
+      "doc_name": "Redeem-side bond \u2014 `solBSV` side (**the float**)",
       "doc_description": "Seizable on Solana. **This side is enforceable.** Neither bond sits inside the reserve"
     },
     {
@@ -243,9 +243,9 @@
       "value": true,
       "status": "designed",
       "provenance": "decided",
-      "description": "F5. A mint is refused unless the BSV-side bond covers the BSV held after it. A solvency floor, not a capacity claim. The old total_bond ≥ k × (non_bonded_supply + amount) is superseded",
+      "description": "F5. A mint is refused unless the BSV-side bond covers the BSV held after it. A solvency floor, not a capacity claim. The old total_bond \u2265 k \u00d7 (non_bonded_supply + amount) is superseded",
       "csv_value": "%v% dec",
-      "doc_description": "**F5.** A mint is refused unless the BSV-side bond covers the BSV held after it. A **solvency floor, not a capacity claim.** The old `total_bond ≥ k × (non_bonded_supply + amount)` is **superseded**"
+      "doc_description": "**F5.** A mint is refused unless the BSV-side bond covers the BSV held after it. A **solvency floor, not a capacity claim.** The old `total_bond \u2265 k \u00d7 (non_bonded_supply + amount)` is **superseded**"
     },
     {
       "id": "fed.bond_asset",
@@ -273,9 +273,9 @@
       "value": 1,
       "status": "designed",
       "provenance": "decided",
-      "description": "bsv_bond ≥ k × (BSV held) and solbsv_bond ≥ k × (solBSV held), checked on mint and exit. A solvency check, not a capacity ceiling. The capacity arithmetic built on k and n/t is withdrawn. Capital inefficiency accepted",
+      "description": "bsv_bond \u2265 k \u00d7 (BSV held) and solbsv_bond \u2265 k \u00d7 (solBSV held), checked on mint and exit. A solvency check, not a capacity ceiling. The capacity arithmetic built on k and n/t is withdrawn. Capital inefficiency accepted",
       "csv_value": "%v% dec",
-      "doc_description": "`bsv_bond ≥ k × (BSV held)` and `solbsv_bond ≥ k × (solBSV held)`, checked on mint and exit. **A solvency check, not a capacity ceiling.** The capacity arithmetic built on `k` and `n/t` is **withdrawn**. Capital inefficiency accepted"
+      "doc_description": "`bsv_bond \u2265 k \u00d7 (BSV held)` and `solbsv_bond \u2265 k \u00d7 (solBSV held)`, checked on mint and exit. **A solvency check, not a capacity ceiling.** The capacity arithmetic built on `k` and `n/t` is **withdrawn**. Capital inefficiency accepted"
     },
     {
       "id": "fed.threshold",
@@ -294,9 +294,9 @@
       "value": null,
       "status": "designed",
       "provenance": "placeholder",
-      "description": "The second signer set on the reserve script: trusted third parties, not node operators — people with reputations to lose, who do not run the reserve. The Greycore finds and admits replacement members",
+      "description": "The second signer set on the reserve script: trusted third parties, not node operators \u2014 people with reputations to lose, who do not run the reserve. The Greycore finds and admits replacement members",
       "csv_value": "open",
-      "doc_description": "The second signer set on the reserve script: **trusted third parties, not node operators** — people with reputations to lose, who do not run the reserve. The Greycore **finds and admits replacement members**"
+      "doc_description": "The second signer set on the reserve script: **trusted third parties, not node operators** \u2014 people with reputations to lose, who do not run the reserve. The Greycore **finds and admits replacement members**"
     },
     {
       "id": "fed.greycore_threshold",
@@ -366,10 +366,10 @@
       "value": "one PDA per (txid, vout), written by the program authority built",
       "status": "built-shape",
       "provenance": "decided",
-      "description": "report_spent records a deposit outpoint the reserve has spent; verify_deposit refuses a deposit whose outpoint is in the record. The signer is the upgrade authority — a PoC stand-in for the federation, which does not exist yet. Permanent and rent-exempt with no prune: closing a record would re-open the mint of an already-spent deposit",
+      "description": "report_spent records a deposit outpoint the reserve has spent; verify_deposit refuses a deposit whose outpoint is in the record. The signer is the upgrade authority \u2014 a PoC stand-in for the federation, which does not exist yet. Permanent and rent-exempt with no prune: closing a record would re-open the mint of an already-spent deposit",
       "csv_value": "%v%",
       "doc_value": "**one PDA per `(txid, vout)`, written by the program authority**",
-      "doc_description": "`report_spent` records a deposit outpoint the reserve has spent; `verify_deposit` refuses a deposit whose outpoint is in the record. The signer is the **upgrade authority** — a **PoC stand-in** for the federation, which does not exist yet. Permanent and rent-exempt with **no prune**: closing a record would re-open the mint of an already-spent deposit"
+      "doc_description": "`report_spent` records a deposit outpoint the reserve has spent; `verify_deposit` refuses a deposit whose outpoint is in the record. The signer is the **upgrade authority** \u2014 a **PoC stand-in** for the federation, which does not exist yet. Permanent and rent-exempt with **no prune**: closing a record would re-open the mint of an already-spent deposit"
     },
     {
       "id": "gov.threshold",
@@ -397,11 +397,11 @@
       "value": null,
       "status": "designed",
       "provenance": "placeholder",
-      "description": "F7. Both readings are defensible and the choice is open: with a floor, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; without, the exit window is whatever the current majority allows. A judgement about trust, not a correctness question",
+      "description": "F7. Both readings are defensible and the choice is open: with a floor, a majority cannot take the warning away \u2014 proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; without, the exit window is whatever the current majority allows. A judgement about trust, not a correctness question",
       "csv_value": "open (7 days proposed)",
       "doc_value": "**open** (7 days proposed)",
       "doc_name": "Minimum delay (**floor**)",
-      "doc_description": "**F7.** Both readings are defensible and the choice is open: *with a floor*, a majority cannot take the warning away — proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; *without*, the exit window is whatever the current majority allows. A judgement about trust, **not a correctness question**"
+      "doc_description": "**F7.** Both readings are defensible and the choice is open: *with a floor*, a majority cannot take the warning away \u2014 proposal 1 can only shorten the delay to the floor, so proposal 2 still has to be exited during it; *without*, the exit window is whatever the current majority allows. A judgement about trust, **not a correctness question**"
     },
     {
       "id": "gov.signal",
@@ -426,12 +426,12 @@
     {
       "id": "gov.authority_threshold",
       "name": "Checkpoint/pause authority",
-      "value": "federation threshold designed — in code it is the upgrade authority, one key, timelocked",
+      "value": "federation threshold designed \u2014 in code it is the upgrade authority, one key, timelocked",
       "status": "designed",
       "provenance": "decided",
       "description": "F4. Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. Not built",
       "csv_value": "%v%",
-      "doc_value": "**federation threshold** — in code it is the **upgrade authority**, one key, timelocked",
+      "doc_value": "**federation threshold** \u2014 in code it is the **upgrade authority**, one key, timelocked",
       "doc_description": "**F4.** Replaces the single deployer key. No timelock-free path to rewriting the checkpoint. **Not built**"
     },
     {
@@ -470,10 +470,10 @@
       "value": 30,
       "status": "designed",
       "provenance": "decided",
-      "description": "Covers all transaction fees; the remainder is member income. Its physical location is unspecified — N1",
+      "description": "Covers all transaction fees; the remainder is member income. Its physical location is unspecified \u2014 N1",
       "csv_value": "%v% bp dec",
       "doc_name": "Peg-in fee (**gross**)",
-      "doc_description": "Covers all transaction fees; the remainder is member income. **Its physical location is unspecified — N1**"
+      "doc_description": "Covers all transaction fees; the remainder is member income. **Its physical location is unspecified \u2014 N1**"
     },
     {
       "id": "fee.redeem_bp",
@@ -513,7 +513,7 @@
       "status": "superseded",
       "provenance": "derived",
       "description": "Replaced by a nullifier PDA per deposit, which is built. There is no list and no ceiling",
-      "csv_value": "200 der·superseded",
+      "csv_value": "200 der\u00b7superseded",
       "doc_value": "**200**",
       "doc_description": "Replaced by a **nullifier PDA per deposit**, which is **built**. There is no list and no ceiling"
     },
@@ -556,7 +556,7 @@
       "provenance": "decided",
       "description": "How long a member has to pay before the holder may cancel. In Solana SLOTS, because a height deadline would never expire if the header feed stalled. NOTE: the earlier claim that this must exceed payout_confirmations + challenge_window does NOT hold at these values (216,000 slots against 150 BSV blocks). The pay-and-refund race is closed structurally instead -- cancel_redeem is refused while a claim is live.",
       "csv_value": "%V% slots built",
-      "doc_description": "`D`. In Solana SLOTS, because a height deadline would never expire if the feed stalled. The earlier claim that `D ≥ payout_confirmations + challenge_window` **does not hold** at these values (216,000 slots against 150 BSV blocks); the pay-and-refund race is closed structurally instead — `cancel_redeem` is refused while a claim is live. A **stored, timelock-mutable `Config` field**, like `v.maturity_blocks`"
+      "doc_description": "`D`. In Solana SLOTS, because a height deadline would never expire if the feed stalled. The earlier claim that `D \u2265 payout_confirmations + challenge_window` **does not hold** at these values (216,000 slots against 150 BSV blocks); the pay-and-refund race is closed structurally instead \u2014 `cancel_redeem` is refused while a claim is live. A **stored, timelock-mutable `Config` field**, like `v.maturity_blocks`"
     },
     {
       "id": "po.cancel_grace",
@@ -594,9 +594,9 @@
       "value": 5080,
       "status": "designed",
       "provenance": "measured",
-      "description": "(bytes + 128) × 5,080. The 128-byte overhead is inside this rate. 6,960 is an older toolchain's constant and overstates by ~37%. Measured: solana rent 0 = 650,240 lamports; solana rent 165 = 1,488,440",
+      "description": "(bytes + 128) \u00d7 5,080. The 128-byte overhead is inside this rate. 6,960 is an older toolchain's constant and overstates by ~37%. Measured: solana rent 0 = 650,240 lamports; solana rent 165 = 1,488,440",
       "csv_value": "%V% lamports/byte mea",
-      "doc_description": "`(bytes + 128) × 5,080`. **The 128-byte overhead is inside this rate.** 6,960 is an older toolchain's constant and overstates by ~37%. Measured: `solana rent 0` = 650,240 lamports; `solana rent 165` = 1,488,440"
+      "doc_description": "`(bytes + 128) \u00d7 5,080`. **The 128-byte overhead is inside this rate.** 6,960 is an older toolchain's constant and overstates by ~37%. Measured: `solana rent 0` = 650,240 lamports; `solana rent 165` = 1,488,440"
     },
     {
       "id": "m.signature_fee",
@@ -614,10 +614,10 @@
       "value": 8,
       "status": "built-frozen",
       "provenance": "measured",
-      "description": "—",
+      "description": "\u2014",
       "csv_value": "%v% mea",
       "doc_name": "`solBSV` decimals",
-      "doc_description": "—"
+      "doc_description": "\u2014"
     },
     {
       "id": "m.blob_max",
@@ -731,7 +731,7 @@
     },
     {
       "id": "measured-constants",
-      "heading": "## Measured constants — do not change without re-measuring",
+      "heading": "## Measured constants \u2014 do not change without re-measuring",
       "parameters": [
         "m.rent_per_byte",
         "m.signature_fee",
@@ -787,7 +787,7 @@
       {
         "short": "ph",
         "name": "placeholder",
-        "meaning": "A starting value — or no value yet — expected to move"
+        "meaning": "A starting value \u2014 or no value yet \u2014 expected to move"
       },
       {
         "short": "der",
