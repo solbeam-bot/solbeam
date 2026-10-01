@@ -11,7 +11,7 @@ Every property below is one of three things, and they are labelled:
   them;
 - **trusted** — off-chain, and not enforceable by the program at all.
 
-**The built set is 21 instructions and 64 passing / 0 failing.** Membership, the reserve script, the
+**The built set is 21 instructions and 66 passing / 0 failing.** Membership, the reserve script, the
 Greycore, governance and peg-out are specified in [03. The federation](03-the-federation.md), not
 coded.
 

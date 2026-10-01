@@ -78,7 +78,7 @@ proof of guilt (D13). **Redemptions are never pausable** (D11, D12).
 | **Three security layers** | A **threshold signature** catches a minority moving funds; **individual attestations** catch a minority's equivocation; a **covenant** (research, later) would catch a colluding majority. None catches a consistent majority. "Double threshold" means **a key plus a paper trail**, not a stronger threshold |
 | **Collusion accepted, transparency is the mitigation** | A colluding threshold can take the reserve; maximum loss is the non-member supply. Continuous publication of the reserve and supply converts a hidden theft into a visible one — an **early deliverable** |
 | **Genesis** | Members post a **BSV-side bond**, so no `solBSV` needs to exist first. A capped, explicitly-unbonded first mint is a documented later option, not chosen |
-| **Confirmed by test** | 64 on-chain tests / 0 failing, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`**, and the burn path exercised at a non-zero maturity |
+| **Confirmed by test** | 66 on-chain tests / 0 failing, cw-144 324/324 real mainnet headers, **160 real mainnet headers through `push_header`**, and the burn path exercised at a non-zero maturity |
 | **`MIN_CONFIRMATIONS = 12` protects a deposit today** | The vault's protective window is off by parameter; the 12-confirmation delay is **prevention**, not reversal |
 
 ---

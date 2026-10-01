@@ -167,6 +167,7 @@
         <li><strong>Escrow, not an immediate burn</strong> — because a burn is final and the payout might never happen. A holder whose tokens were burned at step one would have lost their claim on the reserve and hold nothing. Escrowing keeps <code>supply ≤ reserve</code> true at every point in between.</li>
         <li><strong>The fee needs no account.</strong> The holder redeems <code>A</code> and receives <code>A − fee</code>; the reserve falls by <code>A − fee</code>, the supply falls by <code>A</code>, so the reserve-to-supply ratio <strong>improves by the fee</strong>. The members keep it in BSV, inside the reserve they already hold.</li>
         <li><strong>The deadline is in Solana slots, not BSV height</strong> — deliberately. A height deadline would never expire if the header feed stalled, and the holder's funds would freeze with no way out.</li>
+        <li><strong>And the escrow cannot latch.</strong> A claim whose payout block has left the light client's window can no longer be settled — so it is no longer <em>live</em>, and <code>cancel_redeem</code> returns the holder's tokens. Without that, a holder could reach a state where settle fails, cancel fails, and their <code>solBSV</code> is stuck permanently. Re-claiming is possible only with a payable proof, and it re-locks cancellation only while the claim is genuinely live.</li>
         <li><strong>But the payout is made by a member, not the program.</strong> The program can verify that BSV moved; it cannot move BSV. <strong>Until there is a federation, nobody is obliged to pay</strong>, so every redemption would time out into cancellation. That is a configuration rather than a defect — a holder is never stuck, only delayed — but it means peg-out cannot be demonstrated end to end until Phase 4 exists.</li>
       </ul>
     </div>
@@ -203,7 +204,7 @@
     <h2>What is proven so far</h2>
     <div class="tally">
       <span><b>21</b> instructions built</span>
-      <span><b>64</b> on-chain tests</span>
+      <span><b>66</b> on-chain tests</span>
       <span><b>0</b> of peg-out built</span>
       <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>
