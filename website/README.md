@@ -23,6 +23,10 @@ website/
 │   └── index.html          ← About page ("WHAT" + links)
 └── status/
     └── index.html          ← Implementation status (temporary — see below)
+├── monitor/
+│   ├── index.html          ← Live chain and market monitoring
+│   ├── monitor.js          ← Client-side fetches; no build step, no keys
+│   └── data.json           ← Hand-published reserve/supply figures (null = NOT PUBLISHED)
 ```
 
 ### The status page

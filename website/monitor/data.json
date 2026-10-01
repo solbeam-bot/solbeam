@@ -1,0 +1,45 @@
+{
+  "_what": "Hand-published values for the /monitor/ page. Nothing in this file is fetched from a public API. `null` means NOT PUBLISHED — the page renders that as an explicit placeholder, never as 0 and never as a dash.",
+  "_how_to_update": "Edit the numbers, set published_at to the current UTC time in ISO-8601 (e.g. 2026-10-01T05:00:00Z), commit. No HTML or JavaScript edit is needed.",
+  "_warning": "Do not put a value here that you have not actually measured or that nobody can verify. This page is a stated mitigation: the reserve and the supply are published because the protocol cannot check them, and a wrong number here is worse than a placeholder.",
+  "version": 1,
+
+  "published_at": null,
+
+  "reserve": {
+    "bsv_held": null,
+    "as_of": null,
+    "_what": "Total BSV held by the reserve — the federation's 2-of-2 OP_CHECKMULTISIG. It is off-chain BSV, so no public API can read it.",
+    "_units": "BSV",
+    "_populated_when": "By hand, from the reserve addresses, once a federation holds a reserve on a public network. The federation does not exist yet, so there is nothing to publish."
+  },
+
+  "supply": {
+    "solbsv_minted": null,
+    "as_of": null,
+    "_what": "Outstanding solBSV across all holders and the program vault.",
+    "_units": "solBSV (1 base unit = 1 satoshi; 8 decimals)",
+    "_populated_when": "By hand, from the program's mint account, once the program is deployed to a public network. It is on-chain today, but only on a local solana-test-validator, so there is no public mint to read."
+  },
+
+  "attack_cost_assumptions": {
+    "_what": "Assumptions, not measurements. The cost-to-rewrite figure on /monitor/ is computed in the reader's browser from the LIVE BSV hashrate (estimate) and the numbers below. They are printed on the page, with units, because the whole design leans on this cost. Change them here to restate the estimate; nobody should have to edit the HTML.",
+    "_disclaimer": "This is an electricity-only floor with an assumed machine. It is not a quote, it is not a measurement, and it excludes the cost of buying or renting the hardware.",
+
+    "hashrate_multiple": 1.0,
+    "_hashrate_multiple_units": "multiple of the network's current estimated hashrate that an attacker assembles. 1.0 = the whole network, enough to build a heavier chain; a bare majority is about 0.51.",
+
+    "machine": "Bitmain Antminer S19k Pro",
+    "machine_hashrate_ths": 120,
+    "_machine_hashrate_ths_units": "TH/s per machine (1 TH/s = 1e12 H/s). Published spec figure.",
+
+    "machine_power_kw": 2.76,
+    "_machine_power_kw_units": "kW drawn per machine. Published spec figure.",
+
+    "energy_usd_per_kwh": 0.06,
+    "_energy_usd_per_kwh_units": "USD per kWh. ASSUMED energy price. Excludes hardware purchase, cooling, pool fees, and excludes the fact that renting SHA-256 on the open market normally costs more than raw electricity.",
+
+    "bsv_target_block_seconds": 600,
+    "_bsv_target_block_seconds_units": "seconds. BSV's target block interval, used to turn the live difficulty into an estimated network hashrate: hashrate = difficulty x 2^32 / this. Miners may mine faster or slower than the target; the observed spacing is published separately."
+  }
+}

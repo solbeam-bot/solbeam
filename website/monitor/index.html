@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Monitoring — SOLBEAM</title>
+  <meta name="description" content="The two things SOLBEAM cannot enforce — a colluding signer set and a spend nobody challenges — are published instead: the reserve-to-supply ratio and the cost of rewriting the BSV chain that backs it, alongside live BSV hashrate, block height and spacing, SOL price, and Solana stake and throughput." />
+  <meta name="theme-color" content="#05060A" />
+  <meta property="og:title" content="Monitoring — SOLBEAM" />
+  <meta property="og:description" content="Reserve against supply, and the cost to rewrite the BSV chain. Network figures live from public, keyless APIs." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://solbeam.me/monitor/" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    /* Page-local styling only. The palette, type and surfaces come from /styles.css. */
+    .lp { max-width: 860px; text-align: left; }
+    .lp h1 { font-size: clamp(34px, 9vw, 54px); margin: 0 0 6px; }
+    .lp .lede { color: var(--muted); font-size: 17px; line-height: 1.6; margin: 0 0 6px; }
+    .lp h2 {
+      font-size: 13px; font-weight: 700; margin: 40px 0 14px;
+      color: var(--sol-green); letter-spacing: .20em; text-transform: uppercase;
+    }
+    .note {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 14px 18px; color: #C9D2E3; font-size: 15px; line-height: 1.65;
+      backdrop-filter: blur(8px); margin: 0 0 14px;
+    }
+    .note strong { color: var(--text); }
+    .note a { color: #C9D2E3; }
+
+    .hero { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 700px) { .hero { grid-template-columns: 1fr 1fr; } }
+
+    .mon-card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 18px; backdrop-filter: blur(8px);
+      display: flex; flex-direction: column; gap: 7px; min-width: 0;
+    }
+    .hero .mon-card { padding: 22px; }
+    .mon-card.is-placeholder { border-style: dashed; border-color: rgba(228, 161, 27, .45); }
+
+    .mon-card__label {
+      font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--muted); font-weight: 600;
+    }
+    .mon-card__fig {
+      font-size: clamp(24px, 6vw, 30px); font-weight: 750; line-height: 1.1;
+      font-variant-numeric: tabular-nums; letter-spacing: .01em; overflow-wrap: anywhere;
+    }
+    .hero .mon-card__fig { font-size: clamp(28px, 7vw, 42px); }
+    .mon-card__state {
+      font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700;
+      color: var(--muted);
+    }
+    .mon-card__meta { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+    .mon-card__meta a { color: #C9D2E3; }
+
+    .is-live { color: var(--sol-green); }
+    .is-cached { color: var(--sol-blue); }
+    .is-derived { color: var(--bsv-gold, #E4A11B); }
+    .is-down { color: #F97066; }
+    .is-none { color: var(--bsv-gold, #E4A11B); }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+
+    .mon-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+      margin: 14px 0 0; font-size: 13px; color: var(--muted);
+    }
+    .mon-refresh {
+      font: inherit; font-size: 14px; font-weight: 600; color: var(--text);
+      background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+      padding: 9px 18px; cursor: pointer;
+      transition: border-color .16s ease;
+    }
+    .mon-refresh:hover { border-color: rgba(255,255,255,.30); }
+    .mon-refresh:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 2px; }
+
+    table.assum { width: 100%; border-collapse: collapse; font-size: 14px; }
+    table.assum th, table.assum td {
+      text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border);
+      color: #C9D2E3; vertical-align: top;
+    }
+    table.assum th { color: var(--muted); font-weight: 600; font-size: 12px;
+      letter-spacing: .10em; text-transform: uppercase; }
+    table.assum td:last-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    @media (max-width: 560px) { table.assum td:last-child { white-space: normal; } }
+
+    .formula {
+      font-size: 13.5px; color: #C9D2E3; background: rgba(255,255,255,.04);
+      border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+      overflow-x: auto; white-space: nowrap;
+    }
+
+    .lp .points { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .lp .points li {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 14px 18px; color: #C9D2E3; font-size: 15px; line-height: 1.6;
+      backdrop-filter: blur(8px);
+    }
+    .lp .points strong { color: var(--text); }
+    .lp .back { display: inline-block; margin-top: 36px; color: var(--muted); text-decoration: none; font-size: 14px; }
+    .lp .back:hover { color: var(--text); text-decoration: underline; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .mon-refresh { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <span class="bg__glow bg__glow--purple"></span>
+    <span class="bg__glow bg__glow--green"></span>
+    <span class="bg__glow bg__glow--blue"></span>
+    <span class="bg__grid"></span>
+  </div>
+
+  <main class="wrap lp">
+    <h1 class="title">Monitoring</h1>
+    <p class="lede">What the design cannot enforce, published instead.</p>
+
+    <p class="note" style="margin-top:18px">
+      <strong>Why this page exists.</strong> Two things the design cannot prevent: a signer set that
+      colludes, and a spend nobody challenges. Neither can be stopped inside the protocol — the
+      reserve is off-chain BSV that no Solana program can read, and a threshold signature does not
+      reveal who signed it. What is left is that both must be <em>visible</em>. So this page publishes
+      the reserve against the supply, and the cost of rewriting the chain that backs it. It is a stated
+      mitigation in the trust model, not a dashboard.
+    </p>
+
+    <p class="note">
+      <strong>What is live here and what is not.</strong> The network figures — BSV hashrate, block
+      height, block spacing, BSV and SOL price, Solana stake and throughput — are fetched by your
+      browser from public, keyless APIs. The <strong>reserve, the supply and their ratio are not
+      published yet</strong>, because the federation does not exist and <code>solBSV</code> exists only
+      on a local validator. Those three are marked <em>NOT PUBLISHED</em> everywhere they appear.
+      Nothing on this page claims monitoring is live for anything that is not.
+    </p>
+
+    <h2>The two numbers that matter</h2>
+    <div class="hero">
+      <div class="mon-card is-placeholder" id="card-ratio">
+        <span class="mon-card__label">Reserve-to-supply ratio</span>
+        <span class="mon-card__fig" id="fig-ratio">NOT PUBLISHED</span>
+        <span class="mon-card__state is-none" id="state-ratio">placeholder</span>
+        <span class="mon-card__meta" id="meta-ratio">Custodied BSV &divide; outstanding <code>solBSV</code>. The protocol cannot check this — the reserve is off-chain. It is published by hand in <a href="/monitor/data.json">data.json</a> and shown here.</span>
+      </div>
+
+      <div class="mon-card" id="card-attack">
+        <span class="mon-card__label">Cost to out-mine the BSV chain</span>
+        <span class="mon-card__fig" id="fig-attack">not loaded</span>
+        <span class="mon-card__state is-derived" id="state-attack">derived &middot; assumption</span>
+        <span class="mon-card__meta" id="meta-attack">What it would cost, at today's BSV hashrate, to assemble enough SHA-256 to build a heavier chain. The hashrate is live; the hardware and energy figures are an assumption we state in full below. Requires JavaScript.</span>
+      </div>
+    </div>
+
+    <div class="mon-bar">
+      <button class="mon-refresh" id="refresh" type="button">Refresh live figures</button>
+      <span id="updated" role="status" aria-live="polite">Loading live figures&hellip;</span>
+    </div>
+
+    <noscript>
+      <p class="note" style="margin-top:16px">
+        <strong>JavaScript is off, so nothing on this page is being measured right now.</strong>
+        The live figures — BSV hashrate, block height, block spacing, BSV and SOL price, Solana stake and
+        throughput — are fetched by your browser from public APIs, and cannot be fetched without
+        JavaScript. Each card below still names its source, so you can check every figure yourself.
+        The reserve, the supply and the ratio are placeholders regardless of JavaScript: the page reads
+        them from <a href="/monitor/data.json">data.json</a>, which currently holds no published values.
+      </p>
+    </noscript>
+
+    <h2>Live network figures</h2>
+    <p class="note">
+      Each figure is fetched directly by your browser. There is no server and no API key. If a source
+      is down or rate-limits, the card shows the last value it read and when, or it says
+      <strong>unavailable</strong> — it never shows a zero, because zero is a value and "we could not
+      read it" is not. Each card carries the source, the source's own timestamp where it publishes one,
+      and the time this browser read it.
+    </p>
+
+    <div class="grid">
+      <div class="mon-card">
+        <span class="mon-card__label">BSV hashrate <span style="text-transform:none;letter-spacing:0">(estimated)</span></span>
+        <span class="mon-card__fig" id="fig-bsv-hashrate">not loaded</span>
+        <span class="mon-card__state" id="state-bsv-hashrate"></span>
+        <span class="mon-card__meta" id="meta-bsv-hashrate">Requires JavaScript. Source: <a href="https://api.whatsonchain.com/v1/bsv/main/chain/info" target="_blank" rel="noopener">WhatsOnChain chain/info</a> (keyless) — difficulty, converted at BSV's 600&nbsp;s target.</span>
+      </div>
+
+      <div class="mon-card">
+        <span class="mon-card__label">BSV block height</span>
+        <span class="mon-card__fig" id="fig-bsv-height">not loaded</span>
+        <span class="mon-card__state" id="state-bsv-height"></span>
+        <span class="mon-card__meta" id="meta-bsv-height">Requires JavaScript. Source: <a href="https://api.whatsonchain.com/v1/bsv/main/chain/info" target="_blank" rel="noopener">WhatsOnChain chain/info</a> (keyless).</span>
+      </div>
+
+      <div class="mon-card">
+        <span class="mon-card__label">BSV observed block spacing</span>
+        <span class="mon-card__fig" id="fig-bsv-spacing">not loaded</span>
+        <span class="mon-card__state" id="state-bsv-spacing"></span>
+        <span class="mon-card__meta" id="meta-bsv-spacing">Requires JavaScript. Source: <a href="https://api.whatsonchain.com/v1/bsv/main/block/headers?count=10" target="_blank" rel="noopener">WhatsOnChain block/headers</a> (keyless) — the last 10 headers, so 9 intervals. Target is 600&nbsp;s.</span>
+      </div>
+
+      <div class="mon-card">
+        <span class="mon-card__label">BSV price</span>
+        <span class="mon-card__fig" id="fig-bsv-price">not loaded</span>
+        <span class="mon-card__state" id="state-bsv-price"></span>
+        <span class="mon-card__meta" id="meta-bsv-price">Requires JavaScript. Source: <a href="https://www.coingecko.com/en/coins/bitcoin-cash-sv" target="_blank" rel="noopener">CoinGecko</a>, falling back to <a href="https://api.coinbase.com/v2/prices/BSV-USD/spot" target="_blank" rel="noopener">Coinbase spot</a> (both keyless).</span>
+      </div>
+
+      <div class="mon-card">
+        <span class="mon-card__label">SOL price</span>
+        <span class="mon-card__fig" id="fig-sol-price">not loaded</span>
+        <span class="mon-card__state" id="state-sol-price"></span>
+        <span class="mon-card__meta" id="meta-sol-price">Requires JavaScript. Source: <a href="https://www.coingecko.com/en/coins/solana" target="_blank" rel="noopener">CoinGecko</a>, falling back to <a href="https://api.coinbase.com/v2/prices/SOL-USD/spot" target="_blank" rel="noopener">Coinbase spot</a> (both keyless).</span>
+      </div>
+
+      <div class="mon-card">
+        <span class="mon-card__label">Solana validator stake</span>
+        <span class="mon-card__fig" id="fig-sol-stake">not loaded</span>
+        <span class="mon-card__state" id="state-sol-stake"></span>
+        <span class="mon-card__meta" id="meta-sol-stake">Requires JavaScript. Source: <a href="https://solana-rpc.publicnode.com" target="_blank" rel="noopener">Solana RPC <code>getVoteAccounts</code></a> (keyless public endpoint) — active stake delegated to vote accounts, and the validator count.</span>
+      </div>
+
+      <div class="mon-card">
+        <span class="mon-card__label">Solana throughput</span>
+        <span class="mon-card__fig" id="fig-sol-tps">not loaded</span>
+        <span class="mon-card__state" id="state-sol-tps"></span>
+        <span class="mon-card__meta" id="meta-sol-tps">Requires JavaScript. Source: <a href="https://solana-rpc.publicnode.com" target="_blank" rel="noopener">Solana RPC <code>getRecentPerformanceSamples</code></a> (keyless public endpoint) — transactions per second over the latest 60&nbsp;s sample, with and without vote transactions.</span>
+      </div>
+    </div>
+
+    <h2>Why Solana has no hashrate</h2>
+    <p class="note">
+      Solana is <strong>proof-of-stake</strong>. There is no SHA-256 race, no difficulty, and no cost to
+      out-mine it, so a "SOL hashrate" would be a number that does not exist — and any page showing one
+      is showing a fabrication. What secures Solana is <strong>bonded stake</strong>, so the figures
+      above are the active stake and the validator count. BSV is <strong>proof-of-work</strong>: its
+      security is the cost of producing a heavier chain, so the figures are hashrate, difficulty and
+      spacing. The two chains are not symmetric and the page does not pretend they are.
+    </p>
+
+    <h2>Published by hand — not yet published</h2>
+    <p class="note">
+      Hand-published from <a href="/monitor/data.json">data.json</a>. Last published:
+      <strong id="published-at">never — no reserve or supply figure has been published yet</strong>.
+      These are placeholders because our own deployment is not on a public network. A placeholder here
+      is not a zero: it means nobody has published the figure, and the text says what would populate it
+      and when.
+    </p>
+
+    <div class="grid">
+      <div class="mon-card is-placeholder" id="card-reserve">
+        <span class="mon-card__label">BSV held in the reserve</span>
+        <span class="mon-card__fig" id="fig-reserve">NOT PUBLISHED</span>
+        <span class="mon-card__state is-none" id="state-reserve">placeholder</span>
+        <span class="mon-card__meta" id="meta-reserve">The BSV under the federation's 2-of-2 reserve script. It is off-chain, so no public API can read it. It will be published here by hand, from the reserve addresses, once a federation holds a reserve on a public network — the federation does not exist yet.</span>
+      </div>
+
+      <div class="mon-card is-placeholder" id="card-supply">
+        <span class="mon-card__label"><code>solBSV</code> minted</span>
+        <span class="mon-card__fig" id="fig-supply">NOT PUBLISHED</span>
+        <span class="mon-card__state is-none" id="state-supply">placeholder</span>
+        <span class="mon-card__meta" id="meta-supply">Outstanding <code>solBSV</code>. It is on-chain, but the program runs only on a local <code>solana-test-validator</code>, so there is no public mint to read. It will be published here when the program is on a public network.</span>
+      </div>
+    </div>
+
+    <h2>How the attack cost is derived</h2>
+    <p class="note">
+      This is the number the design leans on: if out-mining the chain costs less than the fraud is
+      worth, the confirmation depth is not a defence. It is derived from the <strong>live</strong> BSV
+      hashrate estimate and the assumptions below, which are ours, not measurements. They live in
+      <a href="/monitor/data.json">data.json</a> so restating the estimate needs no code change.
+    </p>
+
+    <div class="formula">cost/day &nbsp;=&nbsp; (network hashrate &times; hashrate_multiple &divide; machine_hashrate) &times; machine_power &times; energy_price &times; 24</div>
+
+    <table class="assum" style="margin-top:14px">
+      <thead>
+        <tr><th>Assumption</th><th>Value</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Attacker hashrate, as a multiple of the network estimate</td><td id="a-multiple">not loaded</td></tr>
+        <tr><td>Machine</td><td id="a-machine">not loaded</td></tr>
+        <tr><td>Machine hashrate</td><td id="a-mh">not loaded</td></tr>
+        <tr><td>Machine power draw</td><td id="a-power">not loaded</td></tr>
+        <tr><td>Energy price</td><td id="a-energy">not loaded</td></tr>
+        <tr><td>BSV target block interval</td><td id="a-target">not loaded</td></tr>
+      </tbody>
+    </table>
+
+    <table class="assum" style="margin-top:14px">
+      <thead>
+        <tr><th>Derived, from the live hashrate and the assumptions above</th><th>Value</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Hashrate the attacker must assemble</td><td id="d-needhash">not derived</td></tr>
+        <tr><td>Machines at the assumed spec</td><td id="d-machines">not derived</td></tr>
+        <tr><td>Power draw at that count</td><td id="d-power">not derived</td></tr>
+        <tr><td>Electricity cost per hour</td><td id="d-perhour">not derived</td></tr>
+        <tr><td>Electricity cost per day</td><td id="d-perday">not derived</td></tr>
+        <tr><td>Same cost, in BSV at the live BSV price</td><td id="d-bsvday">not derived</td></tr>
+      </tbody>
+    </table>
+
+    <ul class="points" style="margin-top:16px">
+      <li><strong>Electricity only.</strong> It excludes buying or renting the machines, cooling, bandwidth, pool fees, and the fact that rented SHA-256 normally costs more than raw electricity.</li>
+      <li><strong>It assumes the machines exist and are for sale.</strong> How much SHA-256 is actually available to rent is an open question in the plan — not a number we have. We do not invent one.</li>
+      <li><strong>SHA-256 is shared with BTC</strong>, where far more of it already exists. This figure is the cost of assembling hashrate equal to BSV's own; it is not a lower bound on what someone who already controls large SHA-256 could do.</li>
+      <li><strong>A bare majority costs less.</strong> The default multiple is 1.0&times; the network estimate, which is enough to build a heavier chain. Just over 50% is about half this figure.</li>
+      <li><strong>The assumption is stated, not hidden.</strong> The machine, its hash rate, its power draw, the energy price and the multiple are all printed above, with units, and are editable in <a href="/monitor/data.json">data.json</a>.</li>
+    </ul>
+
+    <p class="note" style="margin-top:22px">
+      <strong>What this page cannot do.</strong> It cannot verify the reserve. It cannot see a colluding
+      signer set. It cannot know whether a spend was challenged. It publishes numbers so that those
+      things, if they happen, are visible to anyone — and it is explicit about which numbers are
+      measured, which are derived, and which nobody has published at all.
+    </p>
+
+    <a class="back" href="/">&larr; Back to SOLBEAM</a>
+  </main>
+
+  <script src="/monitor/monitor.js" defer></script>
+</body>
+</html>
