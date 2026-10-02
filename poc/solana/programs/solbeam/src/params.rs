@@ -78,6 +78,11 @@ pub const DAA_CLAMP_LOW_MULTIPLIER: i64 = 72;
 /// As above
 pub const DAA_CLAMP_HIGH_MULTIPLIER: i64 = 288;
 
+/// `lc.allow_min_difficulty` -- Min-difficulty blocks -- `false dec`.
+///
+/// The node's fPowAllowMinDifficultyBlocks. When on, a header more than twice the target spacing after its parent may carry the pow-limit bits instead of the cw-144 target, and the client accepts it; when off, the exact cw-144 target is required. DEFAULT false: mainnet sets false, a BSV testnet sets true (bitcoin-sv src/chainparams.cpp). Carried on the light client's state and changeable through the timelocked authority. Chainwork is always counted from the header's ACTUAL bits, so a min-difficulty block credits the pow-limit work rather than the harder cw-144 work -- otherwise a chain of cheap blocks would outweigh an expensive one
+pub const ALLOW_MIN_DIFFICULTY: bool = false;
+
 // -- v --
 
 /// `v.maturity_blocks` -- Maturity -- `144 blocks`.

@@ -36,7 +36,7 @@ was chosen*.
 <!-- BEGIN GENERATED: status-legend -- edit config/params.json and run `python3 config/gen.py` -->
 | Status | Meaning | Count |
 |---|---|---|
-| **`built-mutable`** | In the program, in a runtime account, changeable through the timelocked authority | **2** |
+| **`built-mutable`** | In the program, in a runtime account, changeable through the timelocked authority | **3** |
 | **`built-frozen`** | In the program as a compiled constant; changing it needs a **redeploy** | **23** |
 | **`built-shape`** | The shape is enforced by the built program; the keys (or the authority) behind it are not | **2** |
 | **`designed`** | **Not in the program.** A specification row: decided policy, an external measurement, or a derived quantity the program does not carry | **29** |
@@ -50,7 +50,7 @@ was chosen*.
 | Provenance | Meaning | Count |
 |---|---|---|
 | **`measured`** | From the chain, the code or the toolchain. Do not change without re-measuring | **11** |
-| **`decided`** | A settled design choice | **31** |
+| **`decided`** | A settled design choice | **32** |
 | **`placeholder`** | A starting value — or no value yet — expected to move | **16** |
 | **`derived`** | Computed from other parameters; changing it directly is a bug | **6** |
 <!-- END GENERATED: provenance-legend -->
@@ -104,6 +104,7 @@ that lives only in this sheet.
 | `lc.max_account_create` | Solana account cap | **10,240 bytes** | `built-frozen` | `measured` | A Solana limit, not a choice |
 | `lc.cluster_id` | Deployment identifier | **open** | `open` | `placeholder` | Binds a deposit to one deployment (P11). Must differ per cluster. **Not built** — the code checks only that the recipient's 32 bytes appear in the `OP_RETURN` |
 | `lc.pow_limit_bits` | Maximum target | **`0x1d00ffff` / `0x207fffff`** | `built-frozen` | `measured` | In code as `MAINNET_POW_LIMIT_BITS`, with `no_retargeting` derived from the regtest value |
+| `lc.allow_min_difficulty` | Min-difficulty blocks | **false** | `built-mutable` | `decided` | The node's `fPowAllowMinDifficultyBlocks`. When on, a header **more than twice the target spacing after its parent** may carry the **pow-limit bits** instead of the cw-144 target, and the client accepts it; when off, the exact cw-144 target is required. **Default `false`**: mainnet sets `false`, a BSV testnet sets `true` (bitcoin-sv `src/chainparams.cpp`). Carried on the light client's state and changeable through the **timelocked authority**. Chainwork is always counted from the header's **actual `bits`**, so a min-difficulty block credits the pow-limit work rather than the harder cw-144 work — otherwise a chain of cheap blocks would outweigh an expensive one |
 | `lc.max_staleness_slots` | Freshness bound | **54,000 slots (~6 h)** | `built-frozen` | `derived` | How recent the last accepted header must be before release. A multiple of BSV block time — ~1,500 Solana slots per block. **Implemented (`StaleClient`), untested on a local validator** |
 
 ## Vault

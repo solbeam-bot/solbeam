@@ -186,6 +186,10 @@ RUST_CONSTANTS = [
     ("MAX_ACCOUNT_CREATE", "usize", "lc.max_account_create", None),
     ("DAA_CLAMP_LOW_MULTIPLIER", "i64", "lc.daa_clamp_low", None),
     ("DAA_CLAMP_HIGH_MULTIPLIER", "i64", "lc.daa_clamp_high", None),
+    # The node's `fPowAllowMinDifficultyBlocks`, as a compiled default. The
+    # program also carries it on `LightClient` state, so the value the suite
+    # reads here is the one an initialised account has.
+    ("ALLOW_MIN_DIFFICULTY", "bool", "lc.allow_min_difficulty", None),
     ("DEFAULT_MATURITY_BLOCKS", "u64", "v.maturity_blocks", None),
     ("TIMELOCK_SLOTS", "u64", "gov.authority_timelock", None),
     ("TOKEN_DECIMALS", "u8", "m.token_decimals", None),
@@ -770,6 +774,12 @@ def all_constants(params: dict) -> list[tuple[str, str, str, object]]:
 def rust_literal(name: str, value: object, expr: str | None) -> str:
     if expr is not None:
         return expr
+    # `bool` before `int`: Python's `bool` is an `int` subclass, so a flag
+    # projected as a number would render `True`/`False` -- not Rust -- and
+    # `rust_int` would turn it into `T_rue`/`F_alse`. A boolean row is a Rust
+    # `bool` and spells itself.
+    if isinstance(value, bool):
+        return "true" if value else "false"
     assert isinstance(value, int)
     if name == "TOKEN_DECIMALS":
         return str(value)

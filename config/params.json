@@ -144,6 +144,16 @@
       "doc_description": "In code as `MAINNET_POW_LIMIT_BITS`, with `no_retargeting` derived from the regtest value"
     },
     {
+      "id": "lc.allow_min_difficulty",
+      "name": "Min-difficulty blocks",
+      "value": false,
+      "status": "built-mutable",
+      "provenance": "decided",
+      "description": "The node's fPowAllowMinDifficultyBlocks. When on, a header more than twice the target spacing after its parent may carry the pow-limit bits instead of the cw-144 target, and the client accepts it; when off, the exact cw-144 target is required. DEFAULT false: mainnet sets false, a BSV testnet sets true (bitcoin-sv src/chainparams.cpp). Carried on the light client's state and changeable through the timelocked authority. Chainwork is always counted from the header's ACTUAL bits, so a min-difficulty block credits the pow-limit work rather than the harder cw-144 work -- otherwise a chain of cheap blocks would outweigh an expensive one",
+      "csv_value": "%v% dec",
+      "doc_description": "The node's `fPowAllowMinDifficultyBlocks`. When on, a header **more than twice the target spacing after its parent** may carry the **pow-limit bits** instead of the cw-144 target, and the client accepts it; when off, the exact cw-144 target is required. **Default `false`**: mainnet sets `false`, a BSV testnet sets `true` (bitcoin-sv `src/chainparams.cpp`). Carried on the light client's state and changeable through the **timelocked authority**. Chainwork is always counted from the header's **actual `bits`**, so a min-difficulty block credits the pow-limit work rather than the harder cw-144 work — otherwise a chain of cheap blocks would outweigh an expensive one"
+    },
+    {
       "id": "lc.max_staleness_slots",
       "name": "Freshness bound",
       "value": 54000,
@@ -692,6 +702,7 @@
         "lc.max_account_create",
         "lc.cluster_id",
         "lc.pow_limit_bits",
+        "lc.allow_min_difficulty",
         "lc.max_staleness_slots"
       ]
     },

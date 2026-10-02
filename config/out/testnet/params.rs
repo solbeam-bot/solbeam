@@ -17,8 +17,15 @@
 //!       Concretised to the single value BSV testnet actually uses. The mainnet
 //!       row carries the `mainnet / regtest` pair because the code covers both
 //!       chains; testnet's limit is mainnet's, so this is measured rather than
-//!       chosen. Recorded here with the min-difficulty gap, which is a real
-//!       obstacle for a testnet deployment and must not be left implicit.
+//!       chosen. The min-difficulty gap recorded here earlier is now closed by
+//!       the `lc.allow_min_difficulty` override below.
+//!   lc.allow_min_difficulty
+//!       The one row that actually makes the client follow a BSV testnet. The
+//!       value is measured from the node's own chainparams
+//!       (CTestNetParams.fPowAllowMinDifficultyBlocks = true) rather than chosen,
+//!       and the profile is the only place it differs from mainnet. With it off,
+//!       a valid testnet min-difficulty block is refused UnexpectedRetarget and
+//!       the chain stalls; that is the defect this row closes.
 //!   v.maturity_blocks
 //!       Shorter than 144 because a 24-hour maturity makes a test cycle a day
 //!       long. 6 keeps the mechanism exercised and the confirmations + maturity
@@ -120,6 +127,11 @@ pub const DAA_CLAMP_LOW_MULTIPLIER: i64 = 72;
 ///
 /// As above
 pub const DAA_CLAMP_HIGH_MULTIPLIER: i64 = 288;
+
+/// `lc.allow_min_difficulty` -- Min-difficulty blocks -- `true dec`.
+///
+/// TESTNET ONLY: true, not the mainnet false. bitcoin-sv sets fPowAllowMinDifficultyBlocks = true for CTestNetParams (src/chainparams.cpp), and its GetNextCashWorkRequired (src/pow.cpp) returns the powLimit compact whenever the new block's time is more than 2 * nPowTargetSpacing after its parent. The rule lives in the DAA path only, so it does not apply to a no-retargeting (regtest) chain. This profile turns it on so the client follows a testnet that emits min-difficulty blocks, instead of rejecting a valid block with UnexpectedRetarget. Chainwork is counted from each header's actual bits, so a min-difficulty block credits the pow-limit work.
+pub const ALLOW_MIN_DIFFICULTY: bool = true;
 
 // -- v --
 
