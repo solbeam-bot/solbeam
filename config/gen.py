@@ -56,20 +56,42 @@ emit.
 The legend's counts are generated with the legend tables, so they cannot drift
 from the rows either.
 
+Profiles
+--------
+
+`config/params.json` describes one deployment: the mainnet one.  A **profile**
+is an *overlay* on it -- `config/params.<name>.json` -- that carries only the
+rows that differ for that deployment, so there is still exactly one source of
+truth per value:
+
+    python3 config/gen.py --profile testnet   # write the testnet projections
+    python3 config/gen.py --check             # check mainnet AND every profile
+
+A profile's projections go to `config/out/<name>/` and are **never** written
+over the mainnet files.  `params.rs` there is not read by the program and
+`tests-params.json` is not read by the suite; deploying a profile means copying
+its `params.rs` over the program's by hand, which is a deliberate act.  A
+profile never changes what the default run (no flag) writes, and it is checked
+by the same code paths as the main sheet.
+
 Usage:
-    python3 config/gen.py              # verify, then (re)write the projections
-    python3 config/gen.py --check      # verify only; fail if a projection is stale
-    python3 config/gen.py --from-csv   # bootstrap config/params.json from the CSV
+    python3 config/gen.py                    # verify, then (re)write mainnet
+    python3 config/gen.py --check            # verify mainnet and every profile
+    python3 config/gen.py --profile testnet  # write the testnet projections
+    python3 config/gen.py --check --profile testnet
+    python3 config/gen.py --from-csv         # bootstrap config/params.json
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import io
 import json
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -78,6 +100,14 @@ PARAMS_CSV = ROOT / "docs" / "parameters.csv"
 PARAMS_MD = ROOT / "docs" / "06-parameters.md"
 PARAMS_RS = ROOT / "poc" / "solana" / "programs" / "solbeam" / "src" / "params.rs"
 TESTS_JSON = ROOT / "poc" / "solana" / "tests" / "params.json"
+
+# Profiles.  `config/params.<name>.json` is an overlay on PARAMS_JSON; the
+# merged sheet is projected into `config/out/<name>/`, a directory whose name
+# is the profile, so a profile artifact can never be mistaken for a mainnet
+# one.  Nothing outside `config/` is written for a profile.
+CONFIG_DIR = ROOT / "config"
+PROFILE_OVERLAY_RE = re.compile(r"^params\.([A-Za-z0-9_-]+)\.json$")
+PROFILES_OUT = CONFIG_DIR / "out"
 
 CSV_COLUMNS = ["id", "name", "value", "status", "provenance", "description"]
 
@@ -359,6 +389,81 @@ def load_params(require_sheet: bool = True) -> dict:
     return params
 
 
+def profile_overlay_path(name: str) -> Path:
+    return CONFIG_DIR / f"params.{name}.json"
+
+
+def profile_names() -> list[str]:
+    """Every profile that has an overlay, in a stable order."""
+    names = []
+    for path in sorted(CONFIG_DIR.glob("params.*.json")):
+        match = PROFILE_OVERLAY_RE.match(path.name)
+        if match and path != PARAMS_JSON:
+            names.append(match.group(1))
+    return names
+
+
+def load_profile(name: str) -> tuple[dict, list[tuple[str, str]]]:
+    """Merge `config/params.<name>.json` over `config/params.json`.
+
+    The overlay carries only the rows that differ for this deployment, and each
+    override must (a) name a row that exists, (b) set only fields the base row
+    already has, (c) actually change the row, and (d) carry a non-empty `_what`
+    saying why it differs.  The merged sheet then goes through the same
+    `check_sheet` as the main one.
+
+    Returns the merged sheet and `[(id, _what), ...]` in overlay order.
+    """
+    path = profile_overlay_path(name)
+    if not path.exists():
+        die(f"no {path.relative_to(ROOT)} -- a profile is an overlay named "
+            f"config/params.<profile>.json")
+    overlay = json.loads(path.read_text(encoding="utf-8"))
+    if overlay.get("profile") != name:
+        die(f"{path.relative_to(ROOT)}: profile is {overlay.get('profile')!r}, "
+            f"expected {name!r}")
+    rows = overlay.get("overrides")
+    if not isinstance(rows, list) or not rows:
+        die(f"{path.relative_to(ROOT)}: `overrides` must be a non-empty list "
+            "of rows")
+
+    merged = copy.deepcopy(load_params())
+    by_id = {p["id"]: p for p in merged["parameters"]}
+    seen: set[str] = set()
+    overrides: list[tuple[str, str]] = []
+    for row in rows:
+        pid = row.get("id")
+        if not isinstance(pid, str) or pid not in by_id:
+            die(f"{path.relative_to(ROOT)}: override id {pid!r} is not a row in "
+                "config/params.json")
+        if pid in seen:
+            die(f"{path.relative_to(ROOT)}: {pid} is overridden twice")
+        seen.add(pid)
+        what = row.get("_what")
+        if not isinstance(what, str) or not what.strip():
+            die(f"{path.relative_to(ROOT)}: {pid} has no `_what`; every "
+                "override must say why it differs from the main sheet")
+        unknown = [k for k in row if k != "_what" and k not in by_id[pid]]
+        if unknown:
+            die(f"{path.relative_to(ROOT)}: {pid} sets field(s) the row does "
+                f"not have: {', '.join(sorted(unknown))} -- a typo there would "
+                "silently leave the main value in place")
+        candidate = copy.deepcopy(by_id[pid])
+        for key, value in row.items():
+            if key in ("id", "_what"):
+                continue
+            candidate[key] = value
+        if candidate == by_id[pid]:
+            die(f"{path.relative_to(ROOT)}: {pid} changes nothing; an overlay "
+                "carries only the rows that differ")
+        by_id[pid].clear()
+        by_id[pid].update(candidate)
+        overrides.append((pid, " ".join(what.split())))
+
+    check_sheet(merged)
+    return merged, overrides
+
+
 def check_sheet(params: dict) -> None:
     """The JSON's own shape, before any projection is looked at."""
     ids = [p["id"] for p in params["parameters"]]
@@ -405,9 +510,27 @@ def check_sheet(params: dict) -> None:
         check_template(param)
 
 
-def emit_csv(params: dict) -> bytes:
-    """The exact bytes of the checked-in CSV: CRLF, minimal quoting."""
+def wrap_comment(text: str, width: int, prefix: str) -> list[str]:
+    """One comment block: `text` wrapped, every line carrying `prefix`."""
+    lines = textwrap.wrap(" ".join(text.split()), width=width) or [""]
+    return [prefix + line for line in lines]
+
+
+def emit_csv(params: dict, profile: str | None = None,
+             overrides: list[tuple[str, str]] | None = None) -> bytes:
+    """The exact bytes of the checked-in CSV: CRLF, minimal quoting.
+
+    For a profile the cell bytes are the same but the file opens with `#`
+    comment lines naming the profile, so the artifact cannot be mistaken for
+    `docs/parameters.csv`.  A reader of a profile CSV must skip those lines.
+    """
     buf = io.StringIO(newline="")
+    if profile is not None:
+        buf.write(f"# profile: {profile} -- NOT docs/parameters.csv, the "
+                  "mainnet projection\r\n")
+        buf.write(f"# generated from config/params.json overlaid with "
+                  f"config/params.{profile}.json\r\n")
+        buf.write(f"# overrides: {', '.join(p for p, _ in overrides or [])}\r\n")
     writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, lineterminator="\r\n")
     writer.writeheader()
     for param in params["parameters"]:
@@ -653,7 +776,28 @@ def rust_literal(name: str, value: object, expr: str | None) -> str:
     return rust_int(value)
 
 
-def emit_rust(params: dict) -> str:
+def profile_rust_banner(profile: str,
+                        overrides: list[tuple[str, str]]) -> list[str]:
+    """The `//!` header that marks a profile's `params.rs` as not mainnet."""
+    lines = [f"//! @profile {profile} -- NOT the mainnet projection.",
+             "//!"]
+    lines += wrap_comment(
+        f"Generated by `python3 config/gen.py --profile {profile}` from "
+        f"`config/params.json` overlaid with `config/params.{profile}.json`. "
+        "The mainnet projection is "
+        "`poc/solana/programs/solbeam/src/params.rs`; the program and the test "
+        "suite do not read this file, so deploying it is a deliberate copy.",
+        76, "//! ")
+    lines += ["//!", "//! Overridden rows, and why they differ:"]
+    for pid, what in overrides:
+        lines.append(f"//!   {pid}")
+        lines += wrap_comment(what, 72, "//!       ")
+    lines.append("")
+    return lines
+
+
+def emit_rust(params: dict, profile: str | None = None,
+              overrides: list[tuple[str, str]] | None = None) -> str:
     by_id = {p["id"]: p for p in params["parameters"]}
     lines: list[str] = [
         "//! The SOLBEAM parameter sheet, as Rust constants.",
@@ -675,6 +819,8 @@ def emit_rust(params: dict) -> str:
         "#![allow(dead_code)]",
         "",
     ]
+    if profile is not None:
+        lines = profile_rust_banner(profile, overrides or []) + lines
     group = None
     for name, ty, pid, value in all_constants(params):
         param = by_id[pid]
@@ -694,15 +840,27 @@ def emit_rust(params: dict) -> str:
     return "\n".join(lines)
 
 
-def emit_tests_json(params: dict) -> str:
+def emit_tests_json(params: dict, profile: str | None = None,
+                    overrides: list[tuple[str, str]] | None = None) -> str:
     constants = {
         name: value for name, _ty, _pid, value in all_constants(params)
     }
-    mirror = {
-        "$generated": "config/gen.py from config/params.json -- DO NOT EDIT",
+    source = "config/params.json"
+    if profile is not None:
+        source += f" overlaid with config/params.{profile}.json"
+    mirror: dict = {
+        "$generated": f"config/gen.py from {source} -- DO NOT EDIT",
         "constants": constants,
         "parameters": {p["id"]: p["value"] for p in params["parameters"]},
     }
+    if profile is not None:
+        mirror = {
+            "$profile": profile,
+            "$not": ("the mainnet mirror (poc/solana/tests/params.json); the "
+                     "suite does not read this file"),
+            "$overrides": {pid: what for pid, what in overrides or []},
+            **mirror,
+        }
     return json.dumps(mirror, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -742,6 +900,34 @@ def check_doc_fences(text: str) -> None:
             die(f"{PARAMS_MD.relative_to(ROOT)} is missing the `{name}` "
                 "fenced region; add the BEGIN/END markers around the "
                 "generated tables")
+
+
+def emit_profile_doc(params: dict, profile: str,
+                     overrides: list[tuple[str, str]]) -> str:
+    """The profile's parameter tables, behind a banner that names it.
+
+    This is deliberately **not** a copy of `docs/06-parameters.md`: the prose
+    there describes the mainnet deployment.  A profile artifact carries the
+    generated tables for the merged sheet and the list of overrides, and says
+    where the mainnet tables live.
+    """
+    out = [
+        f"<!-- BEGIN PROFILE BANNER: {profile} (generated) -->",
+        f"# Parameter tables -- profile `{profile}`",
+        "",
+        f"**Not the mainnet tables.** They are `docs/06-parameters.md`. This "
+        f"file is generated by `python3 config/gen.py --profile {profile}` "
+        f"from `config/params.json` overlaid with "
+        f"`config/params.{profile}.json`, and nothing reads it.",
+        "",
+        "Rows that differ from the main sheet, and why:",
+        "",
+    ]
+    for pid, what in overrides:
+        out.append(f"- `{pid}` -- {what}")
+    out += ["", f"<!-- END PROFILE BANNER: {profile} -->", "",
+            emit_doc_parameter_tables(params), ""]
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -796,23 +982,70 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 # main
 # ---------------------------------------------------------------------------
 
-def plan_outputs(params: dict) -> dict[Path, bytes]:
-    """Every projection, as bytes, without touching the filesystem."""
-    doc_before = PARAMS_MD.read_text(encoding="utf-8")
-    check_doc_fences(doc_before)
-    doc_after = emit_doc(params, doc_before)
+def plan_outputs(params: dict, profile: str | None = None,
+                overrides: list[tuple[str, str]] | None = None) -> dict[Path, bytes]:
+    """Every projection, as bytes, without touching the filesystem.
+
+    With no profile this is the mainnet projection -- it reads the checked-in
+    `docs/06-parameters.md` for the hand-written prose around the fenced
+    regions.  With a profile it writes only `config/out/<profile>/` and reads
+    no mainnet projection, so a profile run cannot touch a mainnet file.
+    """
+    overrides = overrides or []
+    if profile is None:
+        doc_before = PARAMS_MD.read_text(encoding="utf-8")
+        check_doc_fences(doc_before)
+        doc_after = emit_doc(params, doc_before)
+        return {
+            PARAMS_CSV: emit_csv(params),
+            PARAMS_MD: doc_after.encode("utf-8"),
+            PARAMS_RS: emit_rust(params).encode("utf-8"),
+            TESTS_JSON: emit_tests_json(params).encode("utf-8"),
+        }
+    out = PROFILES_OUT / profile
     return {
-        PARAMS_CSV: emit_csv(params),
-        PARAMS_MD: doc_after.encode("utf-8"),
-        PARAMS_RS: emit_rust(params).encode("utf-8"),
-        TESTS_JSON: emit_tests_json(params).encode("utf-8"),
+        out / "parameters.csv": emit_csv(params, profile, overrides),
+        out / "06-parameters.md":
+            emit_profile_doc(params, profile, overrides).encode("utf-8"),
+        out / "params.rs": emit_rust(params, profile, overrides).encode("utf-8"),
+        out / "tests-params.json":
+            emit_tests_json(params, profile, overrides).encode("utf-8"),
     }
+
+
+def check_params(params: dict) -> None:
+    """Every in-memory check a sheet must pass before anything is written."""
+    check_csv_round_trip(params)
+    check_doc_round_trip(params)
+    check_legend_covers(params)
+    check_arithmetic(params)
+    check_code_constants(params)
+
+
+def stale_of(outputs: dict[Path, bytes]) -> list[Path]:
+    return [path for path, content in outputs.items()
+            if not path.exists() or path.read_bytes() != content]
+
+
+def regen_hint(profile: str | None) -> str:
+    return ("python3 config/gen.py" if profile is None
+            else f"python3 config/gen.py --profile {profile}")
+
+
+def report_stale(stale: list[Path], profile: str | None) -> None:
+    for path in stale:
+        print(f"gen.py: {path.relative_to(ROOT)} is stale; run "
+              f"`{regen_hint(profile)}`", file=sys.stderr)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true",
                         help="verify only; fail if a generated file is stale")
+    parser.add_argument("--profile", metavar="NAME", default=None,
+                        help="project config/params.json overlaid with "
+                             "config/params.NAME.json into config/out/NAME/ "
+                             "instead of the mainnet files")
     parser.add_argument("--from-csv", action="store_true",
                         help="bootstrap config/params.json from docs/parameters.csv "
                              "(one-shot; re-apply the value templates afterwards)")
@@ -829,36 +1062,52 @@ def main() -> None:
         print(f"gen.py: wrote {PARAMS_JSON.relative_to(ROOT)} from "
               f"{PARAMS_CSV.relative_to(ROOT)}")
 
-    params = load_params()
-    if not PARAMS_MD.exists():
-        die(f"{PARAMS_MD.relative_to(ROOT)} does not exist")
-    if not PARAMS_MD.read_text(encoding="utf-8"):
-        die(f"{PARAMS_MD.relative_to(ROOT)} is empty")
+    if args.profile is not None and not re.fullmatch(r"[A-Za-z0-9_-]+",
+                                                     args.profile):
+        die(f"--profile {args.profile!r} is not a profile name "
+            "(letters, digits, '-' and '_')")
+
+    overrides: list[tuple[str, str]] = []
+    if args.profile is None:
+        params = load_params()
+        if not PARAMS_MD.exists():
+            die(f"{PARAMS_MD.relative_to(ROOT)} does not exist")
+        if not PARAMS_MD.read_text(encoding="utf-8"):
+            die(f"{PARAMS_MD.relative_to(ROOT)} is empty")
+    else:
+        params, overrides = load_profile(args.profile)
 
     # Verify everything before writing anything.  Every projection is computed
-    # first and checked against the JSON; a failure here writes no file at all.
-    check_csv_round_trip(params)
-    check_doc_round_trip(params)
-    check_legend_covers(params)
-    check_arithmetic(params)
-    check_code_constants(params)
-    outputs = plan_outputs(params)
+    # first and checked against the sheet; a failure here writes no file at all.
+    check_params(params)
+    outputs = plan_outputs(params, args.profile, overrides)
+    stale = stale_of(outputs)
 
-    # ... and check the checked-in bytes against the computed ones.
-    stale: list[Path] = []
-    for path, content in outputs.items():
-        if not path.exists() or path.read_bytes() != content:
-            stale.append(path)
     if args.check:
-        for path in stale:
-            print(f"gen.py: {path.relative_to(ROOT)} is stale; run "
-                  "`python3 config/gen.py`", file=sys.stderr)
+        report_stale(stale, args.profile)
         if stale:
             die(f"{len(stale)} generated file(s) are stale")
         for path in outputs:
             print(f"gen.py: {path.relative_to(ROOT)} is up to date")
-        print("gen.py: config/params.json agrees with docs/parameters.csv "
-              "and docs/06-parameters.md")
+        if args.profile is None:
+            # `--check` covers the profiles too.  A profile's projections are
+            # as load-bearing as the mainnet ones -- the difference is only
+            # that a profile's are not read by the program or the suite.
+            for name in profile_names():
+                p_params, p_overrides = load_profile(name)
+                check_params(p_params)
+                p_outputs = plan_outputs(p_params, name, p_overrides)
+                p_stale = stale_of(p_outputs)
+                report_stale(p_stale, name)
+                if p_stale:
+                    die(f"{len(p_stale)} generated file(s) are stale")
+                for path in p_outputs:
+                    print(f"gen.py: {path.relative_to(ROOT)} is up to date")
+            print("gen.py: config/params.json agrees with docs/parameters.csv, "
+                  "docs/06-parameters.md and every profile")
+        else:
+            print(f"gen.py: profile {args.profile!r} agrees with its own "
+                  "projections (the mainnet files were not checked)")
         return
 
     for path, content in outputs.items():
@@ -868,8 +1117,13 @@ def main() -> None:
             print(f"gen.py: wrote {path.relative_to(ROOT)}")
         else:
             print(f"gen.py: {path.relative_to(ROOT)} is up to date")
-    print("gen.py: config/params.json agrees with docs/parameters.csv "
-          "and docs/06-parameters.md")
+    if args.profile is None:
+        print("gen.py: config/params.json agrees with docs/parameters.csv "
+              "and docs/06-parameters.md")
+    else:
+        print(f"gen.py: profile {args.profile!r} projected to "
+              f"{(PROFILES_OUT / args.profile).relative_to(ROOT)}/; the mainnet "
+              "projections were not touched")
 
 
 if __name__ == "__main__":
