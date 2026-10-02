@@ -89,7 +89,11 @@
       specification. <strong>The vault is now built</strong> — every mint lands in a program-owned
       account, is released only after a <strong>144-block (~24 hour) maturity window</strong>, and
       <code>release_mint</code> and <code>burn_staged</code> are permissionless.
-      <strong>The federation, the reserve script and peg-out are still specified and not built.</strong>
+      <strong>The federation registry is built and peg-out is built; what is still specified is
+      custody.</strong> The registry records members, bonds and thresholds, and holds no key
+      material at all, so nothing about the reserve is operational yet. Peg-out can verify a payout
+      but cannot make one, so it cannot run end to end until a member set actually holds the reserve
+      and pays.
       <br><br>
       <strong>What changed since this page was last accurate.</strong> The design moved from an
       operator-less model to a <strong>bonded federation</strong> following the architecture of
@@ -149,9 +153,9 @@
         <li><strong>Done: a hostile advancer cannot reorder, replay or rewind.</strong> The worst it can do is stall, which is what the design claims.</li>
         <li><strong>Done: the client follows a legitimate reorg.</strong> A competing branch is staged and committed only if it is <em>strictly</em> heavier, so a tie keeps the incumbent. Already-minted deposits are not reversed — the confirmation depth is the protection, and the token has no freeze authority, so a reversal is impossible by design rather than merely unimplemented.</li>
         <li><strong>An adversarial review found and we fixed: a vacuous proof-of-work check, an unauthenticated checkpoint path, an unconstrained mint, a replay key that double-minted after a reorg, and a fork-staging point that could be spliced. The most serious was that the difficulty target was read from the header being checked, so proof of work was <em>vacuous</em> — anyone could append headers and mint with no hashpower.</strong> Three further fixes are now built: the <strong>unspent-outpoint hole</strong> (replay is a nullifier per deposit, not a fragile list with a 200-entry ceiling), the <strong>initialise race</strong>, and a <strong>timelocked authority</strong> so one key can no longer rewrite the trusted checkpoint instantly. <strong>The difficulty bootstrap, the reported spent-outpoint record, and the upgrade authority are documented as the remaining soft spots rather than hidden.</strong></li>
-        <li><strong>Done: the deposit verifier.</strong> It consumes the fixture's 202-byte instruction — Merkle fold, on-chain transaction parsing, exact output script, confirmation depth, and replay refusal. It accepts the real deposit and refuses four tampered versions of it.</li>
+        <li><strong>Done: the deposit verifier.</strong> It consumes the fixture's 202-byte instruction — Merkle fold, on-chain transaction parsing, exact output script, confirmation depth, and replay refusal. It accepts the real deposit and refuses four tampered versions of it. <strong><code>MIN_PEG_IN</code> is now enforced:</strong> <code>verify_deposit</code> refuses an output below <code>pi.min_peg_in</code> — 100,000,000 base units, 1 BSV, in the mainnet sheet — so a dust-sized deposit cannot be minted at all.</li>
         <li><strong>Done: the mint.</strong> A verified deposit stages a mint and issues <code>solBSV</code> into a <strong>program-owned vault</strong> — not to the depositor directly — and releases it only after a <strong>144-block (~24 hour) maturity window</strong>. The recipient is named in the OP_RETURN and is who <code>release_mint</code> pays. Eight decimals, one base unit per satoshi, no scaling. The token has no freeze authority and its mint authority is a program PDA, so no operator key can create supply.</li>
-        <li><strong>Done: the spent-outpoint record (N5).</strong> <code>verify_deposit</code> proves an output <em>paid</em> the deposit script — it cannot prove that output is still <em>unspent</em>, and under the federation the deposit script <em>is</em> the reserve. So a member could spend a deposit output and the deposit would still mint, unbacked. The program now <strong>refuses a mint whose outpoint has been reported spent</strong>, and the record is permanent — closing it would re-open the mint of an already-spent deposit. <strong>The reporter is the program's upgrade authority, standing in for the federation, which does not exist yet: the hole is closed in mechanism and unchanged in trust.</strong> The permissionless alternative was rejected deliberately — making the record writable by anyone turns mint <em>availability</em> into an attack surface, not just mint correctness.</li>
+        <li><strong>Done: the spent-outpoint record (N5).</strong> <code>verify_deposit</code> proves an output <em>paid</em> the deposit script — it cannot prove that output is still <em>unspent</em>, and under the federation the deposit script <em>is</em> the reserve. So a member could spend a deposit output and the deposit would still mint, unbacked. The program now <strong>refuses a mint whose outpoint has been reported spent</strong>, and the record is permanent — closing it would re-open the mint of an already-spent deposit. <strong>The reporter is now a live, admitted member, not the upgrade authority:</strong> <code>report_spent</code> requires the signer to own an <code>Active</code> member record, so a report is attributable to a named seat. It is <strong>not collective</strong> — one member's signature is enough — and it does not make the report true, because the program cannot see BSV's UTXO set. <strong>And it opens one hole, stated rather than hidden:</strong> no such member exists until the Greycore's first <code>admit_member</code>, and none exists again if every member leaves, so <strong>between <code>initialize_bridge</code> and that first admission a deposit the reserve spends can still be minted</strong>. Nothing enforces admit-before-deposits, and at genesis the Greycore <em>is</em> the upgrade authority, so that first admission is single-key. The permissionless alternative was rejected deliberately — making the record writable by anyone turns mint <em>availability</em> into an attack surface, not just mint correctness.</li>
         
         <li><strong>Done: the client follows a real chain's difficulty.</strong> The retarget is <strong>cw-144</strong>, computed per block from the node's <code>src/pow.cpp</code> and verified against <strong>324/324 real mainnet headers</strong>. <strong>Still open (X3):</strong> the rule is hard-coded, and BSV's own documentation says it will change, so the algorithm needs a way to change without a redeploy.</li>
       </ul>
@@ -175,17 +179,18 @@
 
     <div class="phase">
       <div class="phase__head">
-        <span class="phase__mark mark--no" aria-hidden="true">&#10008;</span>
+        <span class="phase__mark mark--part" aria-hidden="true">&#9680;</span>
         <span class="phase__name">Phase 4 &middot; The federation</span>
-        <span class="phase__state">Designed, not built</span>
+        <span class="phase__state">Registry built, no custody</span>
       </div>
       <ul>
+        <li><strong>Done: the federation registry and the Greycore registry — records, not custody.</strong> Six instructions are built and tested. <code>initialize_federation</code> creates the gateway and Greycore sets, their thresholds and their aggregate keys; <code>add_greycore_member</code> grows the Greycore, which is its own permissioned set with a threshold of its own; <code>admit_member</code> lets a Greycore member create a gateway member record, and cannot be performed by a gateway member or by the upgrade authority acting alone; <code>record_bonds</code> records what a member attests as bonded on each side; <code>leave_member</code> removes a member; <code>seize_solbsv_bond</code> clears a recorded <code>solBSV</code>-side bond. The registry <strong>enforces the threshold floor</strong>: a departure that would leave fewer bonded members than <code>fed.threshold</code> is refused. <strong>What it is not is custody.</strong> It records members, bonds and thresholds — and that is all. <strong>No key material exists anywhere in this repository:</strong> the reserve's <code>2-of-2</code> keys are generated and shared off chain, no instruction holds, generates or signs with one, and none has ever been generated. <strong>So nothing about the reserve is operational yet.</strong> Nor is a bond moved: <code>record_bonds</code> records a claim, the <code>solBSV</code> transfer is not built, and the BSV side is off chain and unseeable.</li>
         <li><strong>The federation holds the reserve.</strong> Members bond <strong>BSV</strong> — working capital for transfers, the <em>float</em>, <strong>not</strong> capital sized against the vault. Sizing the bond against the vault produced an impossible inequality twice, so <strong>every capacity figure is withdrawn with the reason recorded</strong>.</li>
         <li><strong>A second quorum co-signs every reserve movement.</strong> The reserve script is a <code>2-of-2</code>: the members' threshold key <em>and</em> the second quorum's key. Neither can move funds alone, and that is what actually constrains the reserve. The second quorum is <strong>trusted third parties with reputations to lose, not node operators</strong>.</li>
         <li><strong>The design follows RenVM deliberately.</strong> A bonded member set, a second quorum, epochs for membership — the precedent is good, and it is the bridge that issued wrapped ZEC. <strong>What we add is reorg reversal</strong>, which the reference does not address at all.</li>
         <li><strong>Open, and recorded as open.</strong> A member who leaves <strong>retains a valid share</strong> of the reserve key, so the effective threshold <strong>degrades with churn</strong>. Resolving it needs key rotation (the reserve moves on-chain) or proactive re-sharing (needs the departing member's cooperation) — both real work, neither done. <strong>The PoC does not finalise this.</strong></li>
-        <li><strong>Genesis is settled.</strong> Members post their bond <strong>in BSV</strong> at genesis, so no <code>solBSV</code> needs to exist first. The alternative — a capped, explicitly unbonded first mint — is recorded as a later option, not taken.</li>
-        <li><strong>One accepted oracle, stated plainly.</strong> Reorg depth and block time come from the BSV headers and deadlines from Solana slots — but Solana cannot read the BSV UTXO set, so the federation reports spent outpoints. That is not a new trust: the federation is already trusted with the reserve.</li>
+        <li><strong>Genesis is settled.</strong> Members post their bond <strong>in BSV</strong> at genesis, so no <code>solBSV</code> needs to exist first. (The program <em>records</em> that bond; it does not take custody of it — see the registry bullet above.) The alternative — a capped, explicitly unbonded first mint — is recorded as a later option, not taken.</li>
+        <li><strong>One accepted oracle, stated plainly.</strong> Reorg depth and block time come from the BSV headers and deadlines from Solana slots — but Solana cannot read the BSV UTXO set, so a member of the federation reports spent outpoints. That is not a new trust: the federation is already trusted with the reserve.</li>
       </ul>
     </div>
 
@@ -205,10 +210,22 @@
       </ul>
     </div>
 
+    <p class="note" style="margin:22px 0 0">
+      <strong>How a parameter change is gated.</strong> Every number the program turns on is projected
+      from one sheet, <code>config/params.json</code>, by <code>config/gen.py</code>. Before a change
+      is committed, <code>config/check.sh</code> regenerates the projections and — when a value
+      differs from the committed sheet — runs the suite, because checking the projections against
+      each other can never check them against the compiled program. <strong>It is a maintainer script
+      and this repository has no CI,</strong> so it is a convention a maintainer follows rather than a
+      control that can fail a build. The same script takes <code>--profile testnet</code>, which
+      projects a small testnet overlay into <code>config/out/testnet/</code>; that profile is not
+      compiled and nothing reads it until it is copied into the program by hand.
+    </p>
+
     <h2>What is proven so far</h2>
     <div class="tally">
       <span><b>27</b> instructions built</span>
-      <span><b>77</b> on-chain tests</span>
+      <span><b>79</b> on-chain tests</span>
       <span><b>4</b> of 4 peg-out steps</span>
       <span><b>21</b> live SV&nbsp;Node checks</span>
       <span>all passing</span>
