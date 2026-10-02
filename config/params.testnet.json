@@ -1,0 +1,55 @@
+{
+  "schema": "solbeam.params/1-profile",
+  "profile": "testnet",
+  "base": "config/params.json",
+  "note": "An OVERLAY on config/params.json, not a copy of it. It carries only the rows that differ for a BSV testnet deployment; every other row is inherited, so there is still one source of truth per value. Apply it with `python3 config/gen.py --profile testnet`, which projects the merged sheet into config/out/testnet/ and never writes over the mainnet projections. `config/check.sh --profile testnet` regenerates and verifies it. Every row here needs a `_what` saying why it differs; gen.py refuses an overlay row without one, and refuses a row that changes nothing.",
+  "overrides": [
+    {
+      "id": "lc.cluster_id",
+      "value": "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943",
+      "status": "designed",
+      "provenance": "measured",
+      "description": "The deployment identifier this profile binds deposits to: the BSV testnet genesis block hash, 000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943 (bitcoin-sv src/chainparams.cpp, CTestNetParams). The OP_RETURN layout reserves a cluster_id field (P11), but the binding is still NOT built -- the code checks only that the recipient's 32 bytes appear in the OP_RETURN, and nothing compares a deposit's cluster_id with this value.",
+      "csv_value": "%v%",
+      "doc_description": "The deployment identifier this profile binds deposits to: the **BSV testnet genesis block hash**, `000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943` (bitcoin-sv `src/chainparams.cpp`, `CTestNetParams`). The `OP_RETURN` layout reserves a `cluster_id` field (P11), but **the binding is still not built** \u2014 the code checks only that the recipient's 32 bytes appear in the `OP_RETURN`, and nothing compares a deposit's `cluster_id` with this value.",
+      "_what": "First concrete value for a row that was `open` and had none. The identifier is the BSV testnet genesis hash -- measured from the node's chainparams, not invented -- so a testnet deposit is bound to the testnet chain rather than to no cluster. It moves from `open` to `designed` + `measured` because a value now exists while the binding is still out of the program."
+    },
+    {
+      "id": "lc.pow_limit_bits",
+      "value": "0x1d00ffff",
+      "doc_value": "**`%v%`**",
+      "description": "BSV testnet's powLimit is 00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff = 0x1d00ffff, the same value as mainnet (bitcoin-sv src/chainparams.cpp, CTestNetParams). In code as MAINNET_POW_LIMIT_BITS, with no_retargeting derived from the regtest value, so the built constant is already correct for testnet. The difference that is NOT modelled: testnet sets fPowAllowMinDifficultyBlocks = true, so a minimum-difficulty block can carry powLimit bits where the cw-144 check requires bits == expected_bits, and this client would reject that header with UnexpectedRetarget. That is not built, and this profile does not change it.",
+      "doc_description": "BSV testnet's `powLimit` is `00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff` = **`0x1d00ffff`**, the same as mainnet (bitcoin-sv `src/chainparams.cpp`, `CTestNetParams`). In code as `MAINNET_POW_LIMIT_BITS`, with `no_retargeting` derived from the regtest value. **Not modelled:** testnet sets `fPowAllowMinDifficultyBlocks = true`, so a minimum-difficulty block can carry `powLimit` bits where the cw-144 check requires `bits == expected_bits`; this client would reject it with `UnexpectedRetarget`. **Not built.**",
+      "_what": "Concretised to the single value BSV testnet actually uses. The mainnet row carries the `mainnet / regtest` pair because the code covers both chains; testnet's limit is mainnet's, so this is measured rather than chosen. Recorded here with the min-difficulty gap, which is a real obstacle for a testnet deployment and must not be left implicit."
+    },
+    {
+      "id": "v.maturity_blocks",
+      "value": 6,
+      "csv_value": "%v% blocks",
+      "description": "TESTNET ONLY: 6 blocks, not 144. A deliberate reduction in the protective window, so a test cycle is minutes of on-demand testnet mining rather than about 24 hours at BSV's 600 s target spacing. Six blocks is about an hour of chain time at the target; testnet blocks are generated on demand, which is what makes the cycle short. The reduction weakens reorg protection by exactly as much as it shortens the wait. Constraint: confirmations + maturity <= window, so 12 + 6 <= 192.",
+      "doc_description": "**Testnet only: 6 blocks, not 144** \u2014 a deliberate reduction in the protective window, so a test cycle is minutes of on-demand testnet mining rather than ~24 hours at BSV's 600 s target. The reduction weakens reorg protection exactly as much as it shortens the wait. Constraint: `12 + 6 <= 192`.",
+      "_what": "Shorter than 144 because a 24-hour maturity makes a test cycle a day long. 6 keeps the mechanism exercised and the confirmations + maturity <= window constraint satisfied. This is a deliberate weakening of the reorg window for testing only; the value is a stored Config field, so mainnet is untouched."
+    },
+    {
+      "id": "v.reorg_margin",
+      "value": 186,
+      "_what": "Recomputed, not independently chosen: window (192) - maturity (6) = 186. Leaving the mainnet 48 would make this derived row's own definition ('window - maturity') false for the profile."
+    },
+    {
+      "id": "pi.min_peg_in",
+      "value": 1000000,
+      "csv_value": "%V% base units (0.01 BSV) dec",
+      "description": "The floor verify_deposit enforces on a deposit output, in the base units the claim's amount is in. TESTNET ONLY: 0.01 BSV (1,000,000 base units), not 1 BSV. Testnet coins are free, so the 1 BSV mainnet floor prices out nothing there and only makes a deposit test harder to run; 0.01 BSV still exceeds dust and still exercises the floor. MIN_PEG_IN = 1,000,000 in the profile's params.rs. It equals po.d_min, the minimum redemption already in the sheet, so the deposit floor cannot sit above the smallest redeemable amount.",
+      "doc_description": "**In the profile's `params.rs` as `MIN_PEG_IN` = 1,000,000 base units (0.01 BSV).** `verify_deposit` refuses a lower output. **Testnet only:** coins are free there, and 0.01 BSV still exceeds dust and matches `po.d_min`.",
+      "_what": "Lowered from 1 BSV because testnet coins are free: the mainnet floor prices out no griefing there and only makes a deposit test harder to fund. 0.01 BSV (1,000,000 base units) equals po.d_min, so a deposit can never be below the smallest redeemable amount."
+    },
+    {
+      "id": "po.deadline",
+      "value": 3600,
+      "csv_value": "%V% slots built",
+      "description": "How long a member has to pay before the holder may cancel. TESTNET ONLY: 3,600 slots, not 216,000. At Solana's 400 ms target slot that is about 24 minutes instead of about a day, so a redemption test is not a day long; it is long enough that a member can actually pay on testnet. In Solana slots, because a height deadline would never expire if the header feed stalled. cancel_redeem is refused while a claim is live, which closes the pay-and-refund race structurally rather than by the deadline's length.",
+      "doc_description": "**Testnet only: 3,600 slots (~24 minutes at the 400 ms target), not 216,000.** In Solana slots, because a height deadline would never expire if the feed stalled. `cancel_redeem` is refused while a claim is live, which is what closes the pay-and-refund race structurally rather than by the deadline's length.",
+      "_what": "Shorter than 216,000 for the same reason as maturity: a test cycle should not be a day long. 3,600 slots is about 24 minutes at the 400 ms target slot -- minutes, not hours, but long enough for a member to actually pay on testnet. The field is timelock-mutable if a test needs it shorter."
+    }
+  ]
+}
