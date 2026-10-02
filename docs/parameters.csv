@@ -50,7 +50,7 @@ gov.pause_duration,Pause auto-lift,open,open,placeholder,Days before a pause lap
 fee.mint_bp,Peg-in fee (gross),30 bp dec,designed,decided,Covers all transaction fees; the remainder is member income. Its physical location is unspecified — N1
 fee.redeem_bp,Peg-out fee (gross),30 bp dec,built-frozen,decided,As above
 fee.bounty_share,Challenger bounty,open,designed,placeholder,"Share of a slashed bond paid to whoever proves the misbehaviour. The burn_staged bounty is suggested, not sized, and not built"
-pi.min_peg_in,Minimum deposit,1 BSV dec,designed,decided,Prices out dust griefing. Decided; enforcement is not in code
+pi.min_peg_in,Minimum deposit,"100,000,000 base units (1 BSV) dec",built-frozen,decided,"The floor verify_deposit enforces on a deposit output, in the base units the claim's amount is in (1 BSV at 8 decimals). MIN_PEG_IN = 100,000,000 in code. Prices out dust griefing"
 pi.max_used,Legacy replay-list cap,200 der·superseded,superseded,derived,"Replaced by a nullifier PDA per deposit, which is built. There is no list and no ceiling"
 pi.op_return_layout,Deposit commitment,version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient dec,designed,decided,Designed. What is built checks only that the recipient's 32 bytes appear in an OP_RETURN
 po.payout_confirmations,Payout depth,6 BSV blocks built,built-frozen,decided,BSV confirmations before a payout is provable. C_payout

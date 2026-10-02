@@ -138,6 +138,13 @@ pub const REDEEM_D_MIN: u64 = 1_000_000;
 /// Cap on concurrent pending redemptions, so the escrow cannot be used to make the program's per-instruction work unbounded
 pub const MAX_PENDING_REDEMPTIONS: u64 = 64;
 
+// -- pi --
+
+/// `pi.min_peg_in` -- Minimum deposit -- `100,000,000 base units (1 BSV) dec`.
+///
+/// The floor verify_deposit enforces on a deposit output, in the base units the claim's amount is in (1 BSV at 8 decimals). MIN_PEG_IN = 100,000,000 in code. Prices out dust griefing
+pub const MIN_PEG_IN: u64 = 100_000_000;
+
 // -- fed --
 
 /// `fed.script` -- Reserve deposit script -- `2-of-2 OP_CHECKMULTISIG dec, shape accepted in code built`.

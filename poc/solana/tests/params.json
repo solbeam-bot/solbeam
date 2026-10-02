@@ -23,6 +23,7 @@
     "CANCEL_GRACE_SLOTS": 0,
     "REDEEM_D_MIN": 1000000,
     "MAX_PENDING_REDEMPTIONS": 64,
+    "MIN_PEG_IN": 100000000,
     "MAX_SCRIPT_LEN": 71
   },
   "parameters": {
@@ -77,7 +78,7 @@
     "fee.mint_bp": 30,
     "fee.redeem_bp": 30,
     "fee.bounty_share": null,
-    "pi.min_peg_in": 1,
+    "pi.min_peg_in": 100000000,
     "pi.max_used": null,
     "pi.op_return_layout": "version | cluster_id | program_hash | flags | recipient",
     "po.payout_confirmations": 6,

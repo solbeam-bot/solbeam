@@ -543,12 +543,12 @@
     {
       "id": "pi.min_peg_in",
       "name": "Minimum deposit",
-      "value": 1,
-      "status": "designed",
+      "value": 100000000,
+      "status": "built-frozen",
       "provenance": "decided",
-      "description": "Prices out dust griefing. Decided; enforcement is not in code",
-      "csv_value": "%v% BSV dec",
-      "doc_description": "Prices out dust griefing. Decided; **enforcement is not in code**"
+      "description": "The floor verify_deposit enforces on a deposit output, in the base units the claim's amount is in (1 BSV at 8 decimals). MIN_PEG_IN = 100,000,000 in code. Prices out dust griefing",
+      "csv_value": "%V% base units (1 BSV) dec",
+      "doc_description": "**In code as `MIN_PEG_IN` = 100,000,000 base units (1 BSV).** `verify_deposit` refuses a lower output. Prices out dust griefing"
     },
     {
       "id": "pi.max_used",

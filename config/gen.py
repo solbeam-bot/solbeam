@@ -169,6 +169,11 @@ RUST_CONSTANTS = [
     ("CANCEL_GRACE_SLOTS", "u64", "po.cancel_grace", None),
     ("REDEEM_D_MIN", "u64", "po.d_min", None),
     ("MAX_PENDING_REDEMPTIONS", "u64", "po.max_pending", None),
+    # The peg-in floor. The row's machine value is already in the unit the
+    # program compares -- the base units `DepositClaim::amount` carries -- so
+    # this is a literal projection, not a unit conversion kept in step by hand.
+    # 1 BSV = 100,000,000 base units at 8 decimals.
+    ("MIN_PEG_IN", "u64", "pi.min_peg_in", None),
 ]
 
 

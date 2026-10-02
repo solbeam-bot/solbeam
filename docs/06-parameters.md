@@ -13,6 +13,7 @@ retyped, and `python3 config/gen.py --check` fails if any projection is stale. T
 by `BEGIN/END GENERATED` comments; **everything outside those fences is hand-written prose**, and the
 generator leaves it alone. A value that has to appear in a projection is a `%v%`/`%V%` template over
 the row's machine `value`, so changing the JSON alone moves the code, the CSV and this page together.
+
 > **Almost all of this is a specification, not shipped behaviour.** The built set is 27 instructions
 > and 77 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, now **144 blocks — about 24 hours**) and the authority timelock
@@ -32,9 +33,9 @@ was chosen*.
 | Status | Meaning | Count |
 |---|---|---|
 | **`built-mutable`** | In the program, in a runtime account, changeable through the timelocked authority | **2** |
-| **`built-frozen`** | In the program as a compiled constant; changing it needs a **redeploy** | **22** |
+| **`built-frozen`** | In the program as a compiled constant; changing it needs a **redeploy** | **23** |
 | **`built-shape`** | The shape is enforced by the built program; the keys (or the authority) behind it are not | **2** |
-| **`designed`** | **Not in the program.** A specification row: decided policy, an external measurement, or a derived quantity the program does not carry | **30** |
+| **`designed`** | **Not in the program.** A specification row: decided policy, an external measurement, or a derived quantity the program does not carry | **29** |
 | **`open`** | **No value yet.** This is work to do, not a decision deferred | **6** |
 | **`superseded`** | Recorded for history only | **2** |
 <!-- END GENERATED: status-legend -->
@@ -162,7 +163,7 @@ that lives only in this sheet.
 
 | id | name | value | status | provenance | description |
 |---|---|---|---|---|---|
-| `pi.min_peg_in` | Minimum deposit | **1 BSV** | `designed` | `decided` | Prices out dust griefing. Decided; **enforcement is not in code** |
+| `pi.min_peg_in` | Minimum deposit | **100,000,000 base units (1 BSV)** | `built-frozen` | `decided` | **In code as `MIN_PEG_IN` = 100,000,000 base units (1 BSV).** `verify_deposit` refuses a lower output. Prices out dust griefing |
 | `pi.max_used` | Legacy replay-list cap | **200** | `superseded` | `derived` | Replaced by a **nullifier PDA per deposit**, which is **built**. There is no list and no ceiling |
 | `pi.op_return_layout` | Deposit commitment | **version ‖ cluster_id ‖ program_hash ‖ flags ‖ recipient** | `designed` | `decided` | **Designed.** What is built checks only that the recipient's 32 bytes appear in an `OP_RETURN` |
 
@@ -272,7 +273,7 @@ records what became of each rather than rewriting it silently.
 | **P4** | Challenge window = 24 h | **Superseded.** No default specified |
 | **P5** | `RECENT_REORG_WINDOW` = 12 h | **Superseded.** The vault compares stored hashes; there is no separate window parameter |
 | **P6** | `TIP_STALENESS` = 2 h | **Superseded** as a parameter by `lc.max_staleness_slots`; the pause is the built authority-gated safety valve |
-| **P7** | `MIN_PEG_IN` = 10 BSV | **Superseded** — now 1 BSV, decided, not enforced |
+| **P7** | `MIN_PEG_IN` = 10 BSV | **Superseded** — now 1 BSV, and **enforced in code** as `MIN_PEG_IN` |
 | **P8** | `MAX_PEG_IN` = 10,000 BSV | **Superseded.** The earlier "total value locked is capped by total bonds pledged" is **withdrawn** |
 | **P9** | `MAX_PEG_OUT` = 10,000 BSV | **Superseded.** A redemption is bounded by the reserve and the payout path |
 | **P10** | `HOT_FLOAT_CAP` | **Removed** with the pooled float. There is one reserve, and the two-sided bonds are the bound |
