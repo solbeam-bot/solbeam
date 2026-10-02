@@ -3,7 +3,7 @@
 **The honest inventory as of this commit.** Not a roadmap — a list of what stands between the
 current state and a deployment that could be shown to strangers.
 
-**The built program is 27 instructions and 77 passing tests.** Everything below is what is *not*
+**The built program is 27 instructions and 79 passing tests.** Everything below is what is *not*
 in it, sorted by what it blocks rather than by size.
 
 ---
@@ -46,15 +46,21 @@ A BSV covenant is the only mechanism that makes the **BSV-side bond collateral r
 promise**: a script that releases only against a proof, so a key alone cannot move it. **It is
 research, and it is on the critical path for both the reserve and the bond.**
 
-### 1.5 Nothing runs the suite when a parameter changes
+### 1.5 ~~Nothing runs the suite when a parameter changes~~ — **BUILT**
 
 **Found the hard way.** `v.maturity_blocks` was changed from 0 to 144 and the suite was not run;
 `origin/main` was **red for several commits** (70 passing / 7 failing). `gen.py` checks that the
 **projections agree with each other** — nothing checks the **compiled artifact**, and a stale
 `tests/params.json` hid two of the failures.
 
-**What closes it:** a pre-commit or CI check that runs the suite whenever `config/params.json`
-changes. **Small, mechanical, and it would have caught a real regression.**
+**Closed by `config/check.sh`**, which regenerates, runs `gen.py --check`, compares
+`config/params.json` with `HEAD`, and **runs the suite when the sheet differs.** It exits non-zero
+if the suite fails, or if `--no-suite` is used while the sheet is dirty, and it prints what it did
+and did not verify.
+
+**One residual, stated rather than implied:** it is a **maintainer script** — the repo has no CI
+and no hook — so it works only if someone runs it. **A check nobody runs is a convention, not a
+control.**
 
 ---
 
@@ -62,8 +68,8 @@ changes. **Small, mechanical, and it would have caught a real regression.**
 
 | | |
 |---|---|
-| **N5's write path** | The spent-outpoint record is written by the **upgrade authority standing in for the federation**. Closed in *mechanism*, unchanged in *trust*. Now that member accounts exist, the writer should be the member set |
-| **`MIN_PEG_IN`** | `pi.min_peg_in` is `dec` (1 BSV) and there is **no such constant in the program**. Documented as enforced in one place and unimplemented in another |
+| ~~**N5's write path**~~ | **BUILT.** `report_spent` now requires a live `GatewayMember` (`NotGatewayMember` otherwise), so the record is written by the member set rather than one key. **The bootstrap hole is real and stated:** the writer cannot be called until the first `admit_member`, and again if every member leaves. Between `initialize_bridge` and that admission, a deposit the reserve spends can still be minted — the record that would refuse it cannot be written. **Nothing enforces admit-before-deposits, and at genesis the Greycore is the upgrade authority, so the first admission is single-key** |
+| ~~**`MIN_PEG_IN`**~~ | **BUILT.** `MIN_PEG_IN = 100,000,000` **base units** (1 BSV; `claim.amount` is satoshis), enforced in `verify_deposit` with `BelowMinPegIn` after the `> 0` check and before the script check |
 | **`lc.cluster_id` / `lc.pow_limit_bits`** | P11: binds a deployment to one chain. A regtest-target checkpoint must be rejected on mainnet. The values are partly in code; the binding is not built |
 | **The burn bounty** | `fee.bounty_share` is `open`. Without it, `burn_staged` relies on someone acting for free |
 | **Raising maturity on a deployed instance** | The default is 144; a **running** program still carries 0 until the timelocked authority raises it. That is a procedure, not code — and it must be done |
