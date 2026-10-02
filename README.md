@@ -54,7 +54,7 @@ produced its own evidence, and anyone may submit it.
 
 **Built and tested:** the light client with cw-144, the `solBSV` token, the mint, fork staging
 with chainwork, the **nullifier**, the **timelocked authority**, and **the vault** (`release_mint`,
-`burn_staged`, `set_maturity`) — **27 instructions, 79 passing / 0 failing**, **51/51** synthetic
+`burn_staged`, `set_maturity`) — **27 instructions, 82 passing / 0 failing**, **51/51** synthetic
 Phase 1A checks, **21/21** against a live SV Node. The window is **192 records of 52 bytes**, `SPACE`
 **10,107** of 10,240, a **32-hour** deposit lifetime. F7 (the retarget), P2 (the fork re-anchor), A7
 (double-mint) and the window resize are all fixed in code.

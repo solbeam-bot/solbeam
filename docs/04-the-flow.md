@@ -15,7 +15,7 @@ the loss.**
 | | |
 |---|---|
 | **Light client** | **Built.** Checkpoint plus a rolling window of **192** BSV headers — **32 hours** — in one account of **10,107 bytes**, with a **52-byte** record per header (block hash, cumulative chainwork, timestamp). cw-144 verified against **324/324** real mainnet headers, and 160 real mainnet headers through `push_header` itself |
-| **Token and mint** | **Built.** 79 on-chain tests, with negative controls |
+| **Token and mint** | **Built.** 82 on-chain tests, with negative controls |
 | **Vault** | **Built**, with a **144-block (~24 hour)** maturity window — see [02. How it works §4](02-how-it-works.md#why-maturity-was-raised-from-0-to-144) |
 | **Federation, Greycore, governance, peg-out** | **Designed, not built.** Everything after the mint step |
 | **Order book** | **Removed.** A governed 30 bp fee replaces it |

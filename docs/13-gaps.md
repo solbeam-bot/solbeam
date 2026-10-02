@@ -3,7 +3,7 @@
 **The honest inventory as of this commit.** Not a roadmap — a list of what stands between the
 current state and a deployment that could be shown to strangers.
 
-**The built program is 27 instructions and 79 passing tests.** Everything below is what is *not*
+**The built program is 27 instructions and 82 passing tests.** Everything below is what is *not*
 in it, sorted by what it blocks rather than by size.
 
 ---

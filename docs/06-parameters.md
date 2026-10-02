@@ -19,7 +19,7 @@ projection, and when `config/params.json` differs from the committed version it 
 because `gen.py --check` compares the projections with each other, never with the compiled program.
 
 > **Almost all of this is a specification, not shipped behaviour.** The built set is 27 instructions
-> and 79 passing / 0 failing. The only parameters actually settable in the built program are
+> and 82 passing / 0 failing. The only parameters actually settable in the built program are
 > **`maturity_blocks`** (a stored `Config` field, now **144 blocks — about 24 hours**) and the authority timelock
 > (`TIMELOCK_SLOTS = 32`, a constant). **`FLOOR` is not a parameter in code** — it is the constant
 > `MIN_CONFIRMATIONS = 12`. Nothing else here is settable at runtime.
