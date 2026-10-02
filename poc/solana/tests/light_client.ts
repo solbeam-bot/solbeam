@@ -4887,7 +4887,8 @@ describe("solbeam — BSV testnet min-difficulty (lc.allow_min_difficulty)", () 
     await seedAll();
 
     const lc = await program.account.lightClient.fetch(lightClient);
-    expect(lc.seedRemaining.toNumber()).to.equal(0);
+    // `seedRemaining` is a u32, which Anchor decodes as a plain number, not a BN.
+    expect(lc.seedRemaining).to.equal(0);
     expect(lc.headers.length).to.equal(147);
     expect(lc.tipHeight.toNumber()).to.equal(CP_HEIGHT);
 
