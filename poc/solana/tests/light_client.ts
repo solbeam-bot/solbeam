@@ -83,6 +83,25 @@ for (const [id, value] of [
 const MAINNET_FIXTURE = path.resolve(
   __dirname, "../../../workstreams/data/headers_mainnet.json");
 
+/**
+ * 148 contiguous **real BSV testnet headers** ending on a genuine
+ * min-difficulty block: heights 1,760,730–1,760,877.
+ *
+ * The last header (1,760,877) carries `bits == 0x1d00ffff` — the pow limit —
+ * because it arrived 1,250 s after its parent, more than the 1,200 s the node's
+ * `fPowAllowMinDifficultyBlocks` rule requires. The cw-144 target the client
+ * computes for that height is far harder (`0x1c1543fb`), so an exact-match
+ * client refuses it `UnexpectedRetarget`: the defect this suite covers. Every
+ * header's double-SHA-256 was checked against the chain's own hash when the
+ * fixture was fetched, and the block is a real block, so it meets the pow-limit
+ * target by construction.
+ *
+ * The 147 headers before it are the trusted seed for `checkpoint_height`, the
+ * same shape as the mainnet F1 fixture.
+ */
+const TESTNET_MINDIFF_FIXTURE = path.resolve(
+  __dirname, "fixtures/headers_testnet_min_difficulty.json");
+
 function doubleSha256(buf: Buffer): Buffer {
   return createHash("sha256")
     .update(createHash("sha256").update(buf).digest())
@@ -1814,6 +1833,21 @@ function requiredBits(
   const powLimit = compactToTarget(MAINNET_POW_LIMIT_BITS);
   if (target > powLimit) target = powLimit;
   return targetToCompact(target);
+}
+
+/**
+ * The work one header's target is worth: the node's `GetBlockProof`, i.e.
+ * `(2^256 - 1) / (target + 1)`, mirroring `work_from_bits` in the program.
+ *
+ * This is what makes the min-difficulty chainwork assertion exact rather than
+ * a bounds check: the test computes the credit the program *should* record for
+ * the header's own `bits`, and separately the credit the harder cw-144 target
+ * would have implied, and asserts the first and not the second.
+ */
+function workFromBits(bits: number): bigint {
+  const target = compactToTarget(bits);
+  if (target === 0n) return 0n;
+  return U256_MASK / (target + 1n);
 }
 
 /**
@@ -4745,5 +4779,180 @@ describe("solbeam — peg-out: initiate, cancel, claim, settle (doc 11)", () => 
     counters = await program.account.redeemBook.fetch(book);
     expect(counters.pending.toNumber()).to.equal(MAX_PENDING);
     expect(counters.nextId.toNumber()).to.equal(attempted);
+  });
+});
+
+/**
+ * The BSV testnet min-difficulty rule (`lc.allow_min_difficulty`).
+ *
+ * BSV testnet sets `fPowAllowMinDifficultyBlocks = true`. Its
+ * `GetNextCashWorkRequired` returns the pow-limit compact whenever a block's
+ * time is **more than** `2 * nPowTargetSpacing` (1,200 s) after its parent, so
+ * a real testnet block can carry `bits == 0x1d00ffff` where cw-144 computes a
+ * harder target. A client that requires an exact cw-144 match refuses that
+ * valid block `UnexpectedRetarget` and the chain stalls.
+ *
+ * This suite pushes a **real** such block and pins three things:
+ *
+ *   1. with the flag off (the compiled mainnet default) it is refused, and the
+ *      client's state does not move;
+ *   2. with the flag on — through the timelocked authority, so nothing here is
+ *      an oracle or a test-only path — it is accepted;
+ *   3. the chainwork it records is the **actual** pow-limit work, not the
+ *      harder cw-144 target's work. That is the security property: if a cheap
+ *      block were credited the expensive target's work, a chain of
+ *      min-difficulty blocks could outweigh an honest one.
+ *
+ * It runs last in the file: it re-anchors the singleton client onto testnet and
+ * leaves the flag where the last test puts it.
+ */
+describe("solbeam — BSV testnet min-difficulty (lc.allow_min_difficulty)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Solbeam as unknown as Solbeam;
+
+  const [lightClient] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("light_client")], program.programId);
+  const pending = pendingChangePda(program.programId);
+  const gov: GovCtx = { program, provider, lightClient, pending };
+
+  const fixture = JSON.parse(fs.readFileSync(TESTNET_MINDIFF_FIXTURE, "utf8"));
+  const headers: Buffer[] = fixture.headers.map((h: any) => Buffer.from(h.raw, "hex"));
+  // The seed is the 147 records ending at the checkpoint; the block after it is
+  // the min-difficulty block.
+  const CP_INDEX = fixture.headers.findIndex(
+    (h: any) => h.height === fixture.checkpoint_height);
+  const CP_HEIGHT = fixture.checkpoint_height as number;
+  const SEED: Buffer[] = headers.slice(0, CP_INDEX + 1);
+  const MINDIFF: Buffer = headers[CP_INDEX + 1];
+  const MINDIFF_HEIGHT = fixture.min_difficulty_height as number;
+  const POW_LIMIT_BITS = 0x1d00ffff;
+
+  const bitsOf = (raw: Buffer): number => raw.readUInt32LE(72);
+  const timeOf = (raw: Buffer): number => raw.readUInt32LE(68);
+  const internalHash = (raw: Buffer): string => doubleSha256(raw).toString("hex");
+
+  /** Read the flag without depending on the generated account type. */
+  const flagOf = (lc: any): boolean => lc.allowMinDifficulty === true;
+
+  const attemptPush = async (raw: Buffer): Promise<string> => {
+    try {
+      await program.methods.pushHeader(Array.from(raw))
+        .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+      return "ACCEPTED";
+    } catch (e: any) {
+      const m = String(e).match(/Error Code: (\w+)/);
+      return m ? m[1] : String(e).slice(0, 80);
+    }
+  };
+
+  const seedAll = async () => {
+    for (let i = 0; i < SEED.length; i += MAX_FORK_BATCH) {
+      await program.methods.seedHeaders(
+        Buffer.concat(SEED.slice(i, i + MAX_FORK_BATCH)))
+        .accounts({ lightClient, authority: provider.wallet.publicKey }).rpc();
+    }
+  };
+
+  /** Move the flag through the same timelocked authority path as everything else. */
+  const setMinDifficulty = async (allow: boolean) => {
+    const effective = (await provider.connection.getSlot("processed"))
+      + TIMELOCK_SLOTS + 40;
+    await proposeChange(gov, { setMinDifficulty: { allow } }, effective);
+    await waitForSlot(provider.connection, effective);
+    await executeChange(gov);
+  };
+
+  const recordsOf = (lc: any) => lc.headers.map((h: any) => ({
+    time: h.time,
+    chainwork: BigInt(h.chainwork.toString()),
+  }));
+
+  before(async () => {
+    try {
+      const sig = await provider.connection.requestAirdrop(
+        provider.wallet.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
+      await provider.connection.confirmTransaction(sig);
+    } catch {
+      /* already funded — fine */
+    }
+  });
+
+  it("refuses a real testnet min-difficulty block while the flag is off", async () => {
+    // The compiled mainnet default. The account was initialised from
+    // `params::ALLOW_MIN_DIFFICULTY`, which config/params.json projects as false.
+    expect(flagOf(await program.account.lightClient.fetch(lightClient))).to.equal(false);
+
+    await timelockedCheckpoint(gov, CP_HEIGHT, headers[CP_INDEX]);
+    await seedAll();
+
+    const lc = await program.account.lightClient.fetch(lightClient);
+    expect(lc.seedRemaining.toNumber()).to.equal(0);
+    expect(lc.headers.length).to.equal(147);
+    expect(lc.tipHeight.toNumber()).to.equal(CP_HEIGHT);
+
+    // The fixture really is a min-difficulty block: pow-limit bits, more than
+    // twice the 600 s spacing after its parent.
+    expect(bitsOf(MINDIFF)).to.equal(POW_LIMIT_BITS);
+    expect(timeOf(MINDIFF) - timeOf(headers[CP_INDEX])).to.be.greaterThan(1200);
+
+    // And cw-144 really does ask for something else, so a refusal here is the
+    // min-difficulty gap and not a nonexistent one.
+    const required = requiredBits(recordsOf(lc), lc.windowStart.toNumber());
+    expect(required, "cw-144 must be computable from a full seed").to.not.equal(null);
+    expect(required, "cw-144 must compute a different target for this height")
+      .to.not.equal(POW_LIMIT_BITS);
+
+    // The exact bug: the valid block is refused, with the named error.
+    expect(await attemptPush(MINDIFF)).to.equal("UnexpectedRetarget");
+
+    // And the client's state is untouched — a refusal that half-wrote would be
+    // a different, worse bug.
+    const after = await program.account.lightClient.fetch(lightClient);
+    expect(after.tipHeight.toNumber()).to.equal(CP_HEIGHT);
+    expect(after.headers.length).to.equal(147);
+    expect(Buffer.from(after.tipHash).toString("hex"))
+      .to.equal(internalHash(headers[CP_INDEX]));
+    expect(flagOf(after)).to.equal(false);
+  });
+
+  it("accepts it once the timelocked authority turns the flag on, crediting the real work", async () => {
+    await setMinDifficulty(true);
+
+    const before = await program.account.lightClient.fetch(lightClient);
+    expect(flagOf(before)).to.equal(true);
+
+    // The two competing work values. cw-144's target is harder, so it is worth
+    // MORE work; if the program credited the computed target, `credited` would
+    // equal `computedWork` and the assertion below would fail.
+    const required = requiredBits(recordsOf(before), before.windowStart.toNumber());
+    expect(required, "cw-144 must be computable from the seeded window").to.not.equal(null);
+    const expectedWork = workFromBits(POW_LIMIT_BITS);
+    const computedWork = workFromBits(required!);
+    // Chai's `greaterThan` is typed for numbers; compare the bigints directly.
+    expect(computedWork > expectedWork,
+      "the cw-144 target must be worth more work than the pow limit").to.equal(true);
+
+    const parentWork = BigInt(
+      before.headers[before.headers.length - 1].chainwork.toString());
+
+    await program.methods.pushHeader(Array.from(MINDIFF))
+      .accounts({ lightClient, advancer: provider.wallet.publicKey }).rpc();
+
+    const after = await program.account.lightClient.fetch(lightClient);
+    expect(after.tipHeight.toNumber()).to.equal(MINDIFF_HEIGHT);
+    expect(Buffer.from(after.tipHash).toString("hex")).to.equal(internalHash(MINDIFF));
+
+    const tip = after.headers[after.headers.length - 1];
+    const credited = BigInt(tip.chainwork.toString()) - parentWork;
+    expect(credited, "chainwork must be the actual pow-limit work")
+      .to.equal(expectedWork);
+    expect(credited, "chainwork must NOT be the harder cw-144 target's work")
+      .to.not.equal(computedWork);
+  });
+
+  it("turns the flag back off through the same path", async () => {
+    await setMinDifficulty(false);
+    expect(flagOf(await program.account.lightClient.fetch(lightClient))).to.equal(false);
   });
 });
