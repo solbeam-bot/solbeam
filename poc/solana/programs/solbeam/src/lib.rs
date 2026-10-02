@@ -133,6 +133,11 @@ pub use params::SEED_RECORDS;
 /// stays a real number.
 pub use params::MIN_CONFIRMATIONS;
 
+/// The peg-in floor, in **base units**: `pi.min_peg_in`, 1 BSV at the token's
+/// eight decimals. `verify_deposit` compares the claim's `amount` — which is in
+/// those units — against it, refusing anything below.
+pub use params::MIN_PEG_IN;
+
 /// How old the client's view of the chain may be before the vault refuses to act,
 /// in Solana slots. **54,000 is about six hours.**
 ///
@@ -1140,13 +1145,32 @@ pub mod solbeam {
     /// The honest statement the design makes is two sentences — *"the program
     /// verifies deposits; the federation reports backing"* (docs 03, 05, 06).
     ///
-    /// **PoC stand-in, and a reviewer should read it as one.** The signer is the
-    /// program's **upgrade authority**, verified on-chain against the loader's
-    /// `ProgramData` account exactly as [`crate::Initialize`] and
-    /// [`crate::initialize_bridge`] verify it — standing in for the federation,
-    /// which does not exist yet. When it does, the signer becomes the
-    /// federation's key or quorum and nothing else about the instruction needs
-    /// to change.
+    /// **Who may write.** The signer must be an **active gateway member**: the
+    /// member record is read, its `identity` must equal the signer, and its
+    /// `status` must be [`MemberStatus::Active`], or the instruction refuses
+    /// with [`SolbeamError::NotGatewayMember`]. This replaces the PoC stand-in
+    /// that made the program's **upgrade authority** the writer. **What that
+    /// does and does not buy:** it attaches the report to a named, admitted
+    /// seat instead of one upgrade key — the mechanism the registry exists for —
+    /// but it is **not collective** (one member's signature is enough), and it
+    /// does not make the report true. The program cannot check that the reserve
+    /// spent the outpoint, and the federation's bond is a **declaration, not
+    /// custody**: the BSV is on another chain and the reserve keys are
+    /// off-chain. A member who reports a live deposit as spent denies a mint,
+    /// and one who stays silent on a spent deposit enables one; both are
+    /// social failures this instruction can only make attributable.
+    ///
+    /// **The bootstrap hole, stated rather than left implicit.**
+    /// [`FederationConfig`] and its Greycore come from
+    /// [`crate::initialize_federation`], but a gateway member only exists after
+    /// [`crate::admit_member`], which the Greycore signs. **Between
+    /// `initialize_bridge` and the first admission — and again if every member
+    /// leaves — no live member exists, so this instruction cannot be called**,
+    /// and a deposit the reserve spends in that window can still be minted. The
+    /// program does not close this: a fallback to the authority is just the old
+    /// single-key writer with extra steps. The mitigation is sequencing — admit
+    /// the founding members before opening the bridge to deposits — and nothing
+    /// in the program enforces that order.
     ///
     /// **The permissionless alternative was considered and rejected.** Letting
     /// anyone submit a spend proof would make the record writable by anyone,
@@ -1161,9 +1185,31 @@ pub mod solbeam {
     /// Reporting twice is refused rather than silently accepted — a report is a
     /// statement about a fact, and a second one says nothing new.
     pub fn report_spent(ctx: Context<ReportSpent>, txid: [u8; 32], vout: u32) -> Result<()> {
+        // The writer is an admission-checked member, not the upgrade authority.
+        // The account is deserialised by hand so a missing or foreign account
+        // becomes this program's `NotGatewayMember` rather than Anchor's
+        // `AccountNotInitialized`; the identity check then binds the record to
+        // the signer, which is what the `[b"member", identity]` seeds would do.
+        require!(
+            ctx.accounts.member.owner == ctx.program_id,
+            SolbeamError::NotGatewayMember
+        );
+        let data = ctx.accounts.member.try_borrow_data()?;
+        let mut slice: &[u8] = &data;
+        let member = GatewayMember::try_deserialize(&mut slice)
+            .map_err(|_| SolbeamError::NotGatewayMember)?;
+        require!(
+            member.identity == ctx.accounts.owner.key(),
+            SolbeamError::NotGatewayMember
+        );
+        require!(
+            member.status == MemberStatus::Active,
+            SolbeamError::NotGatewayMember
+        );
+
         create_spent_outpoint(
             &ctx.accounts.spent_outpoint.to_account_info(),
-            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.owner.to_account_info(),
             ctx.program_id,
             txid,
             vout,
@@ -1172,7 +1218,7 @@ pub mod solbeam {
         emit!(SpentOutpointReported {
             txid,
             vout,
-            authority: ctx.accounts.authority.key(),
+            member: ctx.accounts.owner.key(),
         });
         msg!(
             "SOLBEAM spent outpoint reported {}:{}",
@@ -1220,6 +1266,13 @@ pub mod solbeam {
     /// that was verified under a shorter window. Reading it once, here, is what
     /// makes the parameter a policy for *future* deposits rather than a lever on
     /// funds already in flight.
+    ///
+    /// **Step 4b is the peg-in floor.** `claim.amount` is the output's value in
+    /// the token's **base units** (satoshis), so it is compared directly against
+    /// [`MIN_PEG_IN`] — `pi.min_peg_in`, projected at 100,000,000 base units,
+    /// which is 1 BSV at the 8 decimals `m.token_decimals` fixes. A lower output
+    /// is refused with [`SolbeamError::BelowMinPegIn`]; the `> 0` check above it
+    /// only refuses an empty output.
     pub fn verify_deposit(ctx: Context<VerifyDeposit>, claim: DepositClaim) -> Result<()> {
         let lc = &ctx.accounts.light_client;
         require!(!lc.paused, SolbeamError::Paused);
@@ -1262,6 +1315,13 @@ pub mod solbeam {
         let (value, script) = &outputs[claim.vout as usize];
         require!(*value == claim.amount, SolbeamError::AmountMismatch);
         require!(*value > 0, SolbeamError::ZeroValue);
+        // 4b. The floor. `claim.amount` is the output's value in **base units**
+        //     — satoshis: `solBSV` carries 8 decimals and one base unit is one
+        //     satoshi, so `MIN_PEG_IN = 100_000_000` is 1 BSV. The `> 0` above
+        //     refuses an empty output; this refuses dust. The fixture's own
+        //     deposit sits exactly on the floor, so the boundary is accepted.
+        //     See `pi.min_peg_in` for the value and its unit.
+        require!(claim.amount >= MIN_PEG_IN, SolbeamError::BelowMinPegIn);
         require!(
             script == &ctx.accounts.deposit_script.script,
             SolbeamError::WrongOutputScript
@@ -3261,15 +3321,19 @@ pub struct PruneNullifier<'info> {
 /// allocates it. There is deliberately **no instruction that closes it**.
 #[derive(Accounts)]
 pub struct ReportSpent<'info> {
-    /// The program's upgrade authority, and the payer of the record's rent.
+    /// The member's identity key: the signer, and the payer of the record's rent.
+    /// It is read against `member.identity` in the handler, so it cannot be a
+    /// key that is not the record's.
     #[account(mut)]
-    pub authority: Signer<'info>,
-    #[account(
-        address = program_data_address() @ SolbeamError::Unauthorized,
-        constraint = program_data.upgrade_authority_address == Some(authority.key())
-            @ SolbeamError::Unauthorized,
-    )]
-    pub program_data: Account<'info, ProgramData>,
+    pub owner: Signer<'info>,
+    /// The writer's [`GatewayMember`] record. An `UncheckedAccount` whose owner,
+    /// discriminator, identity and `status` are all checked in the handler: that
+    /// is what makes "not a live member" this program's
+    /// [`SolbeamError::NotGatewayMember`] rather than Anchor's
+    /// `AccountNotInitialized`, and it is why nothing here trusts the caller's
+    /// account.
+    /// CHECK: verified in `report_spent`; never read for data outside that check.
+    pub member: UncheckedAccount<'info>,
     /// CHECK: address re-derived from `(txid, vout)` and compared against
     /// `SPENT_OUTPOINT_SEED` in `create_spent_outpoint`; `data_is_empty` is what
     /// refuses a second report.
@@ -3408,8 +3472,8 @@ fn require_not_spent<'info>(
 /// mint of a deposit the reserve has already spent — the exact N5 hole. There
 /// is therefore no `prune_spent`, no `close`, and no field that a future
 /// instruction could use to justify one. The rent is a permanent, one-off cost
-/// the authority pays, which is also why being the authority is the only way to
-/// write here.
+/// the reporting **member** pays, which is also why a live member is the only
+/// writer.
 fn create_spent_outpoint<'info>(
     spent: &AccountInfo<'info>,
     authority: &AccountInfo<'info>,
@@ -4904,9 +4968,10 @@ pub struct DepositStaged {
 pub struct SpentOutpointReported {
     pub txid: [u8; 32],
     pub vout: u32,
-    /// The signer that reported it — the program authority today, the
-    /// federation later.
-    pub authority: Pubkey,
+    /// The **active gateway member** that reported it, named by its identity
+    /// key. The report is attributable to a seat; it is not a proof that the
+    /// outpoint was spent.
+    pub member: Pubkey,
 }
 
 /// A staged mint has been released out of the vault to its recipient.
@@ -5425,6 +5490,10 @@ pub enum SolbeamError {
     GatewayBelowThreshold,
     #[msg("this member has no recorded solBSV-side bond to seize")]
     NoBondToSeize,
+    #[msg("the deposit output is below pi.min_peg_in (1 BSV, in base units)")]
+    BelowMinPegIn,
+    #[msg("the signer is not an active gateway member")]
+    NotGatewayMember,
 }
 
 #[cfg(test)]
