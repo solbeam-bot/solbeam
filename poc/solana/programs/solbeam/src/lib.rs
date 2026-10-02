@@ -388,6 +388,7 @@ pub const LIGHT_CLIENT_FIXED: usize = 8      // discriminator
     + 8                                      // last_push_slot
     + 1                                      // paused
     + 1                                      // bump
+    + 1                                      // allow_min_difficulty
     + 4; // headers: Vec length prefix
 
 /// Solana refuses to grow an account by more than this in one instruction, and
@@ -523,6 +524,11 @@ pub mod solbeam {
         let lc = &mut ctx.accounts.light_client;
         lc.authority = ctx.accounts.payer.key();
         lc.paused = false;
+        // The cluster's min-difficulty flag, from the generated sheet: `false`
+        // for a mainnet deployment, `true` for a BSV testnet one. It is a
+        // runtime field so the timelocked authority can move it, but every
+        // deployment starts at the compiled profile's value.
+        lc.allow_min_difficulty = params::ALLOW_MIN_DIFFICULTY;
         lc.bump = ctx.bumps.light_client;
         // Shared with `set_checkpoint` on purpose: F2 was that the two paths
         // disagreed about what a trusted root implies, and one implementation is
@@ -581,11 +587,19 @@ pub mod solbeam {
         //    rejects every header after the checkpoint — the defect this
         //    replaces. See `difficulty` for the algorithm: of the 471 headers in
         //    the fixture, the 324 with a full lookback are all predicted exactly.
+        //
+        //    With `allow_min_difficulty` on (a BSV testnet, `false` on mainnet)
+        //    the node's own exception is applied first: a header more than
+        //    `2 * seconds_per_block` after its parent may carry the pow-limit
+        //    bits instead of the cw-144 target. `difficulty_for` decides that,
+        //    and it still credits work from the header's *actual* bits — the
+        //    explanation is on the function.
+        let header_time = read_u32_le(&header, 68);
         let parent_work = lc
             .record(lc.tip_height)
             .map(|r| r.chainwork)
             .unwrap_or_default();
-        let chainwork = lc.difficulty_for(bits, parent_work)?;
+        let chainwork = lc.difficulty_for(bits, header_time, parent_work)?;
 
         // 3. It must be real work. Linkage is not evidence on its own: anyone
         //    can build an arbitrarily long chain of easy headers.
@@ -600,7 +614,7 @@ pub mod solbeam {
         let record = HeaderRecord {
             hash: record_hash,
             chainwork,
-            time: read_u32_le(&header, 68),
+            time: header_time,
         };
         if lc.headers.len() >= WINDOW {
             lc.headers.remove(0);
@@ -864,6 +878,19 @@ pub mod solbeam {
         // a branch staged against block A silently become a branch of block B.
         // The recorded hash is the block this branch was built on; if the chain
         // has since moved, the lookup below is what notices.
+        // The fork point is the parent of the branch's first header, and its
+        // timestamp is the baseline the min-difficulty rule compares against.
+        // The rule reads the *immediate* parent, so the value is carried
+        // forward after every header the loop below accepts.
+        let fork_idx = lc
+            .index_of(staging.fork_height)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?;
+        let main_len = fork_idx + 1;
+        let mut parent_time = lc
+            .record(fork_idx)
+            .map(|(_, _, time)| time)
+            .ok_or(SolbeamError::ForkPointNotInWindow)?;
+
         let mut chainwork;
         let mut prev = match staging.records.last() {
             Some(record) => {
@@ -906,14 +933,12 @@ pub mod solbeam {
         // collecting them allocates — and the SBF heap is small enough that a
         // window-sized copy of the window is a real cost. `next_target_from`
         // runs the same arithmetic as the slice form.
-        let fork_idx = lc
-            .index_of(staging.fork_height)
-            .ok_or(SolbeamError::ForkPointNotInWindow)?;
-        let main_len = fork_idx + 1;
         let staged = &staging.records;
         let no_retargeting = lc.no_retargeting();
         let expected_bits = lc.expected_bits();
-        let pow_limit = compact_to_target(lc.pow_limit_bits());
+        let pow_limit_bits = lc.pow_limit_bits();
+        let allow_min_difficulty = lc.allow_min_difficulty();
+        let pow_limit = compact_to_target(pow_limit_bits);
 
         // Validate the whole batch before writing any of it, so a bad header
         // half-way through does not leave a partial branch staged.
@@ -955,19 +980,36 @@ pub mod solbeam {
                 .map(target_to_compact)
                 .ok_or(SolbeamError::DifficultyNotComputable)?
             };
-            // Target before work, for the reason given in `push_header`.
-            require!(bits == required, SolbeamError::UnexpectedRetarget);
+            // Target before work, for the reason given in `push_header`. The
+            // min-difficulty exception is applied exactly as it is there: only
+            // on a retargeting chain, only with the cluster flag on, and only
+            // when this header is more than `2 * seconds_per_block` after its
+            // immediate parent (`parent_time`, carried across the batch).
+            let header_time = read_u32_le(raw, 68);
+            let accepted = difficulty::accepts_bits(
+                bits,
+                required,
+                allow_min_difficulty,
+                !no_retargeting,
+                pow_limit_bits,
+                header_time,
+                parent_time,
+            );
+            require!(accepted, SolbeamError::UnexpectedRetarget);
             require!(meets_target_slice(raw, bits), SolbeamError::BadPow);
 
-            let time = read_u32_le(raw, 68);
             let hash = header_hash_of_bytes(raw);
+            // Work from the header's own `bits`, never from `required`: a
+            // min-difficulty block must count the pow-limit work it actually
+            // did, or a cheap branch would outweigh an expensive one.
             chainwork = chainwork.saturating_add(work_from_bits(bits));
             checked.push(HeaderRecord {
                 hash,
                 chainwork,
-                time,
+                time: header_time,
             });
             prev = hash;
+            parent_time = header_time;
         }
         staging.records.extend(checked);
         Ok(())
@@ -1692,6 +1734,14 @@ pub mod solbeam {
             AuthorityChange::SetRedeemDeadline { slots } => {
                 ctx.accounts.config.redeem_deadline_slots = *slots;
                 msg!("SOLBEAM redeem_deadline_slots set to {}", slots);
+            }
+            // The testnet min-difficulty flag, through the same timelocked path.
+            // It changes which *rule* the client applies, never a header's
+            // validity: with it off the cw-144 target is required exactly as
+            // before, and with it on only the node's own exception is added.
+            AuthorityChange::SetMinDifficulty { allow } => {
+                ctx.accounts.light_client.allow_min_difficulty = *allow;
+                msg!("SOLBEAM allow_min_difficulty set to {}", allow);
             }
         }
 
@@ -2651,6 +2701,19 @@ pub struct LightClient {
     pub last_push_slot: u64,
     pub paused: bool,
     pub bump: u8,
+    /// The cluster's `fPowAllowMinDifficultyBlocks` (`lc.allow_min_difficulty`).
+    ///
+    /// `false` for mainnet, `true` for a BSV testnet. Carried on state rather
+    /// than read from the compiled constant at the point of use so that it is
+    /// visible next to `pow_limit_bits` and can be moved through the same
+    /// timelocked authority path as maturity and the deadline. `initialize`
+    /// seeds it from the generated `params::ALLOW_MIN_DIFFICULTY`.
+    ///
+    /// **The flag only admits `bits == pow_limit_bits` when the header is more
+    /// than `2 * seconds_per_block` after its parent, and only on a retargeting
+    /// chain.** It is not a difficulty switch: `difficulty_for` still computes
+    /// cw-144 and the header must be the exact target or a min-difficulty block.
+    pub allow_min_difficulty: bool,
 }
 
 impl LightClient {
@@ -2761,6 +2824,15 @@ impl LightClient {
     /// trusting a supplied number is what makes the stored window internally
     /// consistent: every record's work is the work of the target it declares.
     ///
+    /// **The work is always `work_from_bits(bits)` — the header's ACTUAL
+    /// bits.** That is not incidental. A min-difficulty block's `bits` is the
+    /// pow limit, the *easiest* target the chain allows, so it does the least
+    /// work of any header. Crediting it the cw-144 target's work instead would
+    /// let an attacker build a chain of cheap blocks that looks heavier than an
+    /// expensive one, breaking fork choice; the credit is therefore taken from
+    /// the header's own declared target, exactly as the node accumulates
+    /// `GetChainWork()` from `nBits`.
+    ///
     /// There is deliberately **no fallback** when the rule is not computable.
     /// The old fallback accepted `bits == expected_bits` for every block before
     /// the window reached 147 records; on BSV, where difficulty changes every
@@ -2771,11 +2843,26 @@ impl LightClient {
     ///
     /// [`push_fork_header`] does not use this function: a branch header must be
     /// judged at its *own* height, not at `tip_height + 1` (F3).
-    fn difficulty_for(&self, bits: u32, parent_work: u128) -> Result<u128> {
+    fn difficulty_for(&self, bits: u32, header_time: u32, parent_work: u128) -> Result<u128> {
         let required = self
             .required_bits()
             .ok_or(SolbeamError::DifficultyNotComputable)?;
-        require!(bits == required, SolbeamError::UnexpectedRetarget);
+        // The parent of the header is the tip, and cw-144's window always holds
+        // it once the client is live. On a no-retargeting chain the window can
+        // be empty for the very first header, but there the exception below is
+        // disabled anyway (`retargeting == false`), matching
+        // `GetNextWorkRequired`'s early return for `fPowNoRetargeting`.
+        let parent_time = self.headers.last().map(|r| r.time).unwrap_or(0);
+        let accepted = difficulty::accepts_bits(
+            bits,
+            required,
+            self.allow_min_difficulty,
+            !self.no_retargeting,
+            self.pow_limit_bits,
+            header_time,
+            parent_time,
+        );
+        require!(accepted, SolbeamError::UnexpectedRetarget);
         let work = work_from_bits(bits);
         Ok(parent_work.saturating_add(work))
     }
@@ -2821,13 +2908,15 @@ mod lc_offsets {
     pub const RECORDS: usize = 68;
     pub const RECORD_SIZE: usize = super::HEADER_RECORD_SIZE;
     /// authority (32) + expected_bits (4) + no_retargeting (1) + pow_limit_bits
-    /// (4) + seed_remaining (4) + last_push_slot (8) + paused (1) + bump (1).
-    pub const TAIL_LEN: usize = 55;
+    /// (4) + seed_remaining (4) + last_push_slot (8) + paused (1) + bump (1) +
+    /// allow_min_difficulty (1).
+    pub const TAIL_LEN: usize = 56;
     pub const TAIL_EXPECTED_BITS: usize = 32;
     pub const TAIL_NO_RETARGETING: usize = 36;
     pub const TAIL_POW_LIMIT_BITS: usize = 37;
     pub const TAIL_SEED_REMAINING: usize = 41;
     pub const TAIL_PAUSED: usize = 53;
+    pub const TAIL_ALLOW_MIN_DIFFICULTY: usize = 55;
 }
 
 /// A read-only view of a `LightClient` account **that allocates nothing**.
@@ -2917,6 +3006,12 @@ impl<'a> LightClientView<'a> {
         self.data[self.tail() + lc_offsets::TAIL_PAUSED] != 0
     }
 
+    /// The cluster's min-difficulty flag, read in place (see the `LightClient`
+    /// field of the same name).
+    pub fn allow_min_difficulty(&self) -> bool {
+        self.data[self.tail() + lc_offsets::TAIL_ALLOW_MIN_DIFFICULTY] != 0
+    }
+
     fn record_bytes(&self, index: usize) -> Option<&'a [u8]> {
         if index >= self.len() {
             return None;
@@ -2987,6 +3082,7 @@ mod tests {
             last_push_slot: 4242,
             paused: false,
             bump: 251,
+            allow_min_difficulty: true,
         };
 
         let mut data = Vec::new();
@@ -3003,6 +3099,9 @@ mod tests {
         assert_eq!(view.pow_limit_bits(), 0x1d00_ffff);
         assert_eq!(view.seed_remaining(), 3);
         assert!(!view.paused());
+        // The view's new field has to come back as the byte it was written to,
+        // not as the zero the offset would read if the layout had moved.
+        assert!(view.allow_min_difficulty());
         assert_eq!(view.record(0).unwrap(), ([1u8; 32], 0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00, 111));
         assert_eq!(view.record(1).unwrap(), ([2u8; 32], 42, 222));
         assert_eq!(view.record(2), None);
@@ -4411,6 +4510,15 @@ pub enum AuthorityChange {
     /// was initiated, so a change here cannot shorten or extend a redemption
     /// already in flight.
     SetRedeemDeadline { slots: u64 },
+    /// Set the cluster's min-difficulty flag (`lc.allow_min_difficulty`), i.e.
+    /// the node's `fPowAllowMinDifficultyBlocks`.
+    ///
+    /// `false` on mainnet, `true` for a BSV testnet. Moving it needs the same
+    /// timelock as every other privileged change; it is a network parameter,
+    /// not an oracle — turning it on does **not** let anyone vouch for a header.
+    /// The rule it enables is the node's own, and the header still has to carry
+    /// `bits == pow_limit_bits` and meet that target.
+    SetMinDifficulty { allow: bool },
 }
 
 /// The bridge's deposit script, passed in so the check is against the account

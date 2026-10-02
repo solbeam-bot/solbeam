@@ -317,3 +317,157 @@ pub struct Record {
     pub time: u32,
     pub chainwork: u128,
 }
+
+/// The node's testnet **min-difficulty** exception, exactly as
+/// `GetNextCashWorkRequired` applies it (`bitcoin-sv` `src/pow.cpp`):
+///
+/// ```cpp
+/// // Special difficulty rule for testnet:
+/// // If the new block's timestamp is more than 2* 10 minutes
+/// // then allow mining of a min-difficulty block.
+/// if (params.fPowAllowMinDifficultyBlocks &&
+///     (pblock->GetBlockTime() >
+///      pindexPrev->GetBlockTime() + 2 * params.nPowTargetSpacing)) {
+///     return UintToArith256(params.powLimit).GetCompact();
+/// }
+/// ```
+///
+/// Three things about that snippet are load-bearing, and each is asserted below
+/// rather than left to a reader:
+///
+///  * the comparison is **strictly** greater. A block exactly
+///    `2 * nPowTargetSpacing` after its parent is *not* a min-difficulty block;
+///    the node demands the cw-144 target there. `>` and `>=` differ on exactly
+///    one header, which is why the boundary is tested and not assumed.
+///  * it is evaluated against the **immediate parent**, not against the last
+///    non-min-difficulty ancestor. The cw-144 path has no such backtracking
+///    (the legacy EDA path does), so the exception may **chain**: a
+///    min-difficulty block is a perfectly good parent for another.
+///  * the difficulty side is the whole of `bits == powLimit.GetCompact()`. The
+///    node *returns* that compact, and `ContextualCheckBlockHeader` then
+///    requires `block.nBits == GetNextWorkRequired(...)` — so the min-difficulty
+///    value is not merely permitted, it is the required one for such a block.
+///
+/// `pow_limit_bits` is the cluster's `powLimit` in compact form. This function
+/// does **not** know whether the exception is enabled; the caller applies the
+/// flag (see [`accepts_bits`]).
+pub fn allows_min_difficulty(
+    bits: u32,
+    pow_limit_bits: u32,
+    header_time: u32,
+    parent_time: u32,
+) -> bool {
+    bits == pow_limit_bits
+        && header_time as i64 - parent_time as i64 > (2 * BLOCK_SPACING) as i64
+}
+
+/// Whether a header's declared `bits` is acceptable.
+///
+/// `required_bits` is the cw-144 target the client computed for the header's
+/// height (or, on a no-retargeting chain, the constant target). The header is
+/// accepted when it carries that value exactly, **or** when the cluster enables
+/// the min-difficulty rule and the header is a min-difficulty block.
+///
+/// `retargeting` is `!no_retargeting`. The node applies the min-difficulty rule
+/// only on the DAA path: `GetNextWorkRequired` returns `pindexPrev->GetBits()`
+/// when `fPowNoRetargeting` is set, before `GetNextCashWorkRequired` — and
+/// therefore the min-difficulty branch — is reached. Passing `false` here keeps
+/// a regtest deployment on the node's exact rule.
+///
+/// This is a predicate, not the chainwork credit. The caller must count work
+/// from the header's own `bits` (see `work_from_bits` in `lib.rs`), so a
+/// min-difficulty block contributes the pow-limit work and cannot be used to
+/// build a heavier chain out of cheap blocks.
+pub fn accepts_bits(
+    bits: u32,
+    required_bits: u32,
+    allow_min_difficulty: bool,
+    retargeting: bool,
+    pow_limit_bits: u32,
+    header_time: u32,
+    parent_time: u32,
+) -> bool {
+    bits == required_bits
+        || (allow_min_difficulty
+            && retargeting
+            && allows_min_difficulty(bits, pow_limit_bits, header_time, parent_time))
+}
+
+#[cfg(test)]
+mod min_difficulty_tests {
+    use super::*;
+
+    /// The compact form of BSV's `powLimit`, mainnet and testnet alike.
+    const POW_LIMIT_BITS: u32 = MAINNET_POW_LIMIT_BITS;
+    /// A harder target, i.e. what cw-144 computes when hashrate is present.
+    const HARDER_BITS: u32 = 0x1c15_43fb;
+    const TWO_SPACING: u32 = (2 * BLOCK_SPACING) as u32; // 1,200 s
+
+    fn accepted(bits: u32, required: u32, flag: bool, retargeting: bool,
+                header_time: u32, parent_time: u32) -> bool {
+        accepts_bits(bits, required, flag, retargeting, POW_LIMIT_BITS,
+                     header_time, parent_time)
+    }
+
+    /// The node's boundary is `>`, not `>=`. One second is the whole test.
+    #[test]
+    fn boundary_is_strictly_greater_than_twice_the_spacing() {
+        assert!(!allows_min_difficulty(POW_LIMIT_BITS, POW_LIMIT_BITS, TWO_SPACING, 0),
+                "exactly 2 * spacing must NOT be a min-difficulty block");
+        assert!(!allows_min_difficulty(POW_LIMIT_BITS, POW_LIMIT_BITS, TWO_SPACING - 1, 0));
+        assert!(allows_min_difficulty(POW_LIMIT_BITS, POW_LIMIT_BITS, TWO_SPACING + 1, 0));
+    }
+
+    /// With the flag off, `bits == pow_limit` is refused just like any other
+    /// value that is not the cw-144 target. This is *mainnet's* behaviour: the
+    /// exact-target path is untouched by the new rule.
+    #[test]
+    fn flag_off_refuses_the_min_difficulty_header() {
+        assert!(!accepted(POW_LIMIT_BITS, HARDER_BITS, false, true,
+                          TWO_SPACING + 1, 0));
+        // And the exact target is still accepted with the flag off.
+        assert!(accepted(HARDER_BITS, HARDER_BITS, false, true, 0, 0));
+    }
+
+    /// With the flag on, a header more than twice the spacing after its parent
+    /// may carry the pow-limit bits instead of the computed target.
+    #[test]
+    fn flag_on_accepts_the_min_difficulty_header() {
+        assert!(accepted(POW_LIMIT_BITS, HARDER_BITS, true, true,
+                         TWO_SPACING + 1, 0));
+        // At the boundary it is still refused: the rule is the node's strict `>`.
+        assert!(!accepted(POW_LIMIT_BITS, HARDER_BITS, true, true, TWO_SPACING, 0));
+    }
+
+    /// The rule is only `bits == pow_limit`. Any other value that is not the
+    /// cw-144 target is still refused, flag or no flag.
+    #[test]
+    fn flag_on_does_not_admit_an_arbitrary_easy_bits() {
+        assert!(!accepted(0x1d00_fffe, HARDER_BITS, true, true,
+                          TWO_SPACING + 1, 0));
+        assert!(!accepted(0x207f_ffff, HARDER_BITS, true, true,
+                          TWO_SPACING + 1, 0));
+    }
+
+    /// A no-retargeting chain (regtest) never reaches the min-difficulty branch
+    /// in the node: `GetNextWorkRequired` returns the parent's bits first.
+    #[test]
+    fn no_retargeting_chain_does_not_apply_the_exception() {
+        assert!(!accepted(POW_LIMIT_BITS, HARDER_BITS, true, false,
+                          TWO_SPACING + 1, 0));
+    }
+
+    /// There is no "last non-min-difficulty block" backtracking on the cw-144
+    /// path, so the exception chains: a min-difficulty block is a normal parent
+    /// for the next one.
+    #[test]
+    fn the_exception_can_chain() {
+        let t0 = 1_000_000u32;
+        let first_time = t0 + TWO_SPACING + 1;
+        assert!(accepted(POW_LIMIT_BITS, HARDER_BITS, true, true, first_time, t0));
+        // The next block is judged against the min-difficulty block's own time,
+        // not against t0 — and it too is admitted.
+        let second_time = first_time + TWO_SPACING + 1;
+        assert!(accepted(POW_LIMIT_BITS, HARDER_BITS, true, true, second_time, first_time));
+    }
+}
