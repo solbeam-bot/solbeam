@@ -7,7 +7,7 @@ mechanism.
 
 **Status: designed, not built.** No block, bond, member, threshold signature or governance vote
 described here exists in code. The built set is the light client (cw-144), the `solBSV` token, the
-mint, fork staging, the nullifier, the timelocked authority and the vault — **27 instructions, 77
+mint, fork staging, the nullifier, the timelocked authority and the vault — **27 instructions, 79
 passing / 0 failing**. The one piece of the federation that *is* in code is the **deposit-script
 check**: the program accepts a 2-of-2 `OP_CHECKMULTISIG` reserve script (`is_reserve_multisig`,
 `MAX_SCRIPT_LEN = 71`, `DepositScript::SPACE = 84`, committed). That is the *shape*; **the gateway

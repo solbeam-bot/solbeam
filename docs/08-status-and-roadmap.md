@@ -27,7 +27,7 @@ document.
 | **Fork staging** | Chainwork-based, so a branch below the tip can be staged; `commit_fork` re-checks the recorded fork point |
 | **Authority** | Two-step, **timelocked** (`TIMELOCK_SLOTS = 32`) propose/execute/cancel. The immediate setters (`set_checkpoint`, `set_paused`) were **removed** |
 | **The vault** | Every mint lands in a program-owned account. `release_mint` and `burn_staged` are **permissionless**, so a recipient does not depend on a relayer to release their own tokens. `set_maturity` goes through the timelocked authority path |
-| **Tests** | **77 passing / 0 failing**, including negative controls, on a local validator, plus 4 in-program unit tests |
+| **Tests** | **79 passing / 0 failing**, including negative controls, on a local validator, plus 4 in-program unit tests |
 
 **The instruction set is 27 instructions.** The handlers, in the program module:
 
